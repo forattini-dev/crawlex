@@ -257,26 +257,26 @@ async fn post_reload(
     rng: &mut impl rand::Rng,
 ) -> Result<String, SolverError> {
     let mut fields: BTreeMap<u32, ProtoValue> = BTreeMap::new();
-    fields.insert(1, ProtoValue::from_str(version));
-    fields.insert(2, ProtoValue::from_str(anchor_token));
-    fields.insert(4, ProtoValue::from_str(scrambled));
+    fields.insert(1, ProtoValue::from_string(version));
+    fields.insert(2, ProtoValue::from_string(anchor_token));
+    fields.insert(4, ProtoValue::from_string(scrambled));
     // Field 5: signed 32-bit. Reference uses random.randint over the full
     // signed range. We map to u64 via two's complement bit-cast — the
     // varint encoder treats the value as a uint64, which is what protobuf
     // expects for sint32 raw values (no zigzag here, the reference doesn't).
     let sig5: i32 = rng.random_range(i32::MIN..=i32::MAX);
-    fields.insert(5, ProtoValue::from_str(&sig5.to_string()));
-    fields.insert(6, ProtoValue::from_str("q"));
-    fields.insert(8, ProtoValue::from_str(action));
-    fields.insert(14, ProtoValue::from_str(site_key));
-    fields.insert(16, ProtoValue::from_str(scrambled));
+    fields.insert(5, ProtoValue::from_string(&sig5.to_string()));
+    fields.insert(6, ProtoValue::from_string("q"));
+    fields.insert(8, ProtoValue::from_string(action));
+    fields.insert(14, ProtoValue::from_string(site_key));
+    fields.insert(16, ProtoValue::from_string(scrambled));
     // Telemetry is base64-encoded JSON of the same client blob the oz
     // contains in field 74 — but we only need the wire here. Keep it
     // empty-ish to mirror the reference's "W10" = base64 of "[]". A
     // future iteration can plumb a proper telemetry sub-payload.
-    fields.insert(20, ProtoValue::from_str("W10"));
-    fields.insert(22, ProtoValue::from_str(""));
-    fields.insert(25, ProtoValue::from_str("W10"));
+    fields.insert(20, ProtoValue::from_string("W10"));
+    fields.insert(22, ProtoValue::from_string(""));
+    fields.insert(25, ProtoValue::from_string("W10"));
     fields.insert(28, ProtoValue::from_u64(20000));
     fields.insert(29, ProtoValue::from_u64(30000));
 

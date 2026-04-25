@@ -10,6 +10,13 @@
 //! `src/impersonate/catalog/captured/` (Phase 3 output) and mined hash JSONs
 //! from `src/impersonate/catalog/mined/` (validation oracles, JA3/JA4 only).
 
+// curl-impersonate's signature schema includes fields we don't currently
+// project into the generated `TlsFingerprint` struct (e.g. http2 pseudo-
+// header order, raw extension lengths). We deserialise them anyway so a
+// future codegen pass can pick them up without re-parsing — the
+// `dead_code` allowance below keeps the warning ledger clean meanwhile.
+#![allow(dead_code)]
+
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;

@@ -25,8 +25,11 @@ pub enum Value {
 }
 
 impl Value {
-    /// Convenience for the common case `Bytes(s.into_bytes())`.
-    pub fn from_str(s: &str) -> Self {
+    /// Convenience for the common case `Bytes(s.into_bytes())`. Named
+    /// `from_string` (not `from_str`) so it doesn't shadow
+    /// `std::str::FromStr::from_str` semantics — this constructor cannot
+    /// fail, so a `Result`-returning trait shape would be misleading.
+    pub fn from_string(s: &str) -> Self {
         Value::Bytes(s.as_bytes().to_vec())
     }
 
@@ -109,7 +112,7 @@ mod tests {
     fn encode_string_field() {
         // Field 1, "test" — tag = (1 << 3) | 2 = 0x0A.
         let mut m = BTreeMap::new();
-        m.insert(1, Value::from_str("test"));
+        m.insert(1, Value::from_string("test"));
         let out = encode(&m);
         assert_eq!(out, vec![0x0A, 0x04, b't', b'e', b's', b't']);
     }
@@ -142,7 +145,7 @@ mod tests {
         let mut m = BTreeMap::new();
         m.insert(
             3,
-            Value::List(vec![Value::from_str("a"), Value::from_str("b")]),
+            Value::List(vec![Value::from_string("a"), Value::from_string("b")]),
         );
         let out = encode(&m);
         // Each repeats: tag 0x1A, len 1, byte; tag 0x1A, len 1, byte.

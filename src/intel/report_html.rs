@@ -27,6 +27,20 @@ use rusqlite::Connection;
 
 use crate::error::{Error, Result};
 
+/// `(registrar, registrant_org, created_at, expires_at, nameservers_json)`
+/// — shape returned by the WHOIS lookup query in `write_whois`.
+type WhoisRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+/// `(port, product?, version?)` — open-port detail under one IP, used by
+/// `write_open_ports_by_ip`.
+type PortDetail = (i64, Option<String>, Option<String>);
+
 /// Build the HTML report for `target` against the sqlite db at `db_path`.
 ///
 /// Returns the full HTML document as a `String`. Caller is responsible for
@@ -145,13 +159,7 @@ fn write_body(out: &mut String, conn: &Connection, target: &str) -> Result<()> {
 }
 
 fn write_whois(out: &mut String, conn: &Connection, target: &str) -> Result<()> {
-    let row: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-    )> = conn
+    let row: Option<WhoisRow> = conn
         .query_row(
             "SELECT registrar, registrant_org, \
                  datetime(created_at,'unixepoch'), \
@@ -332,8 +340,7 @@ fn write_ports(out: &mut String, conn: &Connection, target: &str) -> Result<()> 
         // Group by IP to keep the dashboard scannable — one row per IP, the
         // port list lives in a compact inline span.
         use std::collections::BTreeMap;
-        let mut by_ip: BTreeMap<String, Vec<(i64, Option<String>, Option<String>)>> =
-            BTreeMap::new();
+        let mut by_ip: BTreeMap<String, Vec<PortDetail>> = BTreeMap::new();
         for (ip, port, _state, svc, ver) in rows {
             by_ip.entry(ip).or_default().push((port, svc, ver));
         }

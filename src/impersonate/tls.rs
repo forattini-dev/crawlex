@@ -1,15 +1,20 @@
-//! BoringSSL-based TLS impersonation of Chrome's ClientHello.
+//! BoringSSL-based TLS impersonation, catalog-driven.
 //!
-//! The goal is a JA4 fingerprint that matches real Chrome on the same major version.
-//! Reference for the expected shape: `references/curl-impersonate/chrome/`.
+//! The connector ships a JA3/JA4 that matches real Chrome / Chromium / Edge
+//! / Brave / Opera (Firefox routes through `tls_firefox.rs` because it uses
+//! NSS, not BoringSSL). Per-version cipher lists, supported groups,
+//! signature algorithms, ALPN, ALPS, cert_compression and supported_versions
+//! are all read from [`crate::impersonate::catalog`] at connect time —
+//! see `build_connector` for the wiring.
 //!
-//! Knobs configured per Chrome 131/132 stable:
-//! * Cipher list (TLS 1.3 + 1.2 suites in Chrome order)
-//! * Supported curves: X25519MLKEM768, X25519, P-256, P-384
-//! * Signature algorithms in Chrome order
-//! * ALPN: h2, http/1.1
-//! * GREASE enabled, extension order permuted (Chrome >= 110)
-//! * TLS 1.2 min, 1.3 max
+//! What's still hardcoded here:
+//! * GREASE enabled at the BoringSSL level (positions baked into catalog,
+//!   byte values rotate per connection).
+//! * Extension order permuted (Chrome 110+ behaviour).
+//! * TLS 1.2 min, 1.3 max version range.
+//! * OCSP stapling + signed_certificate_timestamp announced unconditionally
+//!   (every captured Chrome since 131 advertises both).
+//! * Session ticket cache (process-global, 600s TTL).
 
 use boring::ssl::{
     SslConnector, SslMethod, SslSession, SslSessionCacheMode, SslVerifyMode, SslVersion,
@@ -104,8 +109,19 @@ fn unpin_host(ssl_ptr: usize) -> Option<(String, u16)> {
     pending_host_map().remove(&ssl_ptr).map(|(_, v)| v)
 }
 
-#[allow(dead_code)] // Used by test harness; live count for future telemetry.
+/// Counts every time the new-session callback fires (i.e. how many fresh
+/// session tickets BoringSSL issued us across the process lifetime).
+/// Exposed via [`session_ticket_callback_count`] so operators can graph
+/// resumption hit-rate without instrumenting BoringSSL itself.
 static CALLBACK_HITS: Mutex<u64> = Mutex::new(0);
+
+/// Number of session-ticket new-session callbacks fired since process
+/// start. Useful as a sanity check that ticket-based resumption is
+/// actually happening end-to-end (a near-zero value with high traffic
+/// usually means the cache is missing or the server doesn't issue tickets).
+pub fn session_ticket_callback_count() -> u64 {
+    *CALLBACK_HITS.lock()
+}
 
 pub fn build_connector(profile: Profile) -> Result<SslConnector> {
     // Firefox uses NSS, not BoringSSL — different ClientHello shape.

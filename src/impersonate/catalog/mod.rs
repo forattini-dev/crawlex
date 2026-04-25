@@ -29,7 +29,11 @@ pub enum ExtensionEntry {
     Named { id: u16, name: &'static str },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+// `Browser` only flows through internal state (ProfileBuilder, era lookup,
+// catalog filters); it never lands in user-facing JSON or config files,
+// so we keep it light without serde derives. `BrowserOs` does need them
+// because it appears inside `Profile` (which IS Serialize+Deserialize).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Browser {
     Chrome,
     Chromium,
@@ -48,15 +52,6 @@ pub enum BrowserOs {
     MacOs,
     Android,
     Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Channel {
-    Stable,
-    Beta,
-    Dev,
-    Canary,
-    Esr,
 }
 
 /// A single browser+version+os fingerprint capturing every byte the JA3/JA4

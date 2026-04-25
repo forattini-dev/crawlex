@@ -62,7 +62,10 @@ async fn recaptcha_invisible_rejects_unsupported_vendors() {
     // sitekey — that would be wasted volume + a noisy error path.
     let solver = build_solver(SolverKind::RecaptchaInvisible).unwrap();
     let err = solver
-        .solve(payload(ChallengeVendor::HCaptcha, Some("00000000-ffff-ffff-ffff-000000000001")))
+        .solve(payload(
+            ChallengeVendor::HCaptcha,
+            Some("00000000-ffff-ffff-ffff-000000000001"),
+        ))
         .await
         .unwrap_err();
     assert!(
@@ -93,7 +96,11 @@ fn external_adapters_remain_prevention_first() {
     // refuse to run until env vars wire an API key. This test pins the
     // contract: a deployed adapter without keys is a no-op, not a silent
     // outbound call to a paid service.
-    for kind in [SolverKind::TwoCaptcha, SolverKind::AntiCaptcha, SolverKind::Vlm] {
+    for kind in [
+        SolverKind::TwoCaptcha,
+        SolverKind::AntiCaptcha,
+        SolverKind::Vlm,
+    ] {
         let solver = build_solver(kind).expect("external adapter builds");
         // Solver `name()` is defined; no panics on construction.
         assert!(!solver.name().is_empty(), "{kind:?} has no name");

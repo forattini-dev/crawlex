@@ -43,6 +43,15 @@ pub const REQUEST_TIMEOUT: u64 = 30_000;
 /// Effective request timeout (ms). Reads `CRAWLEX_REQUEST_TIMEOUT_MS` once
 /// per process; subsequent calls return the cached value. Falls back to
 /// [`REQUEST_TIMEOUT`] when unset or unparseable.
+///
+/// ⚠️ **Process-global cache via `OnceLock`.** The first call freezes the
+/// value for the rest of the process. Tests that mutate
+/// `CRAWLEX_REQUEST_TIMEOUT_MS` MUST run in serial (`#[serial]` or a
+/// dedicated `cargo test --test-threads=1` invocation) — concurrent test
+/// runs share the cached value and will see whichever the first thread
+/// observed. Production (single CLI invocation) is safe because
+/// `build_config_from_args` writes the env var before any handler is
+/// constructed.
 pub fn request_timeout_ms() -> u64 {
     static CACHE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *CACHE.get_or_init(|| {

@@ -48,25 +48,13 @@ pub struct TechFingerprintReport {
     pub generated_at: i64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct TechFingerprintFacts<'a> {
     pub peer_cert: Option<&'a PeerCert>,
     pub dns_json: Option<&'a str>,
     pub open_ports: &'a [u16],
     pub manifest_present: bool,
     pub service_worker_present: bool,
-}
-
-impl<'a> Default for TechFingerprintFacts<'a> {
-    fn default() -> Self {
-        Self {
-            peer_cert: None,
-            dns_json: None,
-            open_ports: &[],
-            manifest_present: false,
-            service_worker_present: false,
-        }
-    }
 }
 
 #[derive(Default)]

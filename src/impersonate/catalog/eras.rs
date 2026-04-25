@@ -83,16 +83,12 @@ fn exact_match(browser: Browser, major: u16, os: BrowserOs) -> Option<&'static T
     // the build patch numbers up front, so iterate prefix-matching.
     let prefix = format!("{}_{}", browser_token, major);
     let suffix = format!("_{}", os_token);
-    for fp in super::all() {
-        if fp.name.starts_with(&prefix)
+    super::all().find(|fp| {
+        fp.name.starts_with(&prefix)
             && fp.name.contains(&suffix)
             && (fp.name.as_bytes().get(prefix.len()) == Some(&b'.')
                 || fp.name.as_bytes().get(prefix.len()) == Some(&b'_'))
-        {
-            return Some(fp);
-        }
-    }
-    None
+    })
 }
 
 /// Chrome / Chromium TLS eras by major version.

@@ -325,7 +325,9 @@ pub enum ProfileError {
     UnsupportedBrowser,
     #[error("no TLS fingerprint available for this browser/major/os tuple")]
     NoFingerprint,
-    #[error("profile string `{0}` does not match `<browser>-<major>-<os>` (e.g. `chrome-149-linux`)")]
+    #[error(
+        "profile string `{0}` does not match `<browser>-<major>-<os>` (e.g. `chrome-149-linux`)"
+    )]
     BadFormat(String),
     #[error("unknown browser `{0}` — expected chrome|chromium|firefox|edge|safari")]
     UnknownBrowser(String),
@@ -385,11 +387,7 @@ impl std::str::FromStr for Profile {
             other => return Err(ProfileError::UnknownOs(other.to_string())),
         };
 
-        let builder = ProfileBuilder {
-            browser,
-            major,
-            os,
-        };
+        let builder = ProfileBuilder { browser, major, os };
         builder.build()
     }
 }

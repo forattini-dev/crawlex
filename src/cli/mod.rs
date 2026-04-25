@@ -321,8 +321,9 @@ fn cmd_catalog_show(args: args::CatalogShowArgs) -> anyhow::Result<()> {
                 args.profile
             )
         })?;
-        p.tls()
-            .ok_or_else(|| anyhow::anyhow!("profile `{}` resolves to no fingerprint", args.profile))?
+        p.tls().ok_or_else(|| {
+            anyhow::anyhow!("profile `{}` resolves to no fingerprint", args.profile)
+        })?
     };
 
     if args.json {
