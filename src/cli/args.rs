@@ -119,6 +119,43 @@ pub enum StealthVerb {
     Test,
     /// Print the active IdentityBundle fingerprint summary.
     Inspect(InspectArgs),
+    /// Browse the TLS fingerprint catalog (vendored + captured + mined).
+    #[command(subcommand)]
+    Catalog(CatalogVerb),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CatalogVerb {
+    /// List every fingerprint registered in the catalog.
+    /// Filter by browser via `--filter chrome` / `firefox` / `chromium` / `edge` / `safari`.
+    List(CatalogListArgs),
+    /// Show the full fingerprint for a single profile by curl-impersonate
+    /// name (e.g. `chrome_116.0.5845.180_win10`) or by `<browser>-<major>-<os>`
+    /// (e.g. `chrome-149-linux`).
+    Show(CatalogShowArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CatalogListArgs {
+    /// Restrict to one browser family (`chrome`, `chromium`, `firefox`,
+    /// `edge`, `safari`). Omit to list all.
+    #[arg(long)]
+    pub filter: Option<String>,
+    /// Output as JSON (compact one-line per profile) instead of the
+    /// default human-readable table.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CatalogShowArgs {
+    /// Profile identifier — either the catalog name
+    /// (`chrome_116.0.5845.180_win10`) or a `<browser>-<major>-<os>`
+    /// spec that resolves via era fallback (`chrome-149-linux`).
+    pub profile: String,
+    /// Output as JSON instead of the default human-readable layout.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]

@@ -108,6 +108,149 @@ identity bundles, render pool tuning).
 
 Last validated: see [`production-validation/summary.md`](production-validation/summary.md).
 
+### Browser fingerprint catalog
+
+`crawlex` ships a TLS fingerprint catalog covering the **last 30 Chrome
+stable, 30 Chromium, and 20 Firefox** majors plus Edge and Safari.
+Choose the persona via `--profile <browser>-<major>-<os>`:
+
+```bash
+crawlex pages run --seed https://example.com \
+  --method spoof \
+  --profile chrome-149-linux
+
+crawlex pages run --seed https://example.com \
+  --profile firefox-130-macos
+
+crawlex pages run --seed https://example.com \
+  --profile chromium-122-linux
+```
+
+The catalog is data-driven: curl-impersonate's MPL-2.0 vendored
+signatures live at `references/curl-impersonate/tests/signatures/*.yaml`,
+our own captures land at `src/impersonate/catalog/captured/*.yaml`, and
+public mining oracles (tls.peet.ws + ja4db.com) populate
+`src/impersonate/catalog/mined/*.json`. All are compiled into a static
+registry by `build.rs` at compile time.
+
+**Discover what's available:**
+
+```bash
+# List every fingerprint registered in the catalog
+crawlex stealth catalog list
+
+# Filter by browser family
+crawlex stealth catalog list --filter chrome
+
+# Show full ClientHello breakdown for a profile
+crawlex stealth catalog show chrome-149-linux
+crawlex stealth catalog show firefox-130-macos --json
+```
+
+**Era fallback:** when an exact `(browser, major, os)` tuple isn't yet
+captured, the catalog falls back to the closest era's representative
+profile and emits a `tracing::warn` so operators know an approximation
+is in play. Chrome eras:
+
+| Era | Majors    | Marker change                          |
+|-----|-----------|----------------------------------------|
+| E1  | 98-99     | Pre-permute_extensions                 |
+| E2  | 100-103   | permute_extensions enabled             |
+| E3a | 104-110   | post-quantum experimentation start     |
+| E3b | 111-116   | curl-impersonate frontier              |
+| E4  | 117-123   | X25519Kyber768Draft00                  |
+| E5  | 124-131   | ALPS payload reformat                  |
+| E6  | 132-141   | MLKEM768 (Kyber removed)               |
+| E7  | 142+      | ECH wider deployment                   |
+
+Firefox eras (NSS-based, separate connector path):
+
+| Era  | Majors  | Marker change                           |
+|------|---------|-----------------------------------------|
+| ESR  | 91      | NSS 3.68 ESR baseline                   |
+| F-A  | 92-95   | TLS 1.3 default, Kyber off              |
+| F-B  | 96-100  | encrypted_client_hello staged           |
+| F-C  | 101-108 | NSS 3.79 base                           |
+| F-D  | 109-116 | session_ticket reordered                |
+| FF-A | 117-119 | NSS 3.79+ stabilised                    |
+| FF-B | 120-126 | KyberSlash mitigation                   |
+| FF-C | 127-130 | TLS Encrypted ClientHello experimental  |
+
+**Refreshing the catalog with new captures:**
+
+```bash
+# Pull JA3/JA4 hashes from public databases (validation oracles)
+node scripts/mine-fingerprints.mjs
+
+# Bulk-capture every browser version (downloads + headless launch + emit YAML)
+bash scripts/sync-tls-catalog.sh
+
+# Subset capture
+CHROME_MAJORS="148 149" bash scripts/sync-tls-catalog.sh
+```
+
+### Captcha solving
+
+`crawlex` ships **prevention-first** captcha handling — the policy
+engine prefers avoiding challenges over solving them. When a challenge
+does fire, four solver adapters are available:
+
+| Adapter | Vendors | Configuration |
+|---|---|---|
+| `recaptcha-invisible` | reCAPTCHA v3 (vanilla) | none — server-side, in-house |
+| `2captcha` | reCAPTCHA, hCaptcha, image | `CRAWLEX_SOLVER_2CAPTCHA_KEY` |
+| `anticaptcha` | reCAPTCHA, hCaptcha, FunCaptcha | `CRAWLEX_SOLVER_ANTICAPTCHA_KEY` |
+| `vlm` | hCaptcha, image puzzles | `CRAWLEX_SOLVER_VLM_PROVIDER` + key |
+
+Pick via CLI:
+
+```bash
+crawlex pages run --seed https://example.com \
+  --method render \
+  --captcha-solver recaptcha-invisible
+
+# Externals refuse to run until their API key env var is set —
+# this is by design, no silent paid-API calls.
+CRAWLEX_SOLVER_2CAPTCHA_KEY=abc123 crawlex pages run \
+  --seed https://example.com --captcha-solver 2captcha
+```
+
+#### In-house reCAPTCHA v3 invisible solver
+
+`recaptcha-invisible` is a port of
+[`h4ckf0r0day/reCaptchaV3-Invisible-Solver`](https://github.com/h4ckf0r0day/reCaptchaV3-Invisible-Solver)
+adapted to crawlex's identity stack. Key differences from the reference:
+
+- **Identity coherence** — UA, UA-CH brands, screen, timezone, canvas
+  hash, WebGL strings flow from the active `IdentityBundle` instead of
+  hardcoded Chrome 136 / Windows defaults. Eliminates the cross-check
+  failure mode the reference suffers when the persona disagrees with
+  the synthesised `oz` payload.
+- **Server-side only** — no headless browser launched per challenge.
+  Pipeline: `api.js` → `anchor` → `reload` → regex out the token →
+  return as `g-recaptcha-response`.
+- **Empirical scoring 0.3-0.9** — same range the reference reports.
+  Use as a fallback for sites where a real browser path isn't viable
+  (rate limit, bandwidth budget). Production use should still prefer a
+  real Chrome render via `--method render` for tougher detectors.
+
+The solver lives at `src/antibot/recaptcha/`:
+
+```
+recaptcha/
+├── proto.rs       # Minimal protobuf encoder (no prost dep)
+├── utils.rs       # base36, cb / co / scramble_oz primitives
+├── oz.rs          # Build the `oz` JSON payload
+├── telemetry.rs   # Synthesise field-74 client blob (mouse, scroll, perf)
+├── solver.rs      # 3-hop pipeline + token extraction
+└── adapter.rs     # CaptchaSolver trait impl
+```
+
+Limited to `ChallengeVendor::Recaptcha`. **Not** supported:
+reCAPTCHA Enterprise (anchor-with-action verification), hCaptcha,
+Cloudflare Turnstile, DataDome, PerimeterX — those are different
+protocols entirely and fall back to external adapters if configured.
+
 ### Tuning render timeouts
 
 Heavy real-world targets (Cloudflare-fronted SPAs, ad-laden landing pages)

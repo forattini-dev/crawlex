@@ -98,35 +98,54 @@ fn exact_match(browser: Browser, major: u16, os: BrowserOs) -> Option<&'static T
 /// Chrome / Chromium TLS eras by major version.
 ///
 /// Era boundaries derived from public Chromium release notes + curl-impersonate
-/// captures. Within an era, ClientHello bytes are identical (same cipher list,
-/// same extensions, same supported_groups, same ALPS payload).
+/// captures. Within an era, ClientHello bytes are largely identical (same cipher
+/// list, same extensions, same supported_groups, same ALPS payload). Marker
+/// changes between eras are documented inline so that when a new YAML lands
+/// for a given major it slots cleanly into the right era — and so the warn
+/// label tells operators *which* approximation they're getting.
 ///
-/// | Era | Majors | Marker change |
-/// |-----|--------|---------------|
-/// | E1  | 98-99  | Pre-permute_extensions |
-/// | E2  | 100-103 | permute_extensions enabled |
-/// | E3  | 104-110 | post-quantum experimentation start |
-/// | E4  | 111-116 | X25519Kyber768 |
-/// | E5  | 117-123 | ALPS reformat |
-/// | E6  | 124-131 | (current curl-impersonate frontier) |
-/// | E7  | 132-141 | MLKEM768 (Kyber removed) |
-/// | E8  | 142+    | ECH wider deployment |
+/// | Era | Majors    | Marker change                                            |
+/// |-----|-----------|----------------------------------------------------------|
+/// | E1  | 98-99     | Pre-permute_extensions                                   |
+/// | E2  | 100-103   | permute_extensions enabled                               |
+/// | E3a | 104-110   | post-quantum experimentation start                       |
+/// | E3b | 111-116   | (curl-impersonate frontier; older PQ Kyber draft on/off) |
+/// | E4  | 117-123   | X25519Kyber768Draft00 stabilised                         |
+/// | E5  | 124-131   | ALPS payload reformat                                    |
+/// | E6  | 132-141   | MLKEM768 (Kyber removed; PQ final)                       |
+/// | E7  | 142+      | ECH wider deployment                                     |
+///
+/// Until our Phase 3 captures land for E4-E7, all those eras fall back to
+/// `chrome_116.0.5845.180_win10` — but the era label is preserved in the
+/// warn so operators know *which* era's approximation is in play.
 fn chrome_era_representative(major: u16, os: BrowserOs) -> Option<&'static str> {
     // Use the closest captured Win10 representative for each era. Linux/Mac
     // fingerprints land here once we capture them in Phase 3.
     let _ = os;
-    Some(match major {
-        0..=98 => "chrome_98.0.4758.102_win10",
-        99 => "chrome_99.0.4844.51_win10",
-        100 => "chrome_100.0.4896.127_win10",
-        101..=103 => "chrome_101.0.4951.67_win10",
-        104..=106 => "chrome_104.0.5112.81_win10",
-        107..=109 => "chrome_107.0.5304.107_win10",
-        110..=115 => "chrome_110.0.5481.177_win10",
-        // Era 4-8: until we capture them ourselves, use Chrome 116 as the
-        // newest available baseline. tracing::warn alerts operators.
-        116..=u16::MAX => "chrome_116.0.5845.180_win10",
-    })
+    let (name, era_label) = match major {
+        0..=98 => ("chrome_98.0.4758.102_win10", "E1"),
+        99 => ("chrome_99.0.4844.51_win10", "E1"),
+        100 => ("chrome_100.0.4896.127_win10", "E2"),
+        101..=103 => ("chrome_101.0.4951.67_win10", "E2"),
+        104..=106 => ("chrome_104.0.5112.81_win10", "E3a"),
+        107..=109 => ("chrome_107.0.5304.107_win10", "E3a"),
+        110 => ("chrome_110.0.5481.177_win10", "E3a"),
+        111..=116 => ("chrome_116.0.5845.180_win10", "E3b"),
+        117..=123 => ("chrome_116.0.5845.180_win10", "E4"),
+        124..=131 => ("chrome_116.0.5845.180_win10", "E5"),
+        132..=141 => ("chrome_116.0.5845.180_win10", "E6"),
+        142..=u16::MAX => ("chrome_116.0.5845.180_win10", "E7"),
+    };
+    if matches!(major, 117..=u16::MAX) {
+        tracing::trace!(
+            target: "crawlex::impersonate::catalog::era",
+            major,
+            era = era_label,
+            representative = name,
+            "chrome era fallback active — capture this version to collapse"
+        );
+    }
+    Some(name)
 }
 
 fn edge_era_representative(major: u16) -> Option<&'static str> {
@@ -137,16 +156,39 @@ fn edge_era_representative(major: u16) -> Option<&'static str> {
     })
 }
 
+/// Firefox TLS eras by major version.
+///
+/// | Era  | Majors    | Marker change                              |
+/// |------|-----------|--------------------------------------------|
+/// | ESR  | 91        | NSS 3.68 ESR baseline                      |
+/// | F-A  | 92-95     | TLS 1.3 default, Kyber off                 |
+/// | F-B  | 96-100    | encrypted_client_hello (ext 65037) staged  |
+/// | F-C  | 101-108   | NSS 3.79 base                              |
+/// | F-D  | 109-116   | session_ticket extensions reordered        |
+/// | FF-A | 117-119   | NSS 3.79+ stabilised                       |
+/// | FF-B | 120-126   | KyberSlash mitigation                      |
+/// | FF-C | 127-130   | TLS Encrypted ClientHello experimental     |
 fn firefox_era_representative(major: u16) -> Option<&'static str> {
-    Some(match major {
-        0..=91 => "firefox_91.6.0esr_win10",
-        92..=95 => "firefox_95.0.2_win10",
-        96..=98 => "firefox_98.0_win10",
-        99..=100 => "firefox_100.0_win10",
-        101..=108 => "firefox_102.0_win10",
-        109..=116 => "firefox_109.0_win10",
-        117..=u16::MAX => "firefox_117.0.1_win10",
-    })
+    let (name, era_label) = match major {
+        0..=91 => ("firefox_91.6.0esr_win10", "ESR"),
+        92..=95 => ("firefox_95.0.2_win10", "F-A"),
+        96..=100 => ("firefox_100.0_win10", "F-B"),
+        101..=108 => ("firefox_102.0_win10", "F-C"),
+        109..=116 => ("firefox_109.0_win10", "F-D"),
+        117..=119 => ("firefox_117.0.1_win10", "FF-A"),
+        120..=126 => ("firefox_117.0.1_win10", "FF-B"),
+        127..=u16::MAX => ("firefox_117.0.1_win10", "FF-C"),
+    };
+    if matches!(major, 118..=u16::MAX) {
+        tracing::trace!(
+            target: "crawlex::impersonate::catalog::era",
+            major,
+            era = era_label,
+            representative = name,
+            "firefox era fallback active — capture this version to collapse"
+        );
+    }
+    Some(name)
 }
 
 fn safari_era_representative(major: u16) -> Option<&'static str> {

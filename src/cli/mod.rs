@@ -226,8 +226,207 @@ pub async fn run() -> anyhow::Result<()> {
         args::Command::Stealth(v) => match v {
             args::StealthVerb::Test => cmd_test_stealth().await?,
             args::StealthVerb::Inspect(a) => cmd_inspect(a).await?,
+            args::StealthVerb::Catalog(cv) => match cv {
+                args::CatalogVerb::List(a) => cmd_catalog_list(a)?,
+                args::CatalogVerb::Show(a) => cmd_catalog_show(a)?,
+            },
         },
     }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// `crawlex stealth catalog list` and `... show <profile>`
+// ─────────────────────────────────────────────────────────────────────
+
+fn cmd_catalog_list(args: args::CatalogListArgs) -> anyhow::Result<()> {
+    use crate::impersonate::catalog::{all, Browser};
+    let filter = args.filter.as_deref().map(str::to_ascii_lowercase);
+    let want = |b: Browser| -> bool {
+        match filter.as_deref() {
+            None => true,
+            Some("chrome") => b == Browser::Chrome,
+            Some("chromium") => b == Browser::Chromium,
+            Some("firefox") => b == Browser::Firefox,
+            Some("edge") => b == Browser::Edge,
+            Some("safari") => b == Browser::Safari,
+            Some(_) => true,
+        }
+    };
+
+    let entries: Vec<_> = all().filter(|fp| want(fp.browser)).collect();
+
+    if args.json {
+        for fp in &entries {
+            let line = serde_json::json!({
+                "name": fp.name,
+                "browser": fp.browser_name,
+                "major": fp.major,
+                "version": fp.version,
+                "os": fp.os_name,
+                "ja3": fp.ja3_string(),
+                "ciphers": fp.ciphers_no_grease().len(),
+                "extensions": fp.extension_ids_no_grease().len(),
+                "alpn": fp.alpn,
+                "alps_alpn": fp.alps_alpn,
+                "pq_groups": fp.supported_groups_no_grease(),
+                "has_ech_grease": fp.has_ech_grease,
+            });
+            println!("{}", line);
+        }
+        eprintln!("\n# {} profile(s) emitted", entries.len());
+        return Ok(());
+    }
+
+    println!(
+        "{:<40} {:<8} {:<5} {:<8} {:<8} {:<8} {:<6}",
+        "NAME", "BROWSER", "MAJOR", "OS", "CIPHERS", "EXT", "ECH"
+    );
+    println!("{}", "─".repeat(88));
+    for fp in &entries {
+        println!(
+            "{:<40} {:<8} {:<5} {:<8} {:<8} {:<8} {:<6}",
+            fp.name,
+            fp.browser_name,
+            fp.major,
+            fp.os_name,
+            fp.ciphers_no_grease().len(),
+            fp.extension_ids_no_grease().len(),
+            if fp.has_ech_grease { "yes" } else { "no" },
+        );
+    }
+    eprintln!(
+        "\n# {} profile(s) listed{}",
+        entries.len(),
+        match filter.as_deref() {
+            Some(f) => format!(" (filter={f})"),
+            None => String::new(),
+        }
+    );
+    Ok(())
+}
+
+fn cmd_catalog_show(args: args::CatalogShowArgs) -> anyhow::Result<()> {
+    use crate::impersonate::catalog::{lookup, ExtensionEntry, NumericEntry};
+
+    // Resolve: try direct name first, else parse as <browser>-<major>-<os>.
+    let fp = if let Some(fp) = lookup(&args.profile) {
+        fp
+    } else {
+        use std::str::FromStr;
+        let p = crate::impersonate::Profile::from_str(&args.profile).map_err(|e| {
+            anyhow::anyhow!(
+                "profile `{}` not in catalog and not a valid spec: {e}\n\
+                 Try: `crawlex stealth catalog list` to see available names.",
+                args.profile
+            )
+        })?;
+        p.tls()
+            .ok_or_else(|| anyhow::anyhow!("profile `{}` resolves to no fingerprint", args.profile))?
+    };
+
+    if args.json {
+        let extensions: Vec<serde_json::Value> = fp
+            .extensions
+            .iter()
+            .map(|e| match e {
+                ExtensionEntry::Greased => serde_json::json!({"type": "GREASE"}),
+                ExtensionEntry::Named { id, name } => serde_json::json!({
+                    "type": name,
+                    "id": id,
+                }),
+            })
+            .collect();
+        let ciphers: Vec<serde_json::Value> = fp
+            .ciphersuites
+            .iter()
+            .map(|e| match e {
+                NumericEntry::Greased => serde_json::json!("GREASE"),
+                NumericEntry::Value(v) => serde_json::json!(format!("0x{:04x}", v)),
+            })
+            .collect();
+        let report = serde_json::json!({
+            "name": fp.name,
+            "browser": fp.browser_name,
+            "major": fp.major,
+            "version": fp.version,
+            "os": fp.os_name,
+            "record_version": format!("0x{:04x}", fp.record_version),
+            "handshake_version": format!("0x{:04x}", fp.handshake_version),
+            "session_id_length": fp.session_id_length,
+            "ciphersuites": ciphers,
+            "extensions": extensions,
+            "alpn": fp.alpn,
+            "alps_alpn": fp.alps_alpn,
+            "supported_groups": fp.supported_groups_no_grease(),
+            "ec_point_formats": fp.ec_point_formats,
+            "sig_hash_algs": fp.sig_hash_algs.iter().map(|a| format!("0x{:04x}", a)).collect::<Vec<_>>(),
+            "supported_versions": fp.supported_versions.iter().map(|v| match v {
+                NumericEntry::Greased => "GREASE".to_string(),
+                NumericEntry::Value(n) => format!("0x{:04x}", n),
+            }).collect::<Vec<_>>(),
+            "cert_compress_algs": fp.cert_compress_algs,
+            "psk_ke_modes": fp.psk_ke_modes,
+            "ja3": fp.ja3_string(),
+            "has_ech_grease": fp.has_ech_grease,
+            "has_extended_master_secret": fp.has_extended_master_secret,
+            "has_renegotiation_info": fp.has_renegotiation_info,
+            "has_session_ticket": fp.has_session_ticket,
+            "has_signed_certificate_timestamp": fp.has_signed_certificate_timestamp,
+            "has_status_request": fp.has_status_request,
+            "has_padding": fp.has_padding,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("=== TLS fingerprint: {} ===", fp.name);
+    println!("  browser   : {} {}", fp.browser_name, fp.version);
+    println!("  os        : {}", fp.os_name);
+    println!(
+        "  versions  : record=0x{:04x} handshake=0x{:04x}",
+        fp.record_version, fp.handshake_version
+    );
+    println!("  session_id_len  : {}", fp.session_id_length);
+    println!("  ciphersuites   ({}):", fp.ciphers_no_grease().len());
+    for entry in fp.ciphersuites {
+        match entry {
+            NumericEntry::Greased => println!("    - GREASE"),
+            NumericEntry::Value(v) => {
+                let name = crate::impersonate::catalog::cipher_id_to_openssl_name(*v)
+                    .unwrap_or("<unknown>");
+                println!("    - 0x{:04x}  {}", v, name);
+            }
+        }
+    }
+    println!("  extensions ({}):", fp.extension_ids_no_grease().len());
+    for entry in fp.extensions {
+        match entry {
+            ExtensionEntry::Greased => println!("    - GREASE"),
+            ExtensionEntry::Named { id, name } => {
+                println!("    - 0x{:04x} ({}) {}", id, id, name);
+            }
+        }
+    }
+    println!("  alpn        : {:?}", fp.alpn);
+    if !fp.alps_alpn.is_empty() {
+        println!("  alps_alpn   : {:?}", fp.alps_alpn);
+    }
+    println!("  supported_groups: {:?}", fp.supported_groups_no_grease());
+    if !fp.cert_compress_algs.is_empty() {
+        println!("  cert_compress: {:?}", fp.cert_compress_algs);
+    }
+    println!("  ja3 (raw)   : {}", fp.ja3_string());
+    println!(
+        "  flags       : ech_grease={} ems={} rnegi={} stkt={} sct={} status={} padding={}",
+        fp.has_ech_grease,
+        fp.has_extended_master_secret,
+        fp.has_renegotiation_info,
+        fp.has_session_ticket,
+        fp.has_signed_certificate_timestamp,
+        fp.has_status_request,
+        fp.has_padding,
+    );
     Ok(())
 }
 
@@ -1061,9 +1260,15 @@ async fn cmd_resume(_r: args::ResumeArgs) -> Result<()> {
 }
 
 async fn cmd_inspect(i: args::InspectArgs) -> Result<()> {
+    use std::str::FromStr;
     let profile = match i.profile.as_deref() {
-        Some("chrome-132-stable") => Profile::Chrome132Stable,
-        _ => Profile::Chrome131Stable,
+        Some(spec) => Profile::from_str(spec).map_err(|e| {
+            crate::Error::Config(format!(
+                "invalid --profile `{spec}`: {e}. Examples: \
+                 `chrome-149-linux`, `firefox-130-macos`."
+            ))
+        })?,
+        None => Profile::Chrome149Stable,
     };
     let url = url::Url::parse(&i.url).map_err(crate::Error::UrlParse)?;
     let client = crate::impersonate::ImpersonateClient::new(profile)?;
@@ -1499,15 +1704,25 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
     }
 
     // Profile priority:
-    // 1. Explicit --profile flag (honours user intent).
+    // 1. Explicit --profile flag (honours user intent). Accepts any
+    //    `<browser>-<major>-<os>` form via `Profile::from_str` — e.g.
+    //    `chrome-149-linux`, `firefox-130-macos`, `chromium-122-linux`.
+    //    Legacy `chrome-131-stable` / `chrome-149-stable` aliases still work.
     // 2. Auto-detect from `<chrome-path> --version` — keeps spoof UA in
     //    lockstep with the browser the render pool will actually launch.
     // 3. Fall back to a sensible recent default.
     let profile = match c.profile.as_deref() {
-        Some("chrome-131-stable") => Profile::Chrome131Stable,
-        Some("chrome-132-stable") => Profile::Chrome132Stable,
-        Some("chrome-149-stable") => Profile::Chrome149Stable,
-        _ => detect_chrome_profile(c.chrome_path.as_deref()).unwrap_or(Profile::Chrome131Stable),
+        Some(spec) => {
+            use std::str::FromStr;
+            Profile::from_str(spec).map_err(|e| {
+                crate::Error::Config(format!(
+                    "invalid --profile `{spec}`: {e}. Examples: \
+                     `chrome-149-linux`, `firefox-130-macos`, \
+                     `chromium-122-linux`"
+                ))
+            })?
+        }
+        None => detect_chrome_profile(c.chrome_path.as_deref()).unwrap_or(Profile::Chrome131Stable),
     };
 
     let wait_strategy = match c.wait_strategy.as_deref().unwrap_or("networkidle") {

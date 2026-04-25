@@ -319,12 +319,104 @@ impl ProfileBuilder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProfileError {
     #[error("unsupported browser for the catalog")]
     UnsupportedBrowser,
     #[error("no TLS fingerprint available for this browser/major/os tuple")]
     NoFingerprint,
+    #[error("profile string `{0}` does not match `<browser>-<major>-<os>` (e.g. `chrome-149-linux`)")]
+    BadFormat(String),
+    #[error("unknown browser `{0}` — expected chrome|chromium|firefox|edge|safari")]
+    UnknownBrowser(String),
+    #[error("invalid major version `{0}` — expected positive integer")]
+    BadMajor(String),
+    #[error("unknown OS `{0}` — expected linux|windows|macos|android")]
+    UnknownOs(String),
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// FromStr + Display: round-trip via "chrome-149-linux" form.
+// ──────────────────────────────────────────────────────────────────────
+
+impl std::str::FromStr for Profile {
+    type Err = ProfileError;
+
+    /// Parse a profile spec in the form `<browser>-<major>-<os>`.
+    ///
+    /// Examples:
+    ///   * `chrome-149-linux`
+    ///   * `chromium-122-linux`
+    ///   * `firefox-130-macos`
+    ///   * `edge-130-windows`
+    ///
+    /// Also accepts the legacy aliases `chrome-131-stable`, `chrome-132-stable`,
+    /// `chrome-149-stable` — the `stable` slot is treated as Linux for backward
+    /// compatibility with old configs.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Legacy aliases first.
+        match s {
+            "chrome-131-stable" | "chrome131-stable" => return Ok(Profile::Chrome131Stable),
+            "chrome-132-stable" | "chrome132-stable" => return Ok(Profile::Chrome132Stable),
+            "chrome-149-stable" | "chrome149-stable" => return Ok(Profile::Chrome149Stable),
+            _ => {}
+        }
+
+        let parts: Vec<&str> = s.splitn(3, '-').collect();
+        if parts.len() != 3 {
+            return Err(ProfileError::BadFormat(s.to_string()));
+        }
+        let browser = match parts[0].to_ascii_lowercase().as_str() {
+            "chrome" => Browser::Chrome,
+            "chromium" => Browser::Chromium,
+            "firefox" => Browser::Firefox,
+            "edge" => Browser::Edge,
+            "safari" => Browser::Safari,
+            other => return Err(ProfileError::UnknownBrowser(other.to_string())),
+        };
+        let major: u16 = parts[1]
+            .parse()
+            .map_err(|_| ProfileError::BadMajor(parts[1].to_string()))?;
+        let os = match parts[2].to_ascii_lowercase().as_str() {
+            "linux" => BrowserOs::Linux,
+            "windows" | "win" | "win10" | "win11" => BrowserOs::Windows,
+            "macos" | "mac" | "darwin" | "osx" => BrowserOs::MacOs,
+            "android" => BrowserOs::Android,
+            other => return Err(ProfileError::UnknownOs(other.to_string())),
+        };
+
+        let builder = ProfileBuilder {
+            browser,
+            major,
+            os,
+        };
+        builder.build()
+    }
+}
+
+impl std::fmt::Display for Profile {
+    /// Inverse of `FromStr`: render a profile as `<browser>-<major>-<os>`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (browser, major, os) = self.parts();
+        let browser_token = match browser {
+            Browser::Chrome => "chrome",
+            Browser::Chromium => "chromium",
+            Browser::Firefox => "firefox",
+            Browser::Edge => "edge",
+            Browser::Safari => "safari",
+            Browser::Brave => "brave",
+            Browser::Opera => "opera",
+            Browser::Other => "other",
+        };
+        let os_token = match os {
+            BrowserOs::Linux => "linux",
+            BrowserOs::Windows => "windows",
+            BrowserOs::MacOs => "macos",
+            BrowserOs::Android => "android",
+            BrowserOs::Other => "other",
+        };
+        write!(f, "{}-{}-{}", browser_token, major, os_token)
+    }
 }
 
 #[cfg(test)]
@@ -386,5 +478,67 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(p.sec_ch_ua(), "");
+    }
+
+    #[test]
+    fn from_str_round_trips_via_display() {
+        use std::str::FromStr;
+        for spec in [
+            "chrome-149-linux",
+            "chromium-122-linux",
+            "firefox-130-macos",
+            "edge-130-windows",
+            "safari-17-macos",
+        ] {
+            let p = Profile::from_str(spec).unwrap_or_else(|e| panic!("{spec}: {e}"));
+            assert_eq!(p.to_string(), spec, "round-trip {spec}");
+        }
+    }
+
+    #[test]
+    fn from_str_rejects_bad_format() {
+        use std::str::FromStr;
+        assert!(matches!(
+            Profile::from_str("chrome149linux"),
+            Err(ProfileError::BadFormat(_))
+        ));
+        assert!(matches!(
+            Profile::from_str("chrome-149"),
+            Err(ProfileError::BadFormat(_))
+        ));
+        assert!(matches!(
+            Profile::from_str("opera-149-linux"),
+            Err(ProfileError::UnknownBrowser(_)) | Err(ProfileError::UnsupportedBrowser)
+        ));
+        assert!(matches!(
+            Profile::from_str("chrome-abc-linux"),
+            Err(ProfileError::BadMajor(_))
+        ));
+        assert!(matches!(
+            Profile::from_str("chrome-149-bsd"),
+            Err(ProfileError::UnknownOs(_))
+        ));
+    }
+
+    #[test]
+    fn from_str_accepts_legacy_aliases() {
+        use std::str::FromStr;
+        assert_eq!(
+            Profile::from_str("chrome-149-stable").unwrap(),
+            Profile::Chrome149Stable
+        );
+    }
+
+    #[test]
+    fn from_str_accepts_os_synonyms() {
+        use std::str::FromStr;
+        for spec in [
+            "chrome-149-windows",
+            "chrome-149-win10",
+            "chrome-149-mac",
+            "chrome-149-darwin",
+        ] {
+            Profile::from_str(spec).unwrap_or_else(|e| panic!("{spec}: {e}"));
+        }
     }
 }

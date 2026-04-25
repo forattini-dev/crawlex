@@ -242,7 +242,8 @@ async function main() {
     }
   }
 
-  // Print coverage report.
+  // Print coverage report (table + per-browser percentages + suspicious-
+  // outlier warnings).
   const covered = new Set(oracles.map((o) => `${o.browser}_${o.major}_${o.os}`));
   const expected = [];
   for (const [browser, { range }] of Object.entries(TARGET_BROWSERS)) {
@@ -254,11 +255,60 @@ async function main() {
     }
   }
 
+  // Per-browser coverage rollup.
+  const byBrowser = {};
+  for (const k of expected) {
+    const browser = k.split('_')[0];
+    byBrowser[browser] = byBrowser[browser] || { covered: 0, total: 0 };
+    byBrowser[browser].total += 1;
+    if (covered.has(k)) byBrowser[browser].covered += 1;
+  }
+  console.log('\n=== Coverage by browser ===');
+  for (const [browser, { covered: c, total }] of Object.entries(byBrowser)) {
+    const pct = total === 0 ? 0 : Math.round((c / total) * 100);
+    console.log(`  ${browser.padEnd(10)} ${c}/${total} (${pct}%)`);
+  }
+  console.log(`  ${'total'.padEnd(10)} ${covered.size}/${expected.length}`);
+
+  // Suspicious-outlier detection: same (browser, major, os) reporting
+  // multiple distinct JA4 hashes is a sign someone pushed garbage to the
+  // public DB (browser with extensions, custom builds, Brave-as-Chrome).
+  const ja4ByKey = new Map();
+  for (const o of oracles) {
+    if (!o.ja4) continue;
+    const key = `${o.browser}_${o.major}_${o.os}`;
+    const existing = ja4ByKey.get(key) || new Set();
+    existing.add(o.ja4);
+    ja4ByKey.set(key, existing);
+  }
+  const conflicts = [...ja4ByKey.entries()].filter(([_, set]) => set.size > 1);
+  if (conflicts.length) {
+    console.log(`\n⚠️  ${conflicts.length} keys with conflicting JA4s (top 5):`);
+    for (const [key, set] of conflicts.slice(0, 5)) {
+      console.log(`  - ${key}: ${[...set].join(' / ')}`);
+    }
+    console.log('  → likely 3rd-party extensions or Brave-as-Chrome reporting.');
+    console.log('  → cross-validate against local capture to pick the canonical one.');
+  }
+
   const missing = expected.filter((k) => !covered.has(k));
-  console.log(`\ncoverage: ${covered.size} / ${expected.length}`);
   if (missing.length) {
-    console.log(`missing ${missing.length} tuples (top 10):`);
-    for (const k of missing.slice(0, 10)) console.log(`  - ${k}`);
+    console.log(`\nmissing ${missing.length} tuples (top 15):`);
+    for (const k of missing.slice(0, 15)) console.log(`  - ${k}`);
+    console.log(
+      `\n→ run \`bash scripts/sync-tls-catalog.sh\` to local-capture these,`,
+    );
+    console.log(`  or wait — tls.peet.ws/ja4db update with new captures over time.`);
+  }
+
+  // --strict mode fails the script if zero matches were mined. Useful for
+  // CI: prevents silently committing an empty mining snapshot.
+  const strict = process.argv.includes('--strict');
+  if (strict && oracles.length === 0) {
+    console.error(
+      'STRICT mode: zero oracle hits — verify network access to tls.peet.ws + ja4db.com',
+    );
+    process.exit(2);
   }
 }
 
