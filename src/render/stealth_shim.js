@@ -301,15 +301,138 @@
   });
 
   // ============================================================
-  // 7. Battery API — Chrome 84+ returns undefined in non-secure contexts; we
-  //    unify by making getBattery throw NotAllowedError.
+  // 7. Battery API — desktop Chrome 103+ removed it; mobile personas keep
+  //    it. When EXPOSE_BATTERY is true (mobile/Adreno path) we install a
+  //    deterministic 24h cycle anchored at LOCAL midnight via the bundle
+  //    timezone offset. Curve: 0h-2h local = charging linearly 20%→85%
+  //    (2h to top up), 2h-24h local = discharging linearly 85%→20%
+  //    (22h drain). Level is clamped to [0.20, 0.85] so the user never
+  //    sees 100% (a brand-new battery on full charge is itself a tell —
+  //    real phones idle in the 30-90% band 99% of the time). Tiny
+  //    deterministic noise (±1%) from the canvas/audio session seed so
+  //    two sessions don't byte-match.
+  //
+  //    The API surface (BatteryManager) is recomputed on every property
+  //    read, so even within a long-running page the level/charging state
+  //    drift naturally with wall-clock — matching what a real phone
+  //    exposes when a page polls every few seconds. `addEventListener` is
+  //    accepted but never fires (real Chrome only fires on actual state
+  //    transitions; in our model those transitions are smooth so no
+  //    discrete event is warranted).
+  //
+  //    Desktop personas (EXPOSE_BATTERY=false) follow the original path:
+  //    Section 17 deletes `getBattery` entirely so `'getBattery' in
+  //    navigator === false`, matching Chrome 103+ desktop.
   // ============================================================
   safe(() => {
-    if (navigator.getBattery) {
-      navigator.getBattery = () => Promise.reject(
-        new DOMException('Permission denied', 'NotAllowedError')
-      );
+    const EXPOSE_BATTERY = {{EXPOSE_BATTERY}};
+    if (!EXPOSE_BATTERY) {
+      // Desktop path: keep the legacy reject so any caller that happens
+      // to invoke getBattery before Section 17 deletes the descriptor
+      // fails in a Chrome-coherent way (Section 17 is the actual fix).
+      if (navigator.getBattery) {
+        navigator.getBattery = () => Promise.reject(
+          new DOMException('Permission denied', 'NotAllowedError')
+        );
+      }
+      return;
     }
+
+    // Mobile path: realistic curve.
+    // Seed → small ±1% level noise + ±5min charging-time jitter.
+    const seed = (window.__crawlex_seed__ || 1) >>> 0;
+    const levelNoise = (((seed & 0xffff) / 65535) - 0.5) * 0.02; // [-0.01, +0.01]
+    const chargingJitterSec = ((seed >> 16) & 0xff) / 255 * 300; // [0, 300] sec
+
+    function computeBatteryState() {
+      // Local time anchored via the overridden Date.prototype.getTimezoneOffset
+      // (Section 6). `getTimezoneOffset` returns minutes WEST of UTC, so
+      // local_ms = utc_ms - offset*60000.
+      const utcMs = Date.now();
+      const offsetMin = new Date().getTimezoneOffset();
+      const localMs = utcMs - offsetMin * 60000;
+      const msInDay = ((localMs % 86400000) + 86400000) % 86400000;
+      const hours = msInDay / 3600000;
+
+      let level, charging, chargingTime, dischargingTime;
+      if (hours < 2) {
+        // Charging window: 00:00 → 02:00 local, 20% → 85%.
+        const t = hours / 2;
+        level = 0.20 + (0.85 - 0.20) * t;
+        charging = true;
+        // Seconds remaining until full (here "full" = 85% cap).
+        chargingTime = Math.round((2 - hours) * 3600 + chargingJitterSec);
+        dischargingTime = Infinity;
+      } else {
+        // Discharging window: 02:00 → 24:00 local, 85% → 20% over 22h.
+        const t = (hours - 2) / 22;
+        level = 0.85 - (0.85 - 0.20) * t;
+        charging = false;
+        chargingTime = Infinity;
+        dischargingTime = Math.round((24 - hours) * 3600);
+      }
+      level += levelNoise;
+      // Hard clamp so we never expose 100% (or anything above 85%) and
+      // never below 20%.
+      if (level > 0.85) level = 0.85;
+      if (level < 0.20) level = 0.20;
+      // Round to 2 decimal places — real Chrome reports level in 0.01
+      // increments on most platforms.
+      level = Math.round(level * 100) / 100;
+      return { level, charging, chargingTime, dischargingTime };
+    }
+
+    function makeBatteryManager() {
+      const listeners = {
+        levelchange: [],
+        chargingchange: [],
+        chargingtimechange: [],
+        dischargingtimechange: [],
+      };
+      const bm = {
+        get level() { return computeBatteryState().level; },
+        get charging() { return computeBatteryState().charging; },
+        get chargingTime() { return computeBatteryState().chargingTime; },
+        get dischargingTime() { return computeBatteryState().dischargingTime; },
+        addEventListener(t, fn) {
+          if (typeof fn !== 'function') return;
+          if (listeners[t]) listeners[t].push(fn);
+        },
+        removeEventListener(t, fn) {
+          if (listeners[t]) listeners[t] = listeners[t].filter(h => h !== fn);
+        },
+        dispatchEvent() { return true; },
+        onchargingchange: null,
+        onchargingtimechange: null,
+        ondischargingtimechange: null,
+        onlevelchange: null,
+      };
+      return bm;
+    }
+
+    const getBatteryFn = function getBattery() {
+      return Promise.resolve(makeBatteryManager());
+    };
+    try {
+      Object.defineProperty(navigator, 'getBattery', {
+        value: getBatteryFn,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      Object.defineProperty(Navigator.prototype, 'getBattery', {
+        value: getBatteryFn,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    } catch (_) {}
+    // Register with the toString WeakSet so `getBattery.toString()` reports
+    // `[native code]`. The registrar is exposed by Section 13.
+    try {
+      const lateReg = window.__crawlex_reg_target__;
+      if (typeof lateReg === 'function') lateReg(getBatteryFn);
+    } catch (_) {}
   });
 
   // ============================================================
@@ -987,15 +1110,23 @@
   // Idempotent: `delete` on an already-deleted property is a no-op.
   // ============================================================
   safe(() => {
-    // Battery: delete from both instance and prototype so no descriptor
-    // survives `'getBattery' in navigator` probes.
-    try { delete Navigator.prototype.getBattery; } catch (_) {}
-    try { delete navigator.getBattery; } catch (_) {}
-    try {
-      Object.defineProperty(navigator, 'getBattery', {
-        get: () => undefined, configurable: true,
-      });
-    } catch (_) {}
+    // EXPOSE_BATTERY=true means Section 7 installed the realistic
+    // mobile curve; we must NOT delete it here. Desktop personas
+    // (EXPOSE_BATTERY=false) keep the original behavior — getBattery
+    // is removed entirely so `'getBattery' in navigator === false`,
+    // matching Chrome 103+ desktop.
+    const EXPOSE_BATTERY_S17 = {{EXPOSE_BATTERY}};
+    if (!EXPOSE_BATTERY_S17) {
+      // Battery: delete from both instance and prototype so no descriptor
+      // survives `'getBattery' in navigator` probes.
+      try { delete Navigator.prototype.getBattery; } catch (_) {}
+      try { delete navigator.getBattery; } catch (_) {}
+      try {
+        Object.defineProperty(navigator, 'getBattery', {
+          get: () => undefined, configurable: true,
+        });
+      } catch (_) {}
+    }
 
     // Sensor constructors + motion events that desktop Chrome does not ship.
     const sensorNames = [

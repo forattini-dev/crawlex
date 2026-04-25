@@ -68,6 +68,13 @@ struct ShimSubstitutions<'a> {
     media_mic_count: u8,
     media_cam_count: u8,
     media_speaker_count: u8,
+    /// Whether `navigator.getBattery` is exposed (mobile personas only).
+    /// Desktop Chrome 103+ removed the Battery API; mobile Chrome still
+    /// ships it. When `true`, Section 7 installs a deterministic 24h
+    /// charge/discharge curve anchored to local midnight (via the
+    /// timezone in this bundle), and Section 17 leaves the API alone.
+    /// When `false`, the API is deleted (current behavior).
+    expose_battery: bool,
 }
 
 /// JS string literal escape — the bundle-sourced strings land inside
@@ -133,6 +140,10 @@ fn apply_to(template: &str, s: &ShimSubstitutions<'_>) -> String {
         .replace(
             "{{MEDIA_SPEAKER_COUNT}}",
             &s.media_speaker_count.to_string(),
+        )
+        .replace(
+            "{{EXPOSE_BATTERY}}",
+            if s.expose_battery { "true" } else { "false" },
         )
 }
 
@@ -229,6 +240,8 @@ pub fn render_shim(vars: &ShimVars<'_>) -> String {
         media_mic_count: 2,
         media_cam_count: 1,
         media_speaker_count: 2,
+        // Legacy path defaults to desktop persona — Battery API hidden.
+        expose_battery: false,
     })
 }
 
@@ -290,6 +303,9 @@ fn build_subs<'a>(bundle: &'a IdentityBundle, scratch: &'a ShimScratch) -> ShimS
         media_mic_count: bundle.media_mic_count,
         media_cam_count: bundle.media_cam_count,
         media_speaker_count: bundle.media_speaker_count,
+        // Mobile personas (Adreno/Qualcomm) still ship Battery API.
+        // Desktop Chrome 103+ removed it; keep hidden on those.
+        expose_battery: gpu_keyword_from_renderer(&bundle.webgl_renderer) == "adreno",
     }
 }
 
@@ -373,6 +389,7 @@ pub fn render_shim_from_bundle(bundle: &IdentityBundle) -> String {
         media_mic_count: bundle.media_mic_count,
         media_cam_count: bundle.media_cam_count,
         media_speaker_count: bundle.media_speaker_count,
+        expose_battery: gpu_keyword_from_renderer(&bundle.webgl_renderer) == "adreno",
     })
 }
 
@@ -507,6 +524,58 @@ mod tests {
         assert!(
             notif_window.contains("lateReg(wrapped)"),
             "registrar not called on wrapped ref"
+        );
+    }
+
+    #[test]
+    fn battery_hidden_for_desktop_personas() {
+        // Default Linux/Intel persona (Row 0) — desktop, EXPOSE_BATTERY=false.
+        // Section 7 must NOT install the realistic curve, Section 17 must
+        // delete the API.
+        let b = IdentityBundle::from_chromium(131, 99);
+        let js = render_shim_from_bundle(&b);
+        // Placeholder substituted to literal `false`.
+        assert!(
+            js.contains("const EXPOSE_BATTERY = false"),
+            "EXPOSE_BATTERY should be false on desktop persona"
+        );
+        // Section 17 must run the delete branch — gate variable also false.
+        assert!(
+            js.contains("const EXPOSE_BATTERY_S17 = false"),
+            "Section 17 gate should be false on desktop"
+        );
+    }
+
+    #[test]
+    fn battery_curve_present_in_template() {
+        // Even though desktop personas don't activate it at runtime, the
+        // curve code must exist in the rendered shim — otherwise mobile
+        // personas would receive a useless template. Sanity-check the
+        // curve constants are intact post-substitution.
+        let b = IdentityBundle::from_chromium(131, 7);
+        let js = render_shim_from_bundle(&b);
+        // The 22h discharge / 2h charge anchors.
+        assert!(
+            js.contains("0.85 - (0.85 - 0.20) * t"),
+            "discharging formula 85→20% missing"
+        );
+        assert!(
+            js.contains("0.20 + (0.85 - 0.20) * t"),
+            "charging formula 20→85% missing"
+        );
+        // Hard clamps so level never exceeds 85% nor falls below 20%.
+        assert!(
+            js.contains("if (level > 0.85) level = 0.85"),
+            "upper clamp at 85% missing — must never expose 100%"
+        );
+        assert!(
+            js.contains("if (level < 0.20) level = 0.20"),
+            "lower clamp at 20% missing"
+        );
+        // Local-time anchoring via Section 6 overridden getTimezoneOffset.
+        assert!(
+            js.contains("new Date().getTimezoneOffset()"),
+            "timezone anchoring missing — curve must follow local midnight"
         );
     }
 

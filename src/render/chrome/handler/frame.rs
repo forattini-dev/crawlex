@@ -1027,16 +1027,17 @@ impl NavigationWatcher {
         // via `CRAWLEX_NAVIGATION_LIFECYCLE`:
         //   - `load` (default) — wait for full window onload
         //   - `domcontentloaded` — return as soon as parser is done
-        let lifecycle: MethodId = std::env::var("CRAWLEX_NAVIGATION_LIFECYCLE")
+        let lifecycle: MethodId = match std::env::var("CRAWLEX_NAVIGATION_LIFECYCLE")
             .ok()
             .map(|s| s.to_ascii_lowercase())
             .as_deref()
-            .map(|s| match s {
-                "domcontentloaded" | "dom_content_loaded" | "dcl" => "DOMContentLoaded",
-                _ => "load",
-            })
-            .unwrap_or("load")
-            .into();
+        {
+            Some("domcontentloaded") | Some("dom_content_loaded") | Some("dcl") => {
+                "DOMContentLoaded"
+            }
+            _ => "load",
+        }
+        .into();
         Self {
             id,
             expected_lifecycle: std::iter::once(lifecycle).collect(),
