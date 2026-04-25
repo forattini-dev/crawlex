@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>crawlex - Documentation</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <meta
+    name="description"
+    content="Docs for crawlex: a stealth crawler with Chrome-aligned HTTP/TLS impersonation, render escalation, persistent queues and NDJSON events."
+  >
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+
+  <meta property="og:title" content="crawlex - Documentation">
+  <meta
+    property="og:description"
+    content="Stealth crawling, render escalation, discovery enrichment and persistent state for automated collection pipelines."
+  >
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%95%B8%EF%B8%8F</text></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link
+    rel="stylesheet"
+    href="//cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/dist/style.min.css"
+    title="docsify-darklight-theme"
+    type="text/css"
+  />
+  <link rel="stylesheet" href="./custom.css" />
+</head>
+<body>
+  <div id="app">Loading crawlex...</div>
+
+  <script>
+    window.$docsify = {
+      name: 'crawlex',
+      nameLink: '#/',
+      repo: 'https://github.com/forattini-dev/crawlex',
+      loadSidebar: true,
+      loadNavbar: true,
+      coverpage: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      themeColor: '#0ea5a6',
+      topMargin: 64,
+      relativePath: false,
+      routerMode: 'hash',
+      mergeNavbar: true,
+      notFoundPage: true,
+      sidebarDisplayLevel: 1,
+      alias: {
+        '/.*/_navbar.md': '/_navbar.md',
+        '/.*/_sidebar.md': '/_sidebar.md'
+      },
+      markdown: {
+        renderer: {
+          heading: function(text, level) {
+            const id = text.toLowerCase().replace(/[^\w]+/g, '-');
+            return `<h${level} id="${id}">${text}</h${level}>`;
+          }
+        }
+      },
+      search: {
+        maxAge: 86400000,
+        paths: 'auto',
+        placeholder: 'Search docs',
+        noData: 'No results',
+        depth: 6,
+        hideOtherSidebarContent: true,
+        namespace: 'crawlex-docs'
+      },
+      copyCode: {
+        buttonText: 'Copy',
+        errorText: 'Error',
+        successText: 'Copied'
+      },
+      pagination: {
+        previousText: 'Previous',
+        nextText: 'Next',
+        crossChapter: true,
+        crossChapterText: true
+      },
+      count: {
+        countable: true,
+        position: 'top',
+        margin: '0.75rem',
+        float: 'right',
+        fontsize: '0.85rem',
+        color: '#0ea5a6',
+        language: 'english',
+        isExpected: true
+      },
+      darklightTheme: {
+        siteFont: 'Space Grotesk, Manrope',
+        defaultTheme: 'dark',
+        codeFontFamily: 'JetBrains Mono, monospace',
+        bodyFontSize: '16px',
+        dark: {
+          accent: '#0ea5a6',
+          toogleBackground: '#0f172a',
+          background: '#07111b',
+          textColor: '#e5edf5',
+          codeTextColor: '#7dd3fc',
+          codeBackgroundColor: 'rgba(6, 18, 30, 0.92)',
+          borderColor: 'rgba(148, 163, 184, 0.16)',
+          blockQuoteColor: '#f59e0b',
+          highlightColor: '#14b8a6',
+          sidebarSublink: '#9fb2c8',
+          codeTypeColor: '#f59e0b',
+          coverBackground: 'radial-gradient(circle at center, #102235 0%, #07111b 100%)',
+          toogleImage: 'url(https://cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/icons/sun.svg)'
+        },
+        light: {
+          accent: '#0f766e',
+          toogleBackground: '#ffffff',
+          background: '#ffffff',
+          textColor: '#0f172a',
+          codeTextColor: '#155e75',
+          codeBackgroundColor: '#f4f8fb',
+          borderColor: '#dbe5ee',
+          blockQuoteColor: '#d97706',
+          highlightColor: '#0f766e',
+          sidebarSublink: '#64748b',
+          codeTypeColor: '#d97706',
+          coverBackground: 'linear-gradient(to bottom, #ffffff 0%, #f8fbfd 100%)',
+          toogleImage: 'url(https://cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/icons/moon.svg)'
+        }
+      }
+    };
+  </script>
+
+  <script src="//cdn.jsdelivr.net/npm/docsify@4"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-copy-code/dist/docsify-copy-code.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-tabs@1/dist/docsify-tabs.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-plugin-flexible-alerts"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/zoom-image.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify/lib/plugins/emoji.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-count@latest/dist/countable.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-sidebar-collapse/dist/docsify-sidebar-collapse.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-rust.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-yaml.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-toml.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-javascript.min.js"></script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-darklight-theme@latest/dist/index.min.js"></script>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        primaryColor: '#0ea5a6',
+        primaryBorderColor: '#f59e0b',
+        primaryTextColor: '#e5edf5',
+        lineColor: '#89a3bd',
+        secondaryColor: '#102235',
+        tertiaryColor: '#07111b'
+      }
+    });
+    window.mermaid = mermaid;
+  </script>
+  <script src="//cdn.jsdelivr.net/npm/docsify-mermaid@2/dist/docsify-mermaid.js"></script>
+
+  <script>
+    (function() {
+      const progress = document.createElement('div');
+      progress.className = 'progress-bar';
+      document.body.appendChild(progress);
+
+      window.addEventListener('scroll', function() {
+        const scrollTop = document.documentElement.scrollTop || document.body.scrollTop;
+        const scrollHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+        const percent = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+        progress.style.width = percent + '%';
+      });
+    })();
+
+    (function() {
+      const button = document.createElement('button');
+      button.className = 'back-to-top';
+      button.innerHTML = '↑';
+      button.title = 'Back to top';
+      button.addEventListener('click', function() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      document.body.appendChild(button);
+
+      window.addEventListener('scroll', function() {
+        button.classList.toggle('visible', window.scrollY > 320);
+      });
+    })();
+
+    window.$docsify.plugins = [].concat(function(hook) {
+      hook.afterEach(function(html) {
+        const footer = [
+          '<footer class="docs-footer">',
+          '<span class="brand">crawlex</span>',
+          '<span>Chrome-aligned crawling, render escalation, persistent state.</span>',
+          '</footer>'
+        ].join('');
+        return html + footer;
+      });
+    }, window.$docsify.plugins || []);
+  </script>
+</body>
+</html>

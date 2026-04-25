@@ -1,0 +1,62 @@
+{
+  "name": "crawlex",
+  "version": "1.0.0",
+  "description": "Stealth crawler with Chrome-perfect TLS/H2 fingerprint, render pool, hooks, persistent queue",
+  "type": "commonjs",
+  "main": "./sdk/crawlex-sdk.js",
+  "types": "./sdk/index.d.ts",
+  "bin": {
+    "crawlex": "./sdk/crawlex-sdk.js",
+    "cx": "./sdk/crawlex-sdk.js"
+  },
+  "exports": {
+    ".": {
+      "require": "./sdk/crawlex-sdk.js",
+      "types": "./sdk/index.d.ts",
+      "default": "./sdk/crawlex-sdk.js"
+    }
+  },
+  "files": [
+    "sdk/crawlex-sdk.js",
+    "sdk/postinstall.js",
+    "sdk/index.d.ts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forattini-dev/crawlex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/forattini-dev/crawlex/issues"
+  },
+  "homepage": "https://github.com/forattini-dev/crawlex",
+  "keywords": [
+    "crawler",
+    "scraper",
+    "stealth",
+    "tls",
+    "impersonate",
+    "headless",
+    "chrome",
+    "sitemap",
+    "recon"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "preversion": "node scripts/sync-version.js --check",
+    "version": "node scripts/sync-version.js && git add Cargo.toml Cargo.lock",
+    "postinstall": "node sdk/postinstall.js",
+    "build": "node --check sdk/crawlex-sdk.js",
+    "test": "node --test --test-reporter=spec sdk/test/*.test.js",
+    "pack-check": "pnpm pack",
+    "prepublishOnly": "node scripts/sync-version.js --check && pnpm run build && pnpm run pack-check",
+    "publish:npm": "pnpm publish --provenance --no-git-checks"
+  }
+}

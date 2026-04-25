@@ -1,0 +1,113 @@
+#!/usr/bin/env node
+'use strict';
+
+// Single source of truth: package.json.version.
+// Propagates into Cargo.toml (and Cargo.lock for the crawlex package).
+//
+// Modes:
+//   node scripts/sync-version.js           # write
+//   node scripts/sync-version.js --check   # fail if out of sync (CI guard)
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.resolve(__dirname, '..');
+const PKG_PATH = path.join(ROOT, 'package.json');
+const CARGO_TOML = path.join(ROOT, 'Cargo.toml');
+const CARGO_LOCK = path.join(ROOT, 'Cargo.lock');
+
+const checkMode = process.argv.includes('--check');
+
+function readPkgVersion() {
+  const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
+  if (!pkg.version) throw new Error('package.json has no version');
+  return pkg.version;
+}
+
+function replaceCargoTomlVersion(text, version) {
+  // Only the first [package] version in the root manifest.
+  // Matches: version = "x.y.z" on its own line inside the top [package] block.
+  const lines = text.split('\n');
+  let inPackage = false;
+  let replaced = false;
+  const out = lines.map((line) => {
+    if (/^\s*\[package\]\s*$/.test(line)) {
+      inPackage = true;
+      return line;
+    }
+    if (/^\s*\[/.test(line)) {
+      inPackage = false;
+      return line;
+    }
+    if (inPackage && !replaced) {
+      const m = line.match(/^(\s*version\s*=\s*)"([^"]+)"(.*)$/);
+      if (m) {
+        replaced = true;
+        return `${m[1]}"${version}"${m[3]}`;
+      }
+    }
+    return line;
+  });
+  if (!replaced) throw new Error('Cargo.toml: version line not found in [package]');
+  return out.join('\n');
+}
+
+function replaceCargoLockVersion(text, version, crate = 'crawlex') {
+  // Cargo.lock entries look like:
+  //   [[package]]
+  //   name = "crawlex"
+  //   version = "0.1.0"
+  //
+  // We rewrite only the matching block's version line.
+  const re = new RegExp(
+    String.raw`(\[\[package\]\]\s*\nname\s*=\s*"${crate}"\s*\nversion\s*=\s*)"[^"]+"`,
+    'm'
+  );
+  if (!re.test(text)) return null;
+  return text.replace(re, `$1"${version}"`);
+}
+
+function main() {
+  const version = readPkgVersion();
+
+  const tomlBefore = fs.readFileSync(CARGO_TOML, 'utf8');
+  const tomlAfter = replaceCargoTomlVersion(tomlBefore, version);
+  const tomlDiffers = tomlBefore !== tomlAfter;
+
+  let lockBefore = null;
+  let lockAfter = null;
+  let lockDiffers = false;
+  if (fs.existsSync(CARGO_LOCK)) {
+    lockBefore = fs.readFileSync(CARGO_LOCK, 'utf8');
+    lockAfter = replaceCargoLockVersion(lockBefore, version, 'crawlex');
+    if (lockAfter !== null) lockDiffers = lockBefore !== lockAfter;
+  }
+
+  if (checkMode) {
+    if (tomlDiffers || lockDiffers) {
+      process.stderr.write(
+        `version out of sync with package.json (${version}):\n` +
+        (tomlDiffers ? '  - Cargo.toml\n' : '') +
+        (lockDiffers ? '  - Cargo.lock\n' : '') +
+        `run: node scripts/sync-version.js\n`
+      );
+      process.exit(1);
+    }
+    process.stdout.write(`version in sync: ${version}\n`);
+    return;
+  }
+
+  if (tomlDiffers) {
+    fs.writeFileSync(CARGO_TOML, tomlAfter);
+    process.stdout.write(`Cargo.toml -> ${version}\n`);
+  }
+  if (lockDiffers && lockAfter) {
+    fs.writeFileSync(CARGO_LOCK, lockAfter);
+    process.stdout.write(`Cargo.lock -> ${version}\n`);
+  }
+  if (!tomlDiffers && !lockDiffers) {
+    process.stdout.write(`already at ${version}\n`);
+  }
+}
+
+main();

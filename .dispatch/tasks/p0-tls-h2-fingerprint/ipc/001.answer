@@ -1,0 +1,3 @@
+Opção A — adicionar `#[derive(Hash)]` em `ChallengeVendor`. Unblock mínimo, zero conflito real com task D (derive é aditivo, não altera semântica). Se task D por algum motivo quiser remover Hash, é seguro refatorar depois.
+
+Prossegue.

@@ -1,0 +1,12 @@
+wave1-vendor-tricks complete
+files:
+  - src/antibot/bypass.rs (new)
+  - src/antibot/cookie_pin.rs (new)
+  - src/antibot/mod.rs (wire + origin_of_url helper)
+  - src/storage/sqlite.rs (antibot_cookie_cache table)
+  - src/cli/args.rs (--antibot-bypass flag, default=none)
+  - tests/cookie_pinning.rs (new)
+gates:
+  - cargo check --lib: errors only in foreign workers' files (src/render/motion/submovement.rs, src/intel/orchestrator.rs); no errors or warnings in my files (antibot-grep empty).
+  - mini / test / clippy / HN-live: blocked by shared cargo-lock contention + foreign worker errors. Delegated to integrator post-wave sync.
+antibot-bypass default: none (opt-in), regression test present.

@@ -1,0 +1,73 @@
+crawlex
+Copyright (c) 2026 Filipe Forattini
+
+This product includes software developed by third parties as listed below.
+
+================================================================================
+Firecrawl  —  https://github.com/firecrawl/firecrawl
+MIT License — Copyright (c) Sideguide Technologies Inc.
+
+Portions of `src/extract/html_clean.rs`, `src/extract/link_filter.rs`, and
+`src/extract/sitemap.rs` are ports of Rust-native code from
+`apps/api/native/src/{html.rs, crawler.rs}` in Firecrawl. The original logic —
+including the EXCLUDE_NON_MAIN_TAGS selector list, post-markdown cleanup
+rules, link filter heuristics, and sitemap XML parser — retains the upstream
+MIT license.
+
+================================================================================
+FingerprintJS  —  https://github.com/fingerprintjs/fingerprintjs
+MIT License — Copyright (c) FingerprintJS Inc.
+
+Test fixtures in `tests/fpjs_compliance.rs` (font list, WebGL parameter keys,
+math golden vectors, DOM blocker selectors) are derived from the open-source
+FingerprintJS v3 source code at `src/sources/*.ts`. The original files retain
+the upstream MIT license; we use them as a compliance target for our stealth
+shim and do not redistribute them as-is.
+
+================================================================================
+BoringSSL (via `boring` crate)  —  https://boringssl.googlesource.com/boringssl
+ISC / OpenSSL-style license
+
+Linked through the `boring` and `boring-sys` crates.
+
+================================================================================
+curl-impersonate  —  https://github.com/lwthiker/curl-impersonate
+MIT License
+
+Used as a reference for Chrome ClientHello shape. No code copied; behaviour
+cross-checked against the upstream `chrome/` impersonation target.
+
+================================================================================
+vercel-labs/agent-browser  —  https://github.com/vercel-labs/agent-browser
+Apache License 2.0
+
+The design of `src/policy/action_policy.rs` (per-verb allow/deny/confirm with
+JSON load + default fallback) is inspired by `cli/src/native/policy.rs` in
+agent-browser. Not a line-for-line port; the Rust types, serde shape, and
+tests are original, written to plug into crawlex's own `PolicyEngine` and
+NDJSON event envelope. The conceptual debt is acknowledged here.
+
+================================================================================
+chromiumoxide  —  https://github.com/mattsse/chromiumoxide
+MIT License  —  Copyright (c) 2020 Matthias Seitz
+Apache License 2.0
+
+The Chrome DevTools Protocol driver under `src/render/chrome/`,
+`src/render/chrome_protocol/`, `src/render/chrome_fetcher/`, and
+`src/render/chrome_wire.rs` is derived from chromiumoxide (0.9.x + master
+post-0.9.1 commits, upstream as of rev afcc3a4313f2). The upstream crate
+was incorporated in-tree and desmembrado into first-party modules rather
+than consumed as an external dependency, so we can patch CDP-schema drift
+(Chrome 149 removed `ClientSecurityState.privateNetworkRequestPolicy`,
+renamed `Page.lifecycleEvent[init]` to `commit`, etc.) and apply stealth
+patches (Runtime.Enable absence, isolated-world context resolution) on
+our own cadence without maintaining a separate fork.
+
+The original dual-licensed terms are preserved verbatim in
+`src/render/LICENSES/{MIT,APACHE,NOTICE}`. The code in those directories
+has been substantially modified — see `git log src/render/chrome` for
+the patch history.
+
+================================================================================
+Additional third-party notices for code embedded under `src/render/` are
+kept with each module in `src/render/LICENSES/`.

@@ -1,0 +1,12 @@
+[submodule "references/curl-impersonate"]
+	path = references/curl-impersonate
+	url = git@github.com:lwthiker/curl-impersonate.git
+[submodule "references/rebrowser-patches"]
+	path = references/rebrowser-patches
+	url = git@github.com:rebrowser/rebrowser-patches.git
+[submodule "references/firecrawl"]
+	path = references/firecrawl
+	url = https://github.com/firecrawl/firecrawl.git
+[submodule "references/fingerprintjs"]
+	path = references/fingerprintjs
+	url = https://github.com/fingerprintjs/fingerprintjs.git

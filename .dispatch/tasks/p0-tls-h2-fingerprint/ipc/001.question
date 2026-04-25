@@ -1,0 +1,14 @@
+Build gate `cargo build --all-features` quebra antes das minhas mudanças por erro PRÉ-EXISTENTE em `src/antibot/telemetry.rs` (task D em progresso): `ChallengeVendor` não deriva `Hash` mas é usado como chave de `HashMap<(String, ChallengeVendor), ...>`.
+
+Erros:
+- `src/antibot/telemetry.rs:309` E0599 `.entry(key)` — ChallengeVendor: !Hash
+- `src/antibot/telemetry.rs:329` E0599 `.get(&(...))` — idem
+
+Brief diz "NÃO tocar em src/antibot/*" (task D paralela) + "cargo build --all-features verde" (non-negotiable). Contradição.
+
+Opções:
+  (A) Adicionar `#[derive(Hash)]` em `ChallengeVendor` (1 linha, src/antibot/mod.rs:55). Minimal cruzar com task D.
+  (B) Esperar task D terminar.
+  (C) Skip gate antibot e documentar em output.md.
+
+Default em 3min: (A) — unblock mínimo, derive trivial que task D muito provavelmente vai querer anyway.

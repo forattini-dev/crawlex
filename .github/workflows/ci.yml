@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy default features
+        run: cargo clippy --all-targets -- -D warnings
+      - name: clippy all features
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features
+
+  build-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - name: build crawlex (full, HTTP + render)
+        run: cargo build --bin crawlex --all-features
+
+  build-mini:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - name: build crawlex-mini (HTTP-only, no browser deps)
+        run: cargo build --bin crawlex-mini --no-default-features --features cli,sqlite

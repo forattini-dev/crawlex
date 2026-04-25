@@ -1,0 +1,6 @@
+- [Home](/)
+- [Quick Start](/getting-started/quickstart.md)
+- [Architecture](/architecture/00-overview.md)
+- [Reference](/reference/cli.md)
+- [Guides](/guides/README.md)
+- [GitHub](https://github.com/forattini-dev/crawlex)

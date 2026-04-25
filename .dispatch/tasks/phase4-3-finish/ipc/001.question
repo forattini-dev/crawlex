@@ -1,0 +1,23 @@
+Download residue removal scope — confirming before I touch files.
+
+Plan says: remove Op::SaveAsset variant, `assets` table in sqlite.rs, and save_asset from Storage trait. But save_asset + AssetKind download path is interwoven well beyond those three points:
+
+1. `src/storage/mod.rs`            → Storage::save_asset trait method
+2. `src/storage/sqlite.rs`         → Op::SaveAsset + `assets` table + impl
+3. `src/storage/filesystem.rs`     → save_asset impl (atomic write, sidecar JSON)
+4. `src/download/` (mod.rs + pipeline.rs) → AssetKind (Image/Pdf/...), DownloadPolicy, size helpers
+5. `src/crawler.rs` (~770-835)     → classify + should_store + save_asset + ArtifactSaved emit + DecisionMade size-exceeded
+6. `src/config.rs`                 → Config.download_policy field + default
+7. `src/cli/mod.rs` (672)          → CLI `--download-kinds` / `--max-download-size` parse
+8. `src/cli/args.rs` (~126)        → CLI arg struct fields for --follow-all-assets etc
+9. `src/lib.rs`                    → `pub mod download;`
+
+ArtifactSaved EventKind variant stays (used by script/captures).
+
+Plan says "Se algo do download residual (SaveAsset) estiver entrelaçado com infra legítima, perguntar via IPC antes de deletar." — isso aqui está entrelaçado.
+
+Minha leitura: remover TUDO da lista acima (1–9 menos ArtifactSaved), já que "trilhos: antibot, browser control, spa/pwa, artifacts, scale" — download binário genérico (PDF/image/media/archive/document) não é nenhum deles, foi a 4.4 cancelada. Script captures permanece porque emite ArtifactSaved via outro caminho (não via Storage::save_asset).
+
+Proceder com remoção completa (1–9)? Ou manter o classifier `download::AssetKind` (não persiste nada, só classifica) e só tirar a parte de persistência (1, 2, 3, 5, 6, 7, 8)?
+
+Default se timeout: remoção completa (1–9).

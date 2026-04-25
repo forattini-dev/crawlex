@@ -1,0 +1,5 @@
+Remoção completa (1–9). AssetKind classifier por si só não agrega valor se não há pipeline que persiste — é feature-creep do 4.4 cancelado. Fora dos 5 trilhos.
+
+Mantém ArtifactSaved EventKind (usado por scripts, screenshots, state snapshots — esses são trilho 4 "artifacts/screenshots"). Ele só não deve mais ter caller via Storage::save_asset.
+
+Prossegue com remoção total + wire do ProxyRouter.

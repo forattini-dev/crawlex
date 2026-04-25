@@ -1,0 +1,55 @@
+wave1-infra-scaffold complete 2026-04-22
+
+Scaffold-only implementation of issues #34–#38 (residential proxies, account
+warming, Android profile, human handoff, captcha solver). All adapters
+return `…NotConfigured` / `unimplemented-equivalent` errors; real impls are
+operator-side (see docs/infra-tier-operator.md).
+
+Files created (7 new, 0 existing modified beyond mod.rs wire-up):
+  src/proxy/residential.rs
+  src/identity/warmup.rs
+  src/render/android_profile.rs
+  src/render/handoff.rs
+  src/antibot/solver.rs
+  docs/infra-tier-operator.md
+  tests/infra_scaffold_interfaces.rs
+
+mod.rs wire-up only (minimal, allowed per plan):
+  src/proxy/mod.rs               +1 line  (pub mod residential)
+  src/identity/mod.rs            +1 line  (pub mod warmup)
+  src/render/mod.rs              +2 lines (pub mod android_profile, handoff)
+  src/antibot/mod.rs             +1 line  (pub mod solver)
+
+Deferred / out-of-scope (tracked in plan.md checklist with [?] / [!]):
+  - CLI flag wire-up into src/cli/args.rs — would collide with parallel
+    waves editing that file; `FromStr` + `build_*` factories are ready to
+    consume by whichever wave later touches args.rs. Env vars fully
+    documented so operators can drive via env today.
+  - `Decision::HumanHandoff` enum variant on `policy::reason::Decision` —
+    adding a variant there is a breaking change to existing file outside
+    the mod.rs-only constraint. Scaffold exposes `HandoffDecision` +
+    `should_handoff()` as a local contract until the policy-engine wave
+    rolls the variant into the main enum.
+
+Gates:
+  [x] `cargo check --lib --no-default-features --features cli` — green
+      (mini build path; zero errors, 4 pre-existing warnings in
+      proxy/router.rs untouched by this wave).
+  [!] `cargo check --lib --features cli,cdp-backend,sqlite` — fails due
+      to 6 errors in `src/render/motion/submovement.rs` and
+      `src/intel/orchestrator.rs` owned by sibling parallel waves.
+      No error originates from wave1-infra-scaffold files. My scaffold
+      files (`src/{proxy/residential,identity/warmup,render/android_profile,render/handoff,antibot/solver}.rs`)
+      each type-check successfully within that run.
+  [?] clippy / cargo test / live HN — pending completion of sibling waves
+      (the shared `crawlex` lib cannot link until submovement / intel are
+      fixed by the owning workers).
+
+Constraints honoured:
+  - Zero edits outside NEW files + mod.rs wire-up (4 mod.rs files, 5 lines).
+  - Chrome 149 patches intouched.
+  - Licenses preserved (no license header changes).
+  - No commits issued.
+  - Flags CLI default = disabled / none (via build_*() returning None for
+    `None` kind; env-gated for handoff).
+  - No real API calls — every adapter body raises `NotConfigured`.

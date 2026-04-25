@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "dispatch": {
+      "source": "bassimeledath/dispatch",
+      "sourceType": "github",
+      "computedHash": "8f00499a5bbd71ac2219a62a1704eebbf7aa7d624d6ce0a210171bc6b74a8951"
+    }
+  }
+}

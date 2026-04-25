@@ -1,0 +1,171 @@
+[package]
+name = "crawlex"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Stealth crawler with Chrome-perfect TLS/H2 fingerprint, render pool, hooks, persistent queue"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/forattini-dev/crawlex"
+homepage = "https://github.com/forattini-dev/crawlex"
+documentation = "https://docs.rs/crawlex"
+readme = "README.md"
+keywords = ["crawler", "stealth", "headless", "fingerprint", "chrome"]
+categories = ["web-programming", "command-line-utilities"]
+exclude = [
+    "vendor/h2/fixtures/**",
+    "vendor/h2/ci/**",
+    "vendor/h2/.github/**",
+    "vendor/h2/tests/**",
+    "vendor/h2/benches/**",
+    "vendor/h2/examples/**",
+    "vendor/h2/fuzz/**",
+    "references/**",
+    "production-validation/**",
+    "research/**",
+    ".dispatch/**",
+    ".agents/**",
+    "docs/**",
+    "sdk/**",
+    "scripts/**",
+]
+
+[lib]
+name = "crawlex"
+path = "src/lib.rs"
+
+# Full build: HTTP spoof + render browser. Default features give you
+# Chromium auto-download + full CDP + stealth shim.
+[[bin]]
+name = "crawlex"
+path = "src/bin/full.rs"
+required-features = ["cli", "sqlite", "cdp-backend"]
+
+# Mini build: HTTP-only worker, no Chromium, no browser deps. Same CLI
+# surface as `crawlex` — browser-dependent subcommands/flags return
+# `Error::RenderDisabled` with a stable message at runtime.
+[[bin]]
+name = "crawlex-mini"
+path = "src/bin/mini.rs"
+required-features = ["cli", "sqlite"]
+
+[features]
+default = ["cli", "sqlite", "cdp-backend", "chromium-fetcher"]
+cli = ["dep:clap"]
+sqlite = ["dep:rusqlite"]
+# `chromium-fetcher` implies the browser backend — baixar Chromium sem
+# um CDP client nunca faz sentido.
+chromium-fetcher = [
+    "cdp-backend",
+    "zip8",
+    "dep:directories",
+]
+zip0 = ["dep:zip0"]
+zip8 = ["dep:zip8"]
+prometheus = ["dep:prometheus"]
+cdp-backend = [
+    "dep:async-tungstenite",
+    "dep:which",
+    "dep:fnv",
+    "dep:futures-timer",
+    "dep:pin-project-lite",
+    "dep:dunce",
+    "dep:reqwest",
+]
+lua-hooks = ["dep:mlua", "cdp-backend"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+http = "1"
+url = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+indexmap = { version = "2", features = ["serde"] }
+parking_lot = "0.12"
+dashmap = "6"
+rand = "0.10"
+sha2 = "0.11"
+hex = "0.4"
+regex = "1"
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+
+# HTTP / TLS impersonation
+cookie = "0.18"
+boring = "5"
+boring-sys = "5"
+hyper = { version = "1", features = ["http1", "http2", "client"] }
+hyper-util = { version = "0.1", features = ["client", "tokio", "http1", "http2"] }
+http-body-util = "0.1"
+h2 = "0.4"
+tokio-boring = "5"
+foreign-types = "0.5"
+brotli = "8"
+flate2 = "1"
+zstd = "0.13"
+murmur3 = "0.5"
+base64 = "0.22"
+hickory-resolver = "0.26"
+
+# HTML parsing & link extraction
+scraper = "0.26"
+html5ever = "0.39"
+kuchikiki = "0.8"
+psl = "2"
+roxmltree = "0.20"
+encoding_rs = "0.8"
+
+# robots.txt
+texting_robots = "0.2"
+
+# Bloom filter for dedupe
+growable-bloom-filter = "2"
+
+# Optional backends
+clap = { version = "4", features = ["derive", "env"], optional = true }
+rusqlite = { version = "0.39", features = ["bundled"], optional = true }
+prometheus = { version = "0.14", optional = true }
+# CDP (Chrome DevTools Protocol) internal backend deps — formerly separate
+# crates, now inlined as modules under `src/cdp/`.
+async-tungstenite = { version = "0.32", features = ["tokio-runtime"], optional = true }
+which = { version = "8", optional = true }
+fnv = { version = "1", optional = true }
+futures-timer = { version = "3", optional = true }
+pin-project-lite = { version = "0.2", optional = true }
+dunce = { version = "1", optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
+zip8 = { package = "zip", version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+zip0 = { package = "zip", version = "0.6", default-features = false, features = ["deflate"], optional = true }
+
+directories = { version = "6", optional = true }
+mlua = { version = "0.11", features = ["lua54", "async", "vendored", "send", "serialize"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+windows-version = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"
+wiremock = "0.6"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.clippy]
+await_holding_lock = "deny"
+# Style/complexity lints demoted to warn — we'll clean them incrementally;
+# the non-negotiable one is `await_holding_lock` above.
+all = { level = "warn", priority = -1 }
+
+# S.1 — h2 pseudo-header order fork (m,a,s,p) for Chrome H2 fingerprint match
+[patch.crates-io]
+h2 = { path = "vendor/h2" }
