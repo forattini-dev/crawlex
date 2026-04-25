@@ -108,6 +108,19 @@ fn unpin_host(ssl_ptr: usize) -> Option<(String, u16)> {
 static CALLBACK_HITS: Mutex<u64> = Mutex::new(0);
 
 pub fn build_connector(profile: Profile) -> Result<SslConnector> {
+    // Firefox uses NSS, not BoringSSL — different ClientHello shape.
+    // Dispatch to the dedicated builder for those profiles.
+    if matches!(profile, Profile::Firefox { .. }) {
+        return crate::impersonate::tls_firefox::build_connector(profile);
+    }
+
+    // Resolve the catalog fingerprint for this persona. Falls back to
+    // the closest era's representative profile when the exact tuple
+    // isn't yet captured (with a tracing::warn from the catalog layer).
+    let fp = profile
+        .tls()
+        .ok_or_else(|| Error::Tls(format!("no TLS fingerprint in catalog for {:?}", profile)))?;
+
     let mut b =
         SslConnector::builder(SslMethod::tls()).map_err(|e| Error::Tls(format!("builder: {e}")))?;
 
@@ -116,22 +129,32 @@ pub fn build_connector(profile: Profile) -> Result<SslConnector> {
     b.set_max_proto_version(Some(SslVersion::TLS1_3))
         .map_err(|e| Error::Tls(format!("max proto: {e}")))?;
 
-    // Chrome enables GREASE (RFC 8701) and permutes extension order from
-    // Chrome 110 onward to discourage brittle fingerprinting.
+    // GREASE markers are baked into the catalog (cipher / extension /
+    // group lists carry `NumericEntry::Greased` slots in their captured
+    // positions). BoringSSL emits actual GREASE bytes when this is on;
+    // the positions we keep are stable per profile, the byte values rotate.
     b.set_grease_enabled(true);
+    // Chrome 110+ permutes extension order. Catalog stores the captured
+    // order but we don't pin it on the wire — Chrome itself permutes,
+    // so a fixed order from us would be the tell.
     b.set_permute_extensions(true);
 
-    b.set_cipher_list(chrome_cipher_list(profile))
+    let cipher_list = crate::impersonate::catalog::render_cipher_list(fp);
+    b.set_cipher_list(&cipher_list)
         .map_err(|e| Error::Tls(format!("cipher_list: {e}")))?;
 
-    b.set_curves_list(chrome_curves(profile))
+    let curves = crate::impersonate::catalog::render_curves_list(fp);
+    b.set_curves_list(&curves)
         .map_err(|e| Error::Tls(format!("curves: {e}")))?;
 
-    b.set_sigalgs_list(chrome_sigalgs(profile))
+    let sigalgs = crate::impersonate::catalog::render_sigalgs_list(fp);
+    b.set_sigalgs_list(&sigalgs)
         .map_err(|e| Error::Tls(format!("sigalgs: {e}")))?;
 
-    // h2 then http/1.1 — wire format: length-prefixed protocol ids.
-    b.set_alpn_protos(b"\x02h2\x08http/1.1")
+    // ALPN — order matters. Catalog ships `["h2", "http/1.1"]` for
+    // Chrome-family, `["h2", "http/1.1"]` for Firefox 100+, etc.
+    let alpn_wire = crate::impersonate::catalog::encode_alpn_wire(fp.alpn);
+    b.set_alpn_protos(&alpn_wire)
         .map_err(|e| Error::Tls(format!("alpn: {e}")))?;
 
     // Chrome 131+ always advertises OCSP stapling (ext 5, status_request)
@@ -144,19 +167,29 @@ pub fn build_connector(profile: Profile) -> Result<SslConnector> {
 
     b.set_verify(SslVerifyMode::PEER);
 
-    // cert_compression: Chrome advertises brotli(2), zlib(1), zstd(3).
-    // We register with no-op compress (client auth is rare and compression
-    // on the client→server path is not required for the advertisement to
-    // appear in ClientHello) and real decompressors for the rare case a
-    // server sends a compressed certificate chain.
+    // cert_compression: catalog tells us which algs the persona advertises.
+    // Chrome 110+ advertises brotli(2), zlib(1), zstd(3); Firefox doesn't
+    // send this extension at all. We register with no-op compress (client
+    // auth is rare and client→server compression is not required for the
+    // advertisement) and real decompressors for the rare server-sent
+    // compressed chain.
     unsafe {
         let ctx_ptr = b.as_ptr();
-        let algs: &[(u16, boring_sys::ssl_cert_decompression_func_t)] = &[
-            (2, Some(cert_decompress_brotli)), // TLSEXT_cert_compression_brotli
-            (1, Some(cert_decompress_zlib)),   // TLSEXT_cert_compression_zlib
-            (3, Some(cert_decompress_zstd)),   // TLSEXT_cert_compression_zstd
-        ];
-        for &(alg_id, decompress) in algs {
+        for &alg_id in fp.cert_compress_algs {
+            let decompress: boring_sys::ssl_cert_decompression_func_t = match alg_id {
+                1 => Some(cert_decompress_zlib),
+                2 => Some(cert_decompress_brotli),
+                3 => Some(cert_decompress_zstd),
+                _ => {
+                    tracing::warn!(
+                        target: "crawlex::impersonate::tls",
+                        alg_id,
+                        profile = fp.name,
+                        "unknown cert_compression algorithm — skipping"
+                    );
+                    continue;
+                }
+            };
             let rc = boring_sys::SSL_CTX_add_cert_compression_alg(
                 ctx_ptr,
                 alg_id,
@@ -359,50 +392,13 @@ unsafe fn finalize_decompressed(
     1
 }
 
-fn chrome_cipher_list(_profile: Profile) -> &'static str {
-    // TLS 1.3 suites are negotiated via SSL_CTX_set_ciphersuites in
-    // OpenSSL, but BoringSSL folds them into the standard cipher list.
-    // Order matches Chrome M120+. Notably we DROP the legacy SHA1
-    // suites (`ECDHE-RSA-AES128-SHA`, `AES128-SHA`, `AES256-SHA`) that
-    // Chrome removed years ago — sending them now is a JA3 tell that
-    // we're a Chrome ~87 era impersonator, not current Chrome.
-    "TLS_AES_128_GCM_SHA256:\
-TLS_AES_256_GCM_SHA384:\
-TLS_CHACHA20_POLY1305_SHA256:\
-ECDHE-ECDSA-AES128-GCM-SHA256:\
-ECDHE-RSA-AES128-GCM-SHA256:\
-ECDHE-ECDSA-AES256-GCM-SHA384:\
-ECDHE-RSA-AES256-GCM-SHA384:\
-ECDHE-ECDSA-CHACHA20-POLY1305:\
-ECDHE-RSA-CHACHA20-POLY1305:\
-AES128-GCM-SHA256:\
-AES256-GCM-SHA384"
-}
-
-fn chrome_curves(_profile: Profile) -> &'static str {
-    // Chrome M128+ uses X25519MLKEM768 (SSL_GROUP id 0x11ec) as its
-    // post-quantum hybrid key-exchange, replacing the earlier
-    // X25519Kyber768Draft00 (0x6399). The vendored BoringSSL exposes both
-    // NIDs and IDs (see boring_sys::NID_X25519MLKEM768 / SSL_GROUP_X25519_MLKEM768),
-    // so we pin the current rename. A server that still only knows the
-    // draft group falls back via the second entry.
-    "X25519MLKEM768:X25519:P-256:P-384"
-}
-
-fn chrome_sigalgs(_profile: Profile) -> &'static str {
-    // Chrome M120+ advertises ed25519 alongside the ECDSA/RSA set. Adding
-    // it here closes a small but real fingerprint gap (a sigalgs list
-    // missing ed25519 currently looks like Chrome ~M115).
-    "ecdsa_secp256r1_sha256:\
-rsa_pss_rsae_sha256:\
-rsa_pkcs1_sha256:\
-ecdsa_secp384r1_sha384:\
-rsa_pss_rsae_sha384:\
-rsa_pkcs1_sha384:\
-rsa_pss_rsae_sha512:\
-rsa_pkcs1_sha512:\
-ed25519"
-}
+// Cipher list / curves / sigalgs are now sourced from the TLS catalog via
+// `Profile::tls()` — see `build_connector` above and
+// `crate::impersonate::catalog::{render_cipher_list, render_curves_list,
+// render_sigalgs_list}`. The legacy `chrome_*` accessors are gone; per-major
+// drift across Chrome 100..149 is captured in YAMLs under
+// `references/curl-impersonate/tests/signatures/` and (Phase 3 onward)
+// `src/impersonate/catalog/captured/`.
 
 #[cfg(test)]
 mod tests {

@@ -503,14 +503,25 @@ fn parse_extension(ch: &mut ClientHello, t: u16, p: &[u8]) -> Result<(), ParseEr
 /// (someone upgrading boringssl, removing a cert_compression alg,
 /// disabling ECH grease) breaks the test loudly.
 pub fn current_chrome_fingerprint_summary(profile: crate::impersonate::Profile) -> &'static str {
-    use crate::impersonate::Profile;
-    // All three supported profiles currently share the same wire config —
-    // only the UA/CH strings vary. If a future profile diverges (e.g. a
-    // Chrome 140+ stack ships a different cipher list) it gets its own arm.
-    match profile {
-        Profile::Chrome131Stable | Profile::Chrome132Stable | Profile::Chrome149Stable => {
+    use crate::impersonate::catalog::Browser;
+    // The summary string is a coarse digest used as a regression marker
+    // in tests. With the catalog-driven Profile enum, every Chrome/Chromium
+    // major shares the same shape (TLS 1.3, 11 ciphers, MLKEM768 PQ,
+    // brotli/zlib/zstd cert compression, ECH grease) for everything 132+.
+    // Older majors (≤131) and Firefox/Safari get their own marker so a
+    // regression that re-routes them through Chrome's wire config is
+    // visible at test time.
+    let (browser, major, _) = profile.parts();
+    match (browser, major) {
+        (Browser::Chrome | Browser::Chromium, m) if m >= 132 => {
             "t13i1113h2|ciphers=11|pq=X25519MLKEM768|cert_comp=[2,1,3]|ech=1"
         }
+        (Browser::Chrome | Browser::Chromium, _) => {
+            "t13i1113h2|ciphers=11|pq=X25519Kyber768|cert_comp=[2,1,3]|ech=1"
+        }
+        (Browser::Firefox, _) => "t13i1014h2|ciphers=12|pq=none|cert_comp=[]|ech=0",
+        (Browser::Edge, _) => "t13i1113h2|ciphers=11|pq=X25519MLKEM768|cert_comp=[2,1,3]|ech=1",
+        _ => "t13i????h?|ciphers=?|pq=?|cert_comp=?|ech=?",
     }
 }
 

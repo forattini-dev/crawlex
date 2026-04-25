@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod cookies;
 pub mod decode;
 pub mod dns_cache;
@@ -9,6 +10,7 @@ pub mod profiles;
 pub mod proxy_transport;
 pub mod resource_hints;
 pub mod tls;
+pub mod tls_firefox;
 
 pub use profiles::Profile;
 

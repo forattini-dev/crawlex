@@ -776,22 +776,23 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "obsolete: catalog-driven Profile derives major 1:1 from \
+                ua_major; the float-up that the old closed enum did is \
+                gone, so tls_major == ua_major holds by construction"]
     fn tls_profile_major_mismatch_rejected() {
-        // Force a mismatch: claim ua_major=130 while keeping the 131
-        // brands/UA. Profile::from_detected_major(130) returns Chrome131
-        // (nearest-not-newer), so this also exercises the fallback path —
-        // the check fires because Chrome131.major_version()=131 ≠ 130.
+        // Pre-catalog history: `Profile::from_detected_major(130)` used to
+        // float up to `Chrome131Stable` (closest-not-newer), giving the
+        // validator a meaningful way to detect a stale-vs-claimed-version
+        // mismatch. With the catalog-driven `Profile::Chrome { major, os }`
+        // form, `from_detected_major(N)` returns `Chrome { major: N }`
+        // 1:1 — so `bundle.profile().major_version() == bundle.ua_major`
+        // always. The validator check at line 391 is now trivially true.
+        // Kept as #[ignore] to document the historical invariant.
         let mut b = mut_bundle();
         b.ua_major = 130;
-        // Keep ua/sec-ch-ua referencing 131 so earlier checks don't short-
-        // circuit; only the TLS profile check should trigger.
-        // Actually UA check will fire first if we leave ua at 131. Rebuild
-        // ua/sec so both reference 130, but full_version still starts 131.
         b.ua = b.ua.replace("131", "130");
         b.sec_ch_ua = b.sec_ch_ua.replace("131", "130");
         b.ua_brands = b.ua_brands.replace("131", "130");
-        // Leave ua_full_version as "131.0.6778.85" so UaFullVersionMajorMismatch
-        // would fire — swap that too.
         b.ua_full_version = "130.0.0.0".into();
         b.ua_full_version_list = b.ua_full_version_list.replace("131", "130");
         assert!(matches!(

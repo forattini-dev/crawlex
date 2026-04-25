@@ -18,6 +18,7 @@
 
 pub mod bypass;
 pub mod cookie_pin;
+pub mod recaptcha;
 pub mod signatures;
 pub mod solver;
 pub mod telemetry;

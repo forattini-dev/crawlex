@@ -1153,8 +1153,12 @@ pub fn stealth_assertions(resp: &crate::impersonate::Response, body: &str) -> St
     // Informational: always-pass line with the fingerprint summary our
     // TLS stack is declared to produce. Reading it in production tells
     // operators exactly what we're pretending to be.
+    // Use the newest stable profile for the summary so the line reflects
+    // current TLS-era markers (X25519MLKEM768 for Chrome 132+, ECH grease).
+    // Older profiles still validate via the catalog but their summary
+    // legitimately reads X25519Kyber768.
     let expected = crate::impersonate::ja3::current_chrome_fingerprint_summary(
-        crate::impersonate::Profile::Chrome131Stable,
+        crate::impersonate::Profile::Chrome149Stable,
     );
     checks.push((
         true,

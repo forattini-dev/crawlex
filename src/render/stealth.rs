@@ -190,7 +190,7 @@ fn seed_u31(raw: u64) -> u32 {
 )]
 pub fn render_shim(vars: &ShimVars<'_>) -> String {
     let ua = vars.profile.user_agent();
-    let app_version = ua.strip_prefix("Mozilla/").unwrap_or(ua);
+    let app_version = ua.strip_prefix("Mozilla/").unwrap_or(&ua).to_string();
     let ua_brands = vars.profile.ua_brands_json();
     let ua_full_version_list = vars.profile.fullversion_brands_json();
     let ua_full_version = vars.profile.ua_full_version();
@@ -202,11 +202,11 @@ pub fn render_shim(vars: &ShimVars<'_>) -> String {
         .unwrap_or("Linux")
         .to_string();
     apply(&ShimSubstitutions {
-        user_agent: ua,
-        app_version,
+        user_agent: &ua,
+        app_version: &app_version,
         ua_brands: &ua_brands,
         ua_full_version_list: &ua_full_version_list,
-        ua_full_version,
+        ua_full_version: &ua_full_version,
         ua_major: &ua_major,
         platform: vars.platform,
         ua_platform: &ua_platform,

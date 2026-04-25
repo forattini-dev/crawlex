@@ -32,6 +32,10 @@ pub enum SolverKind {
     AntiCaptcha,
     /// Vision-language model (prompt-engineered image reasoning).
     Vlm,
+    /// In-house server-side reCAPTCHA v3 invisible solver. No external
+    /// API needed; routed by `super::recaptcha::RecaptchaInvisibleAdapter`.
+    /// Vendor coverage limited to `ChallengeVendor::Recaptcha`.
+    RecaptchaInvisible,
 }
 
 impl SolverKind {
@@ -41,6 +45,7 @@ impl SolverKind {
             Self::TwoCaptcha => "2captcha",
             Self::AntiCaptcha => "anticaptcha",
             Self::Vlm => "vlm",
+            Self::RecaptchaInvisible => "recaptcha-invisible",
         }
     }
 }
@@ -53,6 +58,9 @@ impl std::str::FromStr for SolverKind {
             "2captcha" | "twocaptcha" => Ok(Self::TwoCaptcha),
             "anticaptcha" | "anti-captcha" => Ok(Self::AntiCaptcha),
             "vlm" | "openai" | "anthropic" => Ok(Self::Vlm),
+            "recaptcha-invisible" | "recaptcha_invisible" | "recaptcha" => {
+                Ok(Self::RecaptchaInvisible)
+            }
             other => Err(SolverError::UnknownAdapter(other.to_string())),
         }
     }
@@ -227,6 +235,17 @@ pub fn build_solver(kind: SolverKind) -> Option<Box<dyn CaptchaSolver>> {
         SolverKind::TwoCaptcha => Some(Box::new(TwoCaptchaAdapter)),
         SolverKind::AntiCaptcha => Some(Box::new(AntiCaptchaAdapter)),
         SolverKind::Vlm => Some(Box::new(VlmAdapter)),
+        // The in-house adapter requires the same `cdp-backend` feature
+        // that brings reqwest in (see `recaptcha::adapter` cfg). When the
+        // crate is built without it, fall back to None — matching the
+        // existing "feature absent → adapter unavailable" pattern other
+        // optional integrations follow.
+        #[cfg(feature = "cdp-backend")]
+        SolverKind::RecaptchaInvisible => Some(Box::new(
+            crate::antibot::recaptcha::RecaptchaInvisibleAdapter::new(),
+        )),
+        #[cfg(not(feature = "cdp-backend"))]
+        SolverKind::RecaptchaInvisible => None,
     }
 }
 
