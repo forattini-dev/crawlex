@@ -10,9 +10,7 @@
 
 use std::str::FromStr;
 
-use crawlex::antibot::solver::{
-    build_solver, CaptchaSolver, ChallengePayload, SolverError, SolverKind,
-};
+use crawlex::antibot::solver::{build_solver, ChallengePayload, SolverError, SolverKind};
 use crawlex::antibot::ChallengeVendor;
 
 fn payload(vendor: ChallengeVendor, sitekey: Option<&str>) -> ChallengePayload {
