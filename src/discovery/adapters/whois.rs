@@ -22,12 +22,13 @@ impl Discoverer for WhoisDiscoverer {
     }
 
     async fn discover(&self, ctx: &DiscoveryContext) -> Result<Vec<Finding>, DiscoveryError> {
-        let registration = whois::lookup(&ctx.http, &ctx.target)
-            .await
-            .map_err(|e| DiscoveryError::Backend {
-                name: "whois",
-                message: e.to_string(),
-            })?;
+        let registration =
+            whois::lookup(&ctx.http, &ctx.target)
+                .await
+                .map_err(|e| DiscoveryError::Backend {
+                    name: "whois",
+                    message: e.to_string(),
+                })?;
         Ok(vec![Finding::Whois {
             registrar: registration.registrar,
             registrant_org: registration.registrant_org,

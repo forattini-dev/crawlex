@@ -81,7 +81,11 @@ mod tests {
         let out = cmd.execute(&ctx()).await.expect("command runs");
         match out {
             CliOutput::Table { rows, .. } => {
-                assert!(rows.len() >= 21, "expected >=21 profiles, got {}", rows.len());
+                assert!(
+                    rows.len() >= 21,
+                    "expected >=21 profiles, got {}",
+                    rows.len()
+                );
             }
             other => panic!("expected Table output, got {other:?}"),
         }

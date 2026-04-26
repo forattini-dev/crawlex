@@ -65,11 +65,7 @@ pub trait BrowserSessionLike: Send + Sync {
 
     /// Capture a screenshot. `selector` is meaningful only when
     /// `mode == ScreenshotMode::Element`; ignored otherwise.
-    async fn screenshot(
-        &self,
-        mode: ScreenshotMode,
-        selector: Option<&str>,
-    ) -> Result<Bytes>;
+    async fn screenshot(&self, mode: ScreenshotMode, selector: Option<&str>) -> Result<Bytes>;
 
     /// Inject a JS source to run before any user script in every new
     /// document the page (or a child frame) loads. Used by the stealth
@@ -132,11 +128,7 @@ impl BrowserSessionLike for BrowserSession {
         Ok(v.value().cloned().unwrap_or(serde_json::Value::Null))
     }
 
-    async fn screenshot(
-        &self,
-        mode: ScreenshotMode,
-        _selector: Option<&str>,
-    ) -> Result<Bytes> {
+    async fn screenshot(&self, mode: ScreenshotMode, _selector: Option<&str>) -> Result<Bytes> {
         use crate::render::chrome_protocol::cdp::browser_protocol::page::CaptureScreenshotParams;
         let mut params = CaptureScreenshotParams::default();
         if matches!(mode, ScreenshotMode::FullPage) {
@@ -147,13 +139,12 @@ impl BrowserSessionLike for BrowserSession {
             .execute(params)
             .await
             .map_err(|e| crate::Error::Render(format!("screenshot: {e}")))?;
-        // CDP returns base64; our types crate stamps it as Vec<u8> already.
-        let data = resp.result.data.clone();
-        let decoded = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            data.as_bytes(),
-        )
-        .map_err(|e| crate::Error::Render(format!("screenshot decode: {e}")))?;
+        // CDP returns the screenshot as a base64-encoded `Binary` (an
+        // opaque string newtype). Pull the bytes (`AsRef<[u8]>` impl) and
+        // decode into raw PNG bytes for the caller.
+        let bytes_ref: &[u8] = resp.result.data.as_ref();
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_ref)
+            .map_err(|e| crate::Error::Render(format!("screenshot decode: {e}")))?;
         Ok(Bytes::from(decoded))
     }
 
@@ -196,7 +187,7 @@ impl BrowserSessionLike for BrowserSession {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Dummy implementation used by motion/stealth tests that don't want
@@ -224,18 +215,16 @@ mod tests {
             self.calls.lock().push(format!("eval({expr})"));
             Ok(serde_json::Value::Null)
         }
-        async fn screenshot(
-            &self,
-            mode: ScreenshotMode,
-            selector: Option<&str>,
-        ) -> Result<Bytes> {
+        async fn screenshot(&self, mode: ScreenshotMode, selector: Option<&str>) -> Result<Bytes> {
             self.calls
                 .lock()
                 .push(format!("screenshot({:?}, {:?})", mode, selector));
             Ok(Bytes::new())
         }
         async fn inject_script(&self, src: &str) -> Result<()> {
-            self.calls.lock().push(format!("inject_script({})", src.len()));
+            self.calls
+                .lock()
+                .push(format!("inject_script({})", src.len()));
             Ok(())
         }
         async fn url(&self) -> Result<Option<String>> {

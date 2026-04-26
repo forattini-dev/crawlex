@@ -65,7 +65,8 @@ impl CliRenderer for HumanRenderer {
                     writeln!(w)
                 };
                 render_row(headers, &mut w as &mut dyn Write)?;
-                let total: usize = widths.iter().sum::<usize>() + widths.len().saturating_sub(1) * 2;
+                let total: usize =
+                    widths.iter().sum::<usize>() + widths.len().saturating_sub(1) * 2;
                 writeln!(w, "{}", "─".repeat(total.max(1)))?;
                 for row in rows {
                     render_row(row, &mut w as &mut dyn Write)?;
@@ -112,10 +113,6 @@ impl CliRenderer for JsonRenderer {
                 serde_json::json!({"kind": "lines", "data": lines})
             }
         };
-        writeln!(
-            w,
-            "{}",
-            serde_json::to_string(&payload).unwrap_or_default()
-        )
+        writeln!(w, "{}", serde_json::to_string(&payload).unwrap_or_default())
     }
 }

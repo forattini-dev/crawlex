@@ -61,10 +61,7 @@ pub enum DiscoveryError {
     Timeout { name: &'static str, budget_ms: u64 },
 
     #[error("discoverer `{name}` returned an error: {message}")]
-    Backend {
-        name: &'static str,
-        message: String,
-    },
+    Backend { name: &'static str, message: String },
 }
 
 /// Sequential pipeline that walks a fixed list of `Discoverer`s.
@@ -162,10 +159,7 @@ mod tests {
         fn name(&self) -> &'static str {
             self.name
         }
-        async fn discover(
-            &self,
-            _ctx: &DiscoveryContext,
-        ) -> Result<Vec<Finding>, DiscoveryError> {
+        async fn discover(&self, _ctx: &DiscoveryContext) -> Result<Vec<Finding>, DiscoveryError> {
             let pos = self.order.fetch_add(1, Ordering::SeqCst);
             self.recorded_at.lock().push((pos, self.name));
             if self.delay > Duration::ZERO {
@@ -189,8 +183,10 @@ mod tests {
         // is cheap enough we just construct it. If a future probe truly
         // needs network, isolate it under `#[tokio::test] #[ignore]`.
         let http = StdArc::new(
-            crate::impersonate::ImpersonateClient::new(crate::impersonate::Profile::Chrome149Stable)
-                .expect("ImpersonateClient builds in tests"),
+            crate::impersonate::ImpersonateClient::new(
+                crate::impersonate::Profile::Chrome149Stable,
+            )
+            .expect("ImpersonateClient builds in tests"),
         );
         DiscoveryContext {
             target: "example.com".into(),

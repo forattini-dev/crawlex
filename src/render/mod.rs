@@ -19,10 +19,10 @@ pub mod page_pool;
 pub mod phases;
 pub mod pool;
 #[cfg(feature = "cdp-backend")]
-pub mod session;
-#[cfg(feature = "cdp-backend")]
 pub mod ref_resolver;
 pub mod selector;
+#[cfg(feature = "cdp-backend")]
+pub mod session;
 pub mod spa_observer;
 pub mod stealth;
 pub mod wait;

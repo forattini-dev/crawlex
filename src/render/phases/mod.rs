@@ -55,11 +55,7 @@ pub trait RenderPhase: Send + Sync {
     /// `session` operations; they MUST NOT panic on partial failure —
     /// surface as `Err` and the pipeline decides whether to halt or
     /// continue per phase policy.
-    async fn run(
-        &self,
-        session: &dyn BrowserSessionLike,
-        state: &mut RenderState,
-    ) -> Result<()>;
+    async fn run(&self, session: &dyn BrowserSessionLike, state: &mut RenderState) -> Result<()>;
 }
 
 #[cfg(test)]
