@@ -19,7 +19,8 @@
   "files": [
     "sdk/crawlex-sdk.js",
     "sdk/postinstall.js",
-    "sdk/index.d.ts"
+    "sdk/index.d.ts",
+    "sdk/version.js"
   ],
   "engines": {
     "node": ">=20"
@@ -51,7 +52,7 @@
   "license": "MIT OR Apache-2.0",
   "scripts": {
     "preversion": "node scripts/sync-version.js --check",
-    "version": "node scripts/sync-version.js && git add Cargo.toml Cargo.lock",
+    "version": "node scripts/sync-version.js && git add Cargo.toml Cargo.lock sdk/version.js",
     "postversion": "echo 'tag created. push with: git push --follow-tags'",
     "version:sync": "node scripts/sync-version.js",
     "postinstall": "node sdk/postinstall.js",

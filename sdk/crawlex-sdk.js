@@ -35,14 +35,14 @@ const { pipeline } = require('node:stream/promises');
 const zlib = require('node:zlib');
 
 const PKG_ROOT = path.resolve(__dirname, '..');
-const PKG_JSON = require(path.join(PKG_ROOT, 'package.json'));
+// Static version baked at publish time by `scripts/sync-version.js`.
+// Avoids `require('../package.json')` so library consumers bundling
+// the SDK (webpack/rollup/esbuild) don't need to mark package.json as
+// an external resource or pin a filesystem read.
+const SDK_VERSION = require('./version.js');
 const BIN_DIR = path.join(PKG_ROOT, '.crawlex', 'bin');
 const BIN_NAME = process.platform === 'win32' ? 'crawlex.exe' : 'crawlex';
-const DEFAULT_REPO =
-  process.env.CRAWLEX_REPO ||
-  (PKG_JSON.repository && PKG_JSON.repository.url
-    ? PKG_JSON.repository.url.replace(/^git\+/, '').replace(/\.git$/, '').replace(/^https?:\/\/github\.com\//, '')
-    : 'forattini-dev/crawlex');
+const DEFAULT_REPO = process.env.CRAWLEX_REPO || 'forattini-dev/crawlex';
 
 // ---------- asset naming ----------
 
@@ -78,7 +78,7 @@ function binaryPath() {
 
 function get(url, { headers = {}, followRedirects = 5 } = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'user-agent': `crawlex-sdk/${PKG_JSON.version}`, ...headers } }, (res) => {
+    const req = https.get(url, { headers: { 'user-agent': `crawlex-sdk/${SDK_VERSION}`, ...headers } }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && followRedirects > 0) {
         res.resume();
         resolve(get(res.headers.location, { headers, followRedirects: followRedirects - 1 }));
@@ -117,7 +117,7 @@ async function sha256File(file) {
 async function ensureInstalled(options = {}) {
   const {
     targetDir = BIN_DIR,
-    version = process.env.CRAWLEX_POSTINSTALL_VERSION || PKG_JSON.version,
+    version = process.env.CRAWLEX_POSTINSTALL_VERSION || SDK_VERSION,
     channel = process.env.CRAWLEX_POSTINSTALL_CHANNEL || 'stable',
     verify = true,
     skipIfFresh = true,
@@ -351,7 +351,7 @@ module.exports = {
   binaryPath,
   assetBaseName,
   serializeArgs,
-  version: PKG_JSON.version,
+  version: SDK_VERSION,
 };
 
 if (require.main === module) {
