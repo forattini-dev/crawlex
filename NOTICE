@@ -32,10 +32,14 @@ Linked through the `boring` and `boring-sys` crates.
 
 ================================================================================
 curl-impersonate  —  https://github.com/lwthiker/curl-impersonate
-MIT License
+MIT License — Copyright (c) 2022 lwthiker
 
-Used as a reference for Chrome ClientHello shape. No code copied; behaviour
-cross-checked against the upstream `chrome/` impersonation target.
+Per-browser-version `tls_client_hello` YAML signatures from upstream
+v0.6.1-3 (`tests/signatures/{chrome,edge,firefox,safari}.yaml`) are
+vendored under `src/impersonate/catalog/vendored/` and read by
+`build.rs` at compile time to populate the static `TlsFingerprint`
+catalog. The upstream MIT license text is preserved verbatim at
+`src/impersonate/catalog/vendored/LICENSE-curl-impersonate`.
 
 ================================================================================
 vercel-labs/agent-browser  —  https://github.com/vercel-labs/agent-browser

@@ -1,10 +1,11 @@
 //! TLS fingerprint catalog code generator.
 //!
 //! Reads curl-impersonate's per-browser YAML signatures from
-//! `references/curl-impersonate/tests/signatures/*.yaml` (vendored MPL-2.0
-//! submodule) and emits Rust source at `$OUT_DIR/tls_catalog_generated.rs`
-//! with one `pub static <NAME>: TlsFingerprint = ...` per profile plus a
-//! flat `CATALOG` slice for runtime lookup.
+//! `src/impersonate/catalog/vendored/*.yaml` (MIT-licensed, vendored from
+//! lwthiker/curl-impersonate — see that dir's README for provenance) and
+//! emits Rust source at `$OUT_DIR/tls_catalog_generated.rs` with one
+//! `pub static <NAME>: TlsFingerprint = ...` per profile plus a flat
+//! `CATALOG` slice for runtime lookup.
 //!
 //! Also picks up any user-captured YAMLs from
 //! `src/impersonate/catalog/captured/` (Phase 3 output) and mined hash JSONs
@@ -485,7 +486,7 @@ fn main() {
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
     let out_path = PathBuf::from(&out_dir).join("tls_catalog_generated.rs");
 
-    let curl_dir = Path::new(&manifest_dir).join("references/curl-impersonate/tests/signatures");
+    let curl_dir = Path::new(&manifest_dir).join("src/impersonate/catalog/vendored");
     let captured_dir = Path::new(&manifest_dir).join("src/impersonate/catalog/captured");
     let mined_dir = Path::new(&manifest_dir).join("src/impersonate/catalog/mined");
 
