@@ -47,7 +47,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 
 use crate::hooks::{HookContext, HookDecision, HookEvent};
-use crate::storage::Storage;
+use crate::storage::ArtifactStorage;
 use crate::Error;
 
 /// Ref-map stash: the most recently captured AX snapshot's
@@ -69,7 +69,7 @@ pub struct LuaHookHost {
     /// so the Arc's refcount matches the host lifetime (closures outlive
     /// the constructor scope).
     #[allow(dead_code)]
-    storage: Option<Arc<dyn Storage>>,
+    storage: Option<Arc<dyn ArtifactStorage>>,
     /// Latest AX snapshot ref map. See [`RefMap`] docs. Same lifetime
     /// rationale as `storage`.
     #[allow(dead_code)]
@@ -105,7 +105,7 @@ impl LuaHookHost {
     /// with. Identical to [`Self::new`] except for the storage slot.
     pub fn new_with_storage(
         scripts: Vec<PathBuf>,
-        storage: Option<Arc<dyn Storage>>,
+        storage: Option<Arc<dyn ArtifactStorage>>,
     ) -> std::result::Result<Self, String> {
         let lua = Lua::new();
         let current_page: Arc<Mutex<Option<Page>>> = Arc::new(Mutex::new(None));
@@ -274,7 +274,7 @@ fn invoke(
 fn register_page_globals(
     lua: &Lua,
     slot: Arc<Mutex<Option<Page>>>,
-    storage: Option<Arc<dyn Storage>>,
+    storage: Option<Arc<dyn ArtifactStorage>>,
     ref_map: RefMap,
 ) -> mlua::Result<()> {
     let g = lua.globals();

@@ -4,7 +4,7 @@
 //! storage layer round-trips correctly, reject path-traversal attempts,
 //! and survive an "unknown session_id" lookup.
 
-use crawlex::storage::{filesystem::FilesystemStorage, Storage};
+use crawlex::storage::{filesystem::FilesystemStorage, StateStorage};
 
 #[cfg(feature = "sqlite")]
 use crawlex::storage::sqlite::SqliteStorage;

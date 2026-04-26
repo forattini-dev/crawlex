@@ -1,14 +1,21 @@
+pub mod artifact;
+pub mod challenge;
 pub mod filesystem;
+pub mod intel;
 pub mod memory;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+pub mod state;
+pub mod telemetry;
 
-use bytes::Bytes;
-use http::HeaderMap;
+pub use artifact::ArtifactStorage;
+pub use challenge::ChallengeStorage;
+pub use intel::IntelStorage;
+pub use state::StateStorage;
+pub use telemetry::TelemetryStorage;
+
 use std::time::SystemTime;
 use url::Url;
-
-use crate::Result;
 
 /// Structured label for every artifact kind the pipeline can persist.
 ///
@@ -224,145 +231,30 @@ pub struct HostFacts {
     pub registration_expires: Option<String>,
 }
 
-#[async_trait::async_trait]
-pub trait Storage: Send + Sync {
-    async fn save_raw(&self, url: &Url, headers: &HeaderMap, body: &Bytes) -> Result<()>;
-    async fn save_raw_response(
-        &self,
-        url: &Url,
-        _final_url: &Url,
-        _status: u16,
-        headers: &HeaderMap,
-        body: &Bytes,
-        _truncated: bool,
-    ) -> Result<()> {
-        self.save_raw(url, headers, body).await
-    }
-    async fn save_rendered(&self, url: &Url, html_post_js: &str, meta: &PageMetadata)
-        -> Result<()>;
-    async fn save_edge(&self, from: &Url, to: &Url) -> Result<()>;
-
-    async fn save_host_facts(&self, _host: &str, _facts: &HostFacts) -> Result<()> {
-        Ok(())
-    }
-
-    async fn save_metrics(&self, _url: &Url, _metrics: &crate::metrics::PageMetrics) -> Result<()> {
-        Ok(())
-    }
-
-    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<()> {
-        // Default: delegate through `save_artifact` using FullPage as the
-        // historical contract — callers that knew the old API wrote
-        // whole-page PNGs. Backends that want the per-URL legacy behaviour
-        // override this.
-        let session_id = session_id_for_url(url);
-        let meta = ArtifactMeta {
-            url,
-            final_url: None,
-            session_id: &session_id,
-            kind: ArtifactKind::ScreenshotFullPage,
-            name: None,
-            step_id: None,
-            step_kind: None,
-            selector: None,
-            mime: None,
-        };
-        self.save_artifact(&meta, png).await
-    }
-
-    /// Persist a single artifact (screenshot, snapshot, state dump).
-    /// Backends that don't track artifacts return `Ok(())` by default.
-    async fn save_artifact(&self, _meta: &ArtifactMeta<'_>, _bytes: &[u8]) -> Result<()> {
-        Ok(())
-    }
-
-    /// List persisted artifacts filtered by optional `session_id` and
-    /// optional `kind`. Default returns empty — backends that maintain
-    /// the `artifacts` table override.
-    async fn list_artifacts(
-        &self,
-        _session_id: Option<&str>,
-        _kind: Option<ArtifactKind>,
-    ) -> Result<Vec<ArtifactRow>> {
-        Ok(Vec::new())
-    }
-
-    /// Persist a browser-session state snapshot.
-    ///
-    /// `session_id` is the stable handle the crawler uses to reuse the
-    /// same BrowserContext across pages; `state_json` is the opaque
-    /// payload produced by `render::session::capture_state` — typically
-    /// `{cookies, localStorage, sessionStorage, serviceWorkerRegs}`.
-    /// Backends that don't care about stateful crawls return `Ok(())` by
-    /// default; the SQLite backend persists for resume, and filesystem
-    /// writes one JSON file per session_id.
-    async fn save_state(&self, _session_id: &str, _state_json: &str) -> Result<()> {
-        Ok(())
-    }
-
-    /// Load a previously saved state snapshot. Returns `None` when the
-    /// session_id is unknown or the backend doesn't persist state.
-    async fn load_state(&self, _session_id: &str) -> Result<Option<String>> {
-        Ok(None)
-    }
-
-    /// Persist a detected antibot challenge. Backends that don't care
-    /// about challenge telemetry return `Ok(())`; the SQLite backend
-    /// writes a row to `challenge_events`.
-    async fn record_challenge(&self, _signal: &crate::antibot::ChallengeSignal) -> Result<()> {
-        Ok(())
-    }
-
-    /// Persist a batch of classified `AssetRef`s extracted from a page.
-    /// Backends that don't care return `Ok(())`; the SQLite backend
-    /// upserts `asset_refs` and increments `external_domains.ref_count`.
-    async fn save_asset_refs(
-        &self,
-        _refs: &[crate::discovery::asset_refs::AssetRef],
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Persist a per-page technology fingerprint report and update any
-    /// backend-specific host/domain rollups.
-    async fn save_tech_fingerprint(
-        &self,
-        _report: &crate::discovery::tech_fingerprint::TechFingerprintReport,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Persist a passive vendor-telemetry observation (P0-9). Backends
-    /// that don't track telemetry return `Ok(())` by default; the
-    /// SQLite backend writes a row to `vendor_telemetry`.
-    async fn record_telemetry(
-        &self,
-        _telem: &crate::antibot::telemetry::VendorTelemetry,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Load every challenge observed for a given session_id, ordered by
-    /// observed_at ascending. Default empty.
-    async fn session_challenges(
-        &self,
-        _session_id: &str,
-    ) -> Result<Vec<crate::antibot::ChallengeSignal>> {
-        Ok(Vec::new())
-    }
-
-    /// Persist an archived session entry (Fase 6). Default no-op; the
-    /// SQLite backend writes to `sessions_archive`. Backends that don't
-    /// care still compile cleanly without needing to know about the
-    /// `SessionEntry` shape.
-    async fn archive_session(
-        &self,
-        _entry: &crate::identity::SessionEntry,
-        _reason: crate::identity::EvictionReason,
-    ) -> Result<()> {
-        Ok(())
-    }
-
+/// Aggregate persistence super-trait.
+///
+/// `Storage` is the union of the 5 deepened concerns —
+/// [`ArtifactStorage`], [`StateStorage`], [`ChallengeStorage`],
+/// [`TelemetryStorage`], [`IntelStorage`] — plus an `as_any_ref`
+/// downcast escape hatch used by the proxy router and CLI to reach
+/// backend-specific APIs (SQLite proxy scores, MemoryStorage stat
+/// readback) without widening any sub-trait.
+///
+/// Callers that need every concern (e.g. `Crawler`) take an
+/// `Arc<dyn Storage>`. New code that only touches one concern should
+/// take the narrow trait directly (`Arc<dyn ArtifactStorage>`,
+/// `Arc<dyn StateStorage>`, etc.) — that's where the per-concern split
+/// pays off in test mocks and module boundaries.
+///
+/// Backends declare their concerns via the explicit per-trait `impl`
+/// blocks; `Storage` itself is implemented as a thin marker carrying
+/// only `as_any_ref`. The blanket impl below covers the trivial case.
+pub trait Storage:
+    ArtifactStorage + StateStorage + ChallengeStorage + TelemetryStorage + IntelStorage
+{
+    /// Downcast escape hatch. Backends that want to expose their
+    /// concrete type to specific callers (e.g. SQLite proxy router,
+    /// MemoryStorage stats) override; default returns `None`.
     fn as_any_ref(&self) -> Option<&dyn std::any::Any> {
         None
     }

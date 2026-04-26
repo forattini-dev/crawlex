@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::config::ContentStoreConfig;
-use crate::storage::{ArtifactKind, ArtifactMeta, ArtifactRow, PageMetadata, Storage};
+use crate::storage::{
+    ArtifactKind, ArtifactMeta, ArtifactRow, ArtifactStorage, ChallengeStorage, IntelStorage,
+    PageMetadata, StateStorage, Storage, TelemetryStorage,
+};
 use crate::{Error, Result};
 
 pub struct FilesystemStorage {
@@ -122,7 +125,7 @@ impl FilesystemStorage {
 }
 
 #[async_trait]
-impl Storage for FilesystemStorage {
+impl ArtifactStorage for FilesystemStorage {
     async fn save_raw(&self, url: &Url, headers: &HeaderMap, body: &Bytes) -> Result<()> {
         self.save_raw_response(url, url, 0, headers, body, false)
             .await
@@ -454,6 +457,25 @@ impl Storage for FilesystemStorage {
         Ok(rows)
     }
 
+    async fn save_edge(&self, from: &Url, to: &Url) -> Result<()> {
+        #[derive(Serialize)]
+        struct Edge<'a> {
+            src: &'a str,
+            dst: &'a str,
+        }
+        let e = Edge {
+            src: from.as_str(),
+            dst: to.as_str(),
+        };
+        let line = serde_json::to_string(&e).map_err(|e| Error::Storage(format!("json: {e}")))?;
+        let mut f = self.edges_file.lock();
+        writeln!(f, "{line}").map_err(|e| Error::Storage(format!("append: {e}")))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl StateStorage for FilesystemStorage {
     /// Write the state JSON as `state/<session_id>.json`. Overwrites on
     /// each call — state progresses, we don't keep a history here.
     /// Fancier retention (SQLite + cleanup) is the persistent-sessions
@@ -504,23 +526,13 @@ impl Storage for FilesystemStorage {
         .await
         .map_err(|e| Error::Storage(format!("state read join: {e}")))?
     }
+}
 
-    async fn save_edge(&self, from: &Url, to: &Url) -> Result<()> {
-        #[derive(Serialize)]
-        struct Edge<'a> {
-            src: &'a str,
-            dst: &'a str,
-        }
-        let e = Edge {
-            src: from.as_str(),
-            dst: to.as_str(),
-        };
-        let line = serde_json::to_string(&e).map_err(|e| Error::Storage(format!("json: {e}")))?;
-        let mut f = self.edges_file.lock();
-        writeln!(f, "{line}").map_err(|e| Error::Storage(format!("append: {e}")))?;
-        Ok(())
-    }
+impl ChallengeStorage for FilesystemStorage {}
+impl TelemetryStorage for FilesystemStorage {}
 
+#[async_trait]
+impl IntelStorage for FilesystemStorage {
     async fn save_tech_fingerprint(
         &self,
         report: &crate::discovery::tech_fingerprint::TechFingerprintReport,
@@ -533,3 +545,5 @@ impl Storage for FilesystemStorage {
         Ok(())
     }
 }
+
+impl Storage for FilesystemStorage {}

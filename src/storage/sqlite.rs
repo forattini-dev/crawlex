@@ -20,7 +20,10 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use crate::config::ContentStoreConfig;
-use crate::storage::{ArtifactKind, ArtifactMeta, ArtifactRow, HostFacts, PageMetadata, Storage};
+use crate::storage::{
+    ArtifactKind, ArtifactMeta, ArtifactRow, ArtifactStorage, ChallengeStorage, HostFacts,
+    IntelStorage, PageMetadata, StateStorage, Storage, TelemetryStorage,
+};
 use crate::{Error, Result};
 
 enum Op {
@@ -1582,7 +1585,7 @@ async fn write_blob(
 }
 
 #[async_trait]
-impl Storage for SqliteStorage {
+impl ArtifactStorage for SqliteStorage {
     async fn save_raw(&self, url: &Url, headers: &HeaderMap, body: &Bytes) -> Result<()> {
         self.save_raw_response(url, url, 0, headers, body, false)
             .await
@@ -1679,73 +1682,6 @@ impl Storage for SqliteStorage {
             src: from.to_string(),
             dst: to.to_string(),
         })
-        .await
-    }
-
-    async fn save_host_facts(&self, host: &str, f: &HostFacts) -> Result<()> {
-        self.send(Op::SaveHostFacts {
-            host: host.to_string(),
-            favicon_mmh3: f.favicon_mmh3,
-            dns_json: f.dns_json.clone(),
-            robots_present: f.robots_present.map(|v| if v { 1 } else { 0 }),
-            manifest_present: f.manifest_present.map(|v| if v { 1 } else { 0 }),
-            service_worker_present: f.service_worker_present.map(|v| if v { 1 } else { 0 }),
-            cert_sha256: f.cert_sha256.clone(),
-            cert_subject_cn: f.cert_subject_cn.clone(),
-            cert_issuer_cn: f.cert_issuer_cn.clone(),
-            cert_not_before: f.cert_not_before.clone(),
-            cert_not_after: f.cert_not_after.clone(),
-            cert_sans_json: f.cert_sans_json.clone(),
-            rdap_json: f.rdap_json.clone(),
-            registrar: f.registrar.clone(),
-            registrant_org: f.registrant_org.clone(),
-            registration_created: f.registration_created.clone(),
-            registration_expires: f.registration_expires.clone(),
-        })
-        .await
-    }
-
-    async fn save_metrics(&self, url: &Url, m: &crate::metrics::PageMetrics) -> Result<()> {
-        let by_type_json = m
-            .vitals
-            .transfer_by_type
-            .as_ref()
-            .and_then(|v| serde_json::to_string(v).ok());
-        let resources_json = if m.resources.is_empty() {
-            None
-        } else {
-            serde_json::to_string(&m.resources).ok()
-        };
-        self.send(Op::SaveMetrics(Box::new(MetricsRow {
-            url: url.to_string(),
-            dns_ms: m.net.dns_ms.map(|v| v as i64),
-            tcp_connect_ms: m.net.tcp_connect_ms.map(|v| v as i64),
-            tls_handshake_ms: m.net.tls_handshake_ms.map(|v| v as i64),
-            ttfb_ms: m.net.ttfb_ms.map(|v| v as i64),
-            download_ms: m.net.download_ms.map(|v| v as i64),
-            total_ms: m.net.total_ms.map(|v| v as i64),
-            status: m.net.status.map(|v| v as i64),
-            bytes: m.net.bytes.map(|v| v as i64),
-            alpn: m.net.alpn.clone(),
-            tls_version: m.net.tls_version.clone(),
-            cipher: m.net.cipher.clone(),
-            dom_content_loaded_ms: m.vitals.dom_content_loaded_ms,
-            load_event_ms: m.vitals.load_event_ms,
-            first_paint_ms: m.vitals.first_paint_ms,
-            first_contentful_paint_ms: m.vitals.first_contentful_paint_ms,
-            largest_contentful_paint_ms: m.vitals.largest_contentful_paint_ms,
-            cumulative_layout_shift: m.vitals.cumulative_layout_shift,
-            total_blocking_time_ms: m.vitals.total_blocking_time_ms,
-            longest_task_ms: m.vitals.longest_task_ms,
-            dom_nodes: m.vitals.dom_nodes.map(|v| v as i64),
-            js_heap_used_bytes: m.vitals.js_heap_used_bytes.map(|v| v as i64),
-            js_heap_total_bytes: m.vitals.js_heap_total_bytes.map(|v| v as i64),
-            resource_count: m.vitals.resource_count.map(|v| v as i64),
-            total_transfer_bytes: m.vitals.total_transfer_bytes.map(|v| v as i64),
-            total_decoded_bytes: m.vitals.total_decoded_bytes.map(|v| v as i64),
-            transfer_by_type_json: by_type_json,
-            resources_json,
-        })))
         .await
     }
 
@@ -1912,7 +1848,10 @@ impl Storage for SqliteStorage {
         .await
         .map_err(|e| Error::Storage(format!("artifacts join: {e}")))?
     }
+}
 
+#[async_trait]
+impl StateStorage for SqliteStorage {
     async fn save_state(&self, session_id: &str, state_json: &str) -> Result<()> {
         self.send(Op::SaveState {
             session_id: session_id.to_string(),
@@ -1921,10 +1860,64 @@ impl Storage for SqliteStorage {
         .await
     }
 
-    fn as_any_ref(&self) -> Option<&dyn std::any::Any> {
-        Some(self)
+    async fn load_state(&self, session_id: &str) -> Result<Option<String>> {
+        // Bypass the writer thread — reads are safe concurrent and we'd
+        // rather not pay batching latency on resume. Opening a fresh
+        // read-only Connection is cheap on SQLite (WAL mode allows
+        // readers during writes).
+        let path = self.path.clone();
+        let sid = session_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = rusqlite::Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(|e| Error::Storage(format!("state read open: {e}")))?;
+            let out: Option<String> = conn
+                .query_row(
+                    "SELECT state_json FROM sessions WHERE session_id=?1",
+                    params![sid],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok();
+            Ok(out)
+        })
+        .await
+        .map_err(|e| Error::Storage(format!("state read join: {e}")))?
     }
 
+    async fn archive_session(
+        &self,
+        entry: &crate::identity::SessionEntry,
+        reason: crate::identity::EvictionReason,
+    ) -> Result<()> {
+        let scope = serde_json::to_string(&entry.scope)
+            .unwrap_or_else(|_| "\"unknown\"".to_string())
+            .trim_matches('"')
+            .to_string();
+        let final_proxy = entry.proxy_history.last().map(|u| u.to_string());
+        let row = ArchivedSessionRow {
+            session_id: entry.id.clone(),
+            scope,
+            scope_key: entry.scope_key.clone(),
+            state: entry.state.as_str().to_string(),
+            bundle_id: entry.bundle_id.map(|v| v as i64),
+            created_at: entry.created_unix,
+            ended_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            urls_visited: entry.urls_visited as i64,
+            challenges: entry.challenges_seen as i64,
+            final_proxy,
+            reason: reason.as_str().to_string(),
+        };
+        self.archive_session_row(row).await
+    }
+}
+
+#[async_trait]
+impl ChallengeStorage for SqliteStorage {
     async fn record_challenge(&self, signal: &crate::antibot::ChallengeSignal) -> Result<()> {
         let observed_at = signal
             .first_seen
@@ -1945,66 +1938,6 @@ impl Storage for SqliteStorage {
             proxy: signal.proxy.as_ref().map(|p| p.to_string()),
             observed_at,
             metadata,
-        })
-        .await
-    }
-
-    async fn save_asset_refs(&self, refs: &[crate::discovery::asset_refs::AssetRef]) -> Result<()> {
-        if refs.is_empty() {
-            return Ok(());
-        }
-        let rows: Vec<AssetRefRow> = refs
-            .iter()
-            .map(|r| AssetRefRow {
-                from_page_url: r.from_page_url.clone(),
-                to_url: r.to_url.clone(),
-                to_domain: r.to_domain.clone(),
-                kind: r.kind.as_str().to_string(),
-                is_internal: r.is_internal,
-            })
-            .collect();
-        self.send(Op::SaveAssetRefs { refs: rows }).await
-    }
-
-    async fn save_tech_fingerprint(
-        &self,
-        report: &crate::discovery::tech_fingerprint::TechFingerprintReport,
-    ) -> Result<()> {
-        if report.host.is_empty() {
-            return Ok(());
-        }
-        let report_json = serde_json::to_string(report)
-            .map_err(|e| Error::Storage(format!("tech fingerprint json: {e}")))?;
-        self.send(Op::SaveTechFingerprint {
-            url: report.url.clone(),
-            final_url: report.final_url.clone(),
-            host: report.host.clone(),
-            report_json,
-            generated_at: report.generated_at,
-        })
-        .await
-    }
-
-    async fn record_telemetry(
-        &self,
-        telem: &crate::antibot::telemetry::VendorTelemetry,
-    ) -> Result<()> {
-        let observed_at = telem
-            .observed_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let shape_json = serde_json::to_string(&telem.payload_shape)
-            .unwrap_or_else(|_| "\"unknown\"".to_string());
-        self.send(Op::RecordTelemetry {
-            session_id: telem.session_id.clone(),
-            vendor: telem.vendor.as_str().to_string(),
-            endpoint: telem.endpoint.to_string(),
-            method: telem.method.clone(),
-            payload_size: telem.payload_size as i64,
-            payload_shape: shape_json,
-            pattern_label: telem.pattern_label.to_string(),
-            observed_at,
         })
         .await
     }
@@ -2097,60 +2030,144 @@ impl Storage for SqliteStorage {
         .await
         .map_err(|e| Error::Storage(format!("challenge join: {e}")))?
     }
+}
 
-    async fn archive_session(
-        &self,
-        entry: &crate::identity::SessionEntry,
-        reason: crate::identity::EvictionReason,
-    ) -> Result<()> {
-        let scope = serde_json::to_string(&entry.scope)
-            .unwrap_or_else(|_| "\"unknown\"".to_string())
-            .trim_matches('"')
-            .to_string();
-        let final_proxy = entry.proxy_history.last().map(|u| u.to_string());
-        let row = ArchivedSessionRow {
-            session_id: entry.id.clone(),
-            scope,
-            scope_key: entry.scope_key.clone(),
-            state: entry.state.as_str().to_string(),
-            bundle_id: entry.bundle_id.map(|v| v as i64),
-            created_at: entry.created_unix,
-            ended_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            urls_visited: entry.urls_visited as i64,
-            challenges: entry.challenges_seen as i64,
-            final_proxy,
-            reason: reason.as_str().to_string(),
+#[async_trait]
+impl TelemetryStorage for SqliteStorage {
+    async fn save_metrics(&self, url: &Url, m: &crate::metrics::PageMetrics) -> Result<()> {
+        let by_type_json = m
+            .vitals
+            .transfer_by_type
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
+        let resources_json = if m.resources.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&m.resources).ok()
         };
-        self.archive_session_row(row).await
+        self.send(Op::SaveMetrics(Box::new(MetricsRow {
+            url: url.to_string(),
+            dns_ms: m.net.dns_ms.map(|v| v as i64),
+            tcp_connect_ms: m.net.tcp_connect_ms.map(|v| v as i64),
+            tls_handshake_ms: m.net.tls_handshake_ms.map(|v| v as i64),
+            ttfb_ms: m.net.ttfb_ms.map(|v| v as i64),
+            download_ms: m.net.download_ms.map(|v| v as i64),
+            total_ms: m.net.total_ms.map(|v| v as i64),
+            status: m.net.status.map(|v| v as i64),
+            bytes: m.net.bytes.map(|v| v as i64),
+            alpn: m.net.alpn.clone(),
+            tls_version: m.net.tls_version.clone(),
+            cipher: m.net.cipher.clone(),
+            dom_content_loaded_ms: m.vitals.dom_content_loaded_ms,
+            load_event_ms: m.vitals.load_event_ms,
+            first_paint_ms: m.vitals.first_paint_ms,
+            first_contentful_paint_ms: m.vitals.first_contentful_paint_ms,
+            largest_contentful_paint_ms: m.vitals.largest_contentful_paint_ms,
+            cumulative_layout_shift: m.vitals.cumulative_layout_shift,
+            total_blocking_time_ms: m.vitals.total_blocking_time_ms,
+            longest_task_ms: m.vitals.longest_task_ms,
+            dom_nodes: m.vitals.dom_nodes.map(|v| v as i64),
+            js_heap_used_bytes: m.vitals.js_heap_used_bytes.map(|v| v as i64),
+            js_heap_total_bytes: m.vitals.js_heap_total_bytes.map(|v| v as i64),
+            resource_count: m.vitals.resource_count.map(|v| v as i64),
+            total_transfer_bytes: m.vitals.total_transfer_bytes.map(|v| v as i64),
+            total_decoded_bytes: m.vitals.total_decoded_bytes.map(|v| v as i64),
+            transfer_by_type_json: by_type_json,
+            resources_json,
+        })))
+        .await
     }
 
-    async fn load_state(&self, session_id: &str) -> Result<Option<String>> {
-        // Bypass the writer thread — reads are safe concurrent and we'd
-        // rather not pay batching latency on resume. Opening a fresh
-        // read-only Connection is cheap on SQLite (WAL mode allows
-        // readers during writes).
-        let path = self.path.clone();
-        let sid = session_id.to_string();
-        tokio::task::spawn_blocking(move || {
-            let conn = rusqlite::Connection::open_with_flags(
-                &path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )
-            .map_err(|e| Error::Storage(format!("state read open: {e}")))?;
-            let out: Option<String> = conn
-                .query_row(
-                    "SELECT state_json FROM sessions WHERE session_id=?1",
-                    params![sid],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok();
-            Ok(out)
+    async fn record_telemetry(
+        &self,
+        telem: &crate::antibot::telemetry::VendorTelemetry,
+    ) -> Result<()> {
+        let observed_at = telem
+            .observed_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let shape_json = serde_json::to_string(&telem.payload_shape)
+            .unwrap_or_else(|_| "\"unknown\"".to_string());
+        self.send(Op::RecordTelemetry {
+            session_id: telem.session_id.clone(),
+            vendor: telem.vendor.as_str().to_string(),
+            endpoint: telem.endpoint.to_string(),
+            method: telem.method.clone(),
+            payload_size: telem.payload_size as i64,
+            payload_shape: shape_json,
+            pattern_label: telem.pattern_label.to_string(),
+            observed_at,
         })
         .await
-        .map_err(|e| Error::Storage(format!("state read join: {e}")))?
+    }
+}
+
+#[async_trait]
+impl IntelStorage for SqliteStorage {
+    async fn save_host_facts(&self, host: &str, f: &HostFacts) -> Result<()> {
+        self.send(Op::SaveHostFacts {
+            host: host.to_string(),
+            favicon_mmh3: f.favicon_mmh3,
+            dns_json: f.dns_json.clone(),
+            robots_present: f.robots_present.map(|v| if v { 1 } else { 0 }),
+            manifest_present: f.manifest_present.map(|v| if v { 1 } else { 0 }),
+            service_worker_present: f.service_worker_present.map(|v| if v { 1 } else { 0 }),
+            cert_sha256: f.cert_sha256.clone(),
+            cert_subject_cn: f.cert_subject_cn.clone(),
+            cert_issuer_cn: f.cert_issuer_cn.clone(),
+            cert_not_before: f.cert_not_before.clone(),
+            cert_not_after: f.cert_not_after.clone(),
+            cert_sans_json: f.cert_sans_json.clone(),
+            rdap_json: f.rdap_json.clone(),
+            registrar: f.registrar.clone(),
+            registrant_org: f.registrant_org.clone(),
+            registration_created: f.registration_created.clone(),
+            registration_expires: f.registration_expires.clone(),
+        })
+        .await
+    }
+
+    async fn save_asset_refs(&self, refs: &[crate::discovery::asset_refs::AssetRef]) -> Result<()> {
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<AssetRefRow> = refs
+            .iter()
+            .map(|r| AssetRefRow {
+                from_page_url: r.from_page_url.clone(),
+                to_url: r.to_url.clone(),
+                to_domain: r.to_domain.clone(),
+                kind: r.kind.as_str().to_string(),
+                is_internal: r.is_internal,
+            })
+            .collect();
+        self.send(Op::SaveAssetRefs { refs: rows }).await
+    }
+
+    async fn save_tech_fingerprint(
+        &self,
+        report: &crate::discovery::tech_fingerprint::TechFingerprintReport,
+    ) -> Result<()> {
+        if report.host.is_empty() {
+            return Ok(());
+        }
+        let report_json = serde_json::to_string(report)
+            .map_err(|e| Error::Storage(format!("tech fingerprint json: {e}")))?;
+        self.send(Op::SaveTechFingerprint {
+            url: report.url.clone(),
+            final_url: report.final_url.clone(),
+            host: report.host.clone(),
+            report_json,
+            generated_at: report.generated_at,
+        })
+        .await
+    }
+}
+
+impl Storage for SqliteStorage {
+    fn as_any_ref(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
     }
 }
 
@@ -2162,7 +2179,7 @@ mod challenge_rate_view_tests {
     //! match the CLI pattern.
     use super::*;
     use crate::antibot::{ChallengeLevel, ChallengeSignal, ChallengeVendor};
-    use crate::storage::Storage;
+    use crate::storage::ChallengeStorage;
     use std::time::{Duration, SystemTime};
 
     fn mk_signal(

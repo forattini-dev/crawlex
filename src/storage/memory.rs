@@ -3,7 +3,10 @@ use dashmap::DashMap;
 use http::HeaderMap;
 use url::Url;
 
-use crate::storage::{PageMetadata, Storage};
+use crate::storage::{
+    ArtifactStorage, ChallengeStorage, IntelStorage, PageMetadata, StateStorage, Storage,
+    TelemetryStorage,
+};
 use crate::Result;
 
 #[derive(Default)]
@@ -20,7 +23,7 @@ impl MemoryStorage {
 }
 
 #[async_trait::async_trait]
-impl Storage for MemoryStorage {
+impl ArtifactStorage for MemoryStorage {
     async fn save_raw(&self, url: &Url, _headers: &HeaderMap, body: &Bytes) -> Result<()> {
         self.raw.insert(url.to_string(), body.clone());
         Ok(())
@@ -36,7 +39,14 @@ impl Storage for MemoryStorage {
             .or_insert(0) += 1;
         Ok(())
     }
+}
 
+impl StateStorage for MemoryStorage {}
+impl ChallengeStorage for MemoryStorage {}
+impl TelemetryStorage for MemoryStorage {}
+impl IntelStorage for MemoryStorage {}
+
+impl Storage for MemoryStorage {
     fn as_any_ref(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }

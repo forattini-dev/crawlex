@@ -102,7 +102,7 @@ pub struct ScriptRunner<'a> {
     /// Storage handle used to persist screenshot/snapshot artifacts
     /// through the unified `save_artifact` contract. `None` means the
     /// runner only returns `ArtifactRef`s in-memory without persistence.
-    storage: Option<Arc<dyn crate::storage::Storage>>,
+    storage: Option<Arc<dyn crate::storage::ArtifactStorage>>,
     /// URL the page was navigated to — used as the artifact key so
     /// consumers can correlate artifacts with pages.
     url: Option<url::Url>,
@@ -147,8 +147,11 @@ impl<'a> ScriptRunner<'a> {
     }
 
     /// Attach a storage handle; without this, `save_artifact` is a
-    /// no-op and artifacts live only in the [`RunOutcome`].
-    pub fn with_storage(mut self, storage: Arc<dyn crate::storage::Storage>) -> Self {
+    /// no-op and artifacts live only in the [`RunOutcome`]. Takes the
+    /// narrow [`ArtifactStorage`](crate::storage::ArtifactStorage)
+    /// trait — runner only persists artifact bytes, never state /
+    /// telemetry / intel.
+    pub fn with_storage(mut self, storage: Arc<dyn crate::storage::ArtifactStorage>) -> Self {
         self.storage = Some(storage);
         self
     }

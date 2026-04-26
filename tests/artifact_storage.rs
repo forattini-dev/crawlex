@@ -8,7 +8,7 @@ use bytes::Bytes;
 use crawlex::config::ContentStoreConfig;
 use crawlex::discovery::assets::AssetKind;
 use crawlex::storage::PageMetadata;
-use crawlex::storage::{ArtifactKind, ArtifactMeta, Storage};
+use crawlex::storage::{ArtifactKind, ArtifactMeta, ArtifactStorage};
 use http::HeaderMap;
 use url::Url;
 
@@ -59,7 +59,7 @@ fn artifact_kind_wire_str_round_trip() {
 #[tokio::test]
 async fn sqlite_save_artifact_round_trips_and_filters() {
     let tmp = tempfile::tempdir().unwrap();
-    let sq: Arc<dyn Storage> =
+    let sq: Arc<dyn ArtifactStorage> =
         Arc::new(crawlex::storage::sqlite::SqliteStorage::open(tmp.path().join("t.db")).unwrap());
 
     let u = Url::parse("https://example.test/p").unwrap();
@@ -262,7 +262,7 @@ async fn sqlite_content_store_can_keep_legacy_inline_columns() {
 #[tokio::test]
 async fn filesystem_save_artifact_writes_bytes_and_sidecar() {
     let tmp = tempfile::tempdir().unwrap();
-    let fs: Arc<dyn Storage> =
+    let fs: Arc<dyn ArtifactStorage> =
         Arc::new(crawlex::storage::filesystem::FilesystemStorage::open(tmp.path()).unwrap());
 
     let u = Url::parse("https://fs.example/p").unwrap();
@@ -402,7 +402,7 @@ async fn default_save_screenshot_lands_in_artifacts_table() {
     // `list_artifacts`. Exercises the wrapper that keeps old callsites
     // working without churning every call site in the tree.
     let tmp = tempfile::tempdir().unwrap();
-    let fs: Arc<dyn Storage> =
+    let fs: Arc<dyn ArtifactStorage> =
         Arc::new(crawlex::storage::filesystem::FilesystemStorage::open(tmp.path()).unwrap());
     let u = Url::parse("https://legacy.example/x").unwrap();
     let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3];

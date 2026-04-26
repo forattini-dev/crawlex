@@ -343,11 +343,11 @@ pub trait SessionArchive: Send + Sync {
     ) -> crate::Result<()>;
 }
 
-/// Thin adapter over `Arc<dyn Storage>` so the cleanup task can call
-/// `archive_session` without pulling the `Storage` trait into every
-/// dependent module. Storage's trait method returns `Ok(())` for
-/// backends that don't implement archival.
-pub struct StorageArchive(pub std::sync::Arc<dyn crate::storage::Storage>);
+/// Thin adapter over `Arc<dyn StateStorage>` so the cleanup task can
+/// call `archive_session` without pulling the full `Storage` trait
+/// into every dependent module. Backends that don't implement archival
+/// inherit the default `Ok(())` no-op.
+pub struct StorageArchive(pub std::sync::Arc<dyn crate::storage::StateStorage>);
 
 #[async_trait::async_trait]
 impl SessionArchive for StorageArchive {
