@@ -10,6 +10,11 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
+  # Tests + builds against `--all-features` blow past the 14 GB of free
+  # disk on stock `ubuntu-latest`. Trim debug info so each rlib stays
+  # lean; the `disk-cleanup` step on the heavy jobs frees ~25 GB more.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   fmt:
@@ -27,9 +32,19 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
@@ -47,9 +62,24 @@ jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        # `cargo test --all-features` links every integration test binary
+        # against the full dep graph; the resulting target/ tree blows
+        # past the 14 GB of free space on stock ubuntu-latest. The
+        # cleanup action prunes Android, .NET, Haskell, and the
+        # docker/large packages cache (~25 GB combined).
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
@@ -63,9 +93,19 @@ jobs:
   build-full:
     name: Build crawlex (full)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
@@ -97,9 +137,19 @@ jobs:
   package:
     name: cargo publish dry-run
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"

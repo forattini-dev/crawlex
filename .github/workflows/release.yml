@@ -178,6 +178,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -502,6 +514,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
