@@ -161,10 +161,11 @@ jobs:
           # cleanly to musl. When we add it back it should build the
           # mini binary instead (`--bin crawlex-mini`, HTTP-only); see
           # docs/getting-started/installation.md for the rationale.
-          - os: macos-13
-            target: x86_64-apple-darwin
-            binary_name: crawlex
-            asset_name: crawlex-macos-x86_64
+          # NOTE: macOS Intel (x86_64) deferred. macos-13 runners on the
+          # free tier sit in queue for 1h+ during peak; legacy Intel
+          # Macs are also a shrinking share of the user base. Add back
+          # if there's demand — the build itself is straightforward
+          # (no cross-compile drama).
           - os: macos-14
             target: aarch64-apple-darwin
             binary_name: crawlex

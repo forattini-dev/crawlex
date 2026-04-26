@@ -51,8 +51,11 @@ function assetBaseName() {
   const arch = process.arch;
   if (plat === 'linux' && arch === 'x64') return 'crawlex-linux-x86_64';
   if (plat === 'linux' && arch === 'arm64') return 'crawlex-linux-aarch64';
-  if (plat === 'darwin' && arch === 'x64') return 'crawlex-macos-x86_64';
-  if (plat === 'darwin' && arch === 'arm64') return 'crawlex-macos-aarch64';
+  // macOS Intel (x86_64) not currently published — see release.yml NOTE.
+  // Intel Macs run x86_64 binaries via Rosetta 2 transparently, so the
+  // arm64 asset is the universal answer for darwin until Intel macOS
+  // demand justifies bringing the build back.
+  if (plat === 'darwin') return 'crawlex-macos-aarch64';
   if (plat === 'win32' && arch === 'x64') return 'crawlex-windows-x86_64.exe';
   throw new Error(`unsupported platform: ${plat}/${arch}`);
 }
