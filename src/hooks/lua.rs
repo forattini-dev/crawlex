@@ -540,7 +540,7 @@ fn register_page_globals(
                             mime: None,
                         };
                         match store.save_artifact(&meta, &bytes).await {
-                            Ok(()) => Some(u.to_string()),
+                            Ok(_) => Some(u.to_string()),
                             Err(_) => None,
                         }
                     }))
@@ -632,7 +632,7 @@ fn register_page_globals(
                             mime: None,
                         };
                         match store.save_artifact(&meta, &payload).await {
-                            Ok(()) => Some(u.to_string()),
+                            Ok(_) => Some(u.to_string()),
                             Err(_) => None,
                         }
                     }))

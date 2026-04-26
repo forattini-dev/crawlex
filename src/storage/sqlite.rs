@@ -1685,7 +1685,7 @@ impl ArtifactStorage for SqliteStorage {
         .await
     }
 
-    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<()> {
+    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<Option<String>> {
         let hash = hex::encode(Sha256::digest(png));
         // Legacy per-URL screenshots table: one-row-per-url keyed output
         // some consumers still scrape. Keep populated.
@@ -1714,7 +1714,7 @@ impl ArtifactStorage for SqliteStorage {
         self.save_artifact(&meta, png).await
     }
 
-    async fn save_artifact(&self, meta: &ArtifactMeta<'_>, bytes: &[u8]) -> Result<()> {
+    async fn save_artifact(&self, meta: &ArtifactMeta<'_>, bytes: &[u8]) -> Result<Option<String>> {
         let hash = hex::encode(Sha256::digest(bytes));
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1732,11 +1732,17 @@ impl ArtifactStorage for SqliteStorage {
             selector: meta.selector.map(|s| s.to_string()),
             mime,
             size: bytes.len() as i64,
-            sha256: hash,
+            sha256: hash.clone(),
             bytes: bytes.to_vec(),
             created_at,
         })
-        .await
+        .await?;
+        // Content-addressed URI: backend keeps blobs at
+        // `<dbfile>.blobs/<shard>/<sha256>` (when the content store is
+        // enabled) or inline in the artifacts row otherwise. Either way,
+        // `cas:<sha256>` is the stable handle a consumer can resolve via
+        // `list_artifacts` or by joining the known blob root.
+        Ok(Some(format!("cas:{hash}")))
     }
 
     async fn list_artifacts(

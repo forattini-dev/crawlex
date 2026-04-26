@@ -117,15 +117,59 @@ export interface DecisionMadeData {
   [k: string]: unknown;
 }
 
-/** Reserved — not yet emitted as of v1.0.0. */
-export type FetchCompletedData = Record<string, unknown>;
+/**
+ * Mirrors `src/events/envelope.rs::FetchCompletedData`. Carries the
+ * per-fetch network breakdown so a stream consumer can act on timings
+ * without round-tripping through the SQLite `page_metrics` table.
+ */
+export interface FetchCompletedData {
+  final_url: string;
+  status: number;
+  bytes?: number;
+  body_truncated: boolean;
+  dns_ms?: number;
+  tcp_connect_ms?: number;
+  tls_handshake_ms?: number;
+  ttfb_ms?: number;
+  download_ms?: number;
+  total_ms?: number;
+  alpn?: string;
+  tls_version?: string;
+  cipher?: string;
+}
+
+/**
+ * Compact subset of `metrics::WebVitals` shipped on `render.completed`.
+ * All fields optional — bot-blocked or pre-load renders may have nothing
+ * populated.
+ */
+export interface VitalsSummary {
+  ttfb_ms?: number;
+  dom_content_loaded_ms?: number;
+  load_event_ms?: number;
+  first_contentful_paint_ms?: number;
+  largest_contentful_paint_ms?: number;
+  cumulative_layout_shift?: number;
+  total_blocking_time_ms?: number;
+  dom_nodes?: number;
+  js_heap_used_bytes?: number;
+  resource_count?: number;
+  total_transfer_bytes?: number;
+}
 
 export interface RenderCompletedData {
   final_url: string;
   status: number;
   manifest: boolean;
   service_workers: number;
-  [k: string]: unknown;
+  screenshot: boolean;
+  resources: number;
+  runtime_routes: number;
+  network_endpoints: number;
+  is_spa: boolean;
+  artifacts: number;
+  /** Core Web Vitals snapshot — present when the renderer collected them. */
+  vitals: VitalsSummary;
 }
 
 /** Reserved — not yet emitted as of v1.0.0. */
@@ -148,6 +192,15 @@ export interface ArtifactSavedData {
   step_kind?: string;
   selector?: string;
   final_url?: string;
+  /**
+   * Where the artifact landed:
+   * - Filesystem backend: path relative to the storage root
+   *   (e.g. `artifacts/<session>/<stem>.png`).
+   * - SQLite backend: `cas:<sha256>` URI pointing at the
+   *   content-addressed blob store (`<dbfile>.blobs/<shard>/<sha256>`).
+   * - Memory backend / non-persisting sinks: omitted.
+   */
+  path?: string;
 }
 
 /** Reserved — not yet emitted as of v1.0.0. */

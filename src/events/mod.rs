@@ -13,5 +13,7 @@
 pub mod envelope;
 pub mod sink;
 
-pub use envelope::{ArtifactSavedData, Event, EventEnvelope, EventKind};
+pub use envelope::{
+    ArtifactSavedData, Event, EventEnvelope, EventKind, FetchCompletedData, VitalsSummary,
+};
 pub use sink::{EventSink, MemorySink, NdjsonStdoutSink, NullSink};

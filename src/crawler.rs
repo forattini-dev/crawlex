@@ -1513,6 +1513,16 @@ impl Crawler {
                                     })),
                             );
                         }
+                        // Build a compact `vitals` summary so a stream
+                        // consumer sees Core Web Vitals + TTFB inline,
+                        // without round-tripping through SQLite. Falls
+                        // back to whatever fields the renderer populated
+                        // on `RenderedPage::vitals`.
+                        let vitals_summary = {
+                            let mut m = crate::metrics::PageMetrics::default();
+                            m.vitals = rp.vitals.clone();
+                            crate::events::VitalsSummary::from_metrics(&m)
+                        };
                         self.events.emit(
                             &Event::of(EventKind::RenderCompleted)
                                 .with_run(self.run_id)
@@ -1529,6 +1539,7 @@ impl Crawler {
                                     "network_endpoints": rp.network_endpoints.len(),
                                     "is_spa": rp.is_spa,
                                     "artifacts": artifact_count.unwrap_or(0),
+                                    "vitals": vitals_summary,
                                 })),
                         );
                         ctx.user_data.insert(
@@ -1555,8 +1566,35 @@ impl Crawler {
                             metrics.resources = rp.resources.clone();
                         }
                         if let Some(png) = rp.screenshot_png.as_ref() {
-                            let _ = self.storage.save_screenshot(&job.url, png).await;
+                            let path = self
+                                .storage
+                                .save_screenshot(&job.url, png)
+                                .await
+                                .ok()
+                                .flatten();
                             let _ = self.write_screenshot_output(&job.url, png);
+                            let sha = hex::encode(sha2::Sha256::digest(png));
+                            let saved = crate::events::ArtifactSavedData {
+                                kind: crate::storage::ArtifactKind::ScreenshotFullPage
+                                    .wire_str()
+                                    .to_string(),
+                                mime: "image/png".to_string(),
+                                size: png.len() as u64,
+                                sha256: sha,
+                                name: None,
+                                step_id: None,
+                                step_kind: None,
+                                selector: None,
+                                final_url: Some(rp.final_url.to_string()),
+                                path,
+                            };
+                            self.events.emit(
+                                &Event::of(EventKind::ArtifactSaved)
+                                    .with_run(self.run_id)
+                                    .with_session(rp.session_id.clone())
+                                    .with_url(job.url.as_str())
+                                    .with_data(&saved),
+                            );
                         }
                         // Render-path antibot handling. `RenderedPage::challenge`
                         // was populated by the pool after settle+content via
@@ -1784,6 +1822,30 @@ impl Crawler {
                     resp.body_truncated,
                 )
                 .await?;
+
+            // Surface per-request timings on the stream so consumers
+            // don't have to round-trip through the SQLite `page_metrics`
+            // table to inspect a fetch's network breakdown.
+            self.events.emit(
+                &Event::of(EventKind::FetchCompleted)
+                    .with_run(self.run_id)
+                    .with_url(job.url.as_str())
+                    .with_data(&crate::events::FetchCompletedData {
+                        final_url: resp.final_url.to_string(),
+                        status: resp.status.as_u16(),
+                        bytes: Some(resp.body.len() as u64),
+                        body_truncated: resp.body_truncated,
+                        dns_ms: resp.timings.dns_ms,
+                        tcp_connect_ms: resp.timings.tcp_connect_ms,
+                        tls_handshake_ms: resp.timings.tls_handshake_ms,
+                        ttfb_ms: resp.timings.ttfb_ms,
+                        download_ms: resp.timings.download_ms,
+                        total_ms: resp.timings.total_ms,
+                        alpn: resp.timings.alpn.clone(),
+                        tls_version: resp.timings.tls_version.clone(),
+                        cipher: resp.timings.cipher.clone(),
+                    }),
+            );
 
             let ct_header = resp
                 .headers

@@ -86,6 +86,85 @@ pub enum EventKind {
     TechFingerprintDetected,
 }
 
+/// Compact subset of `metrics::WebVitals` shipped on `render.completed`
+/// so a stream consumer can act on Core Web Vitals without reading the
+/// SQLite `page_metrics` table. All fields optional — a bot-blocked or
+/// pre-load render may have nothing populated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VitalsSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dom_content_loaded_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_event_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_contentful_paint_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub largest_contentful_paint_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_layout_shift: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_blocking_time_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dom_nodes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub js_heap_used_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_transfer_bytes: Option<u64>,
+}
+
+impl VitalsSummary {
+    pub fn from_metrics(m: &crate::metrics::PageMetrics) -> Self {
+        Self {
+            ttfb_ms: m.net.ttfb_ms,
+            dom_content_loaded_ms: m.vitals.dom_content_loaded_ms,
+            load_event_ms: m.vitals.load_event_ms,
+            first_contentful_paint_ms: m.vitals.first_contentful_paint_ms,
+            largest_contentful_paint_ms: m.vitals.largest_contentful_paint_ms,
+            cumulative_layout_shift: m.vitals.cumulative_layout_shift,
+            total_blocking_time_ms: m.vitals.total_blocking_time_ms,
+            dom_nodes: m.vitals.dom_nodes,
+            js_heap_used_bytes: m.vitals.js_heap_used_bytes,
+            resource_count: m.vitals.resource_count,
+            total_transfer_bytes: m.vitals.total_transfer_bytes,
+        }
+    }
+}
+
+/// Per-fetch timing payload shipped on `fetch.completed`. Mirrors the
+/// columns stored in `page_metrics.net.*` so a stream consumer doesn't
+/// need to round-trip through SQLite to inspect a request's timing
+/// breakdown.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FetchCompletedData {
+    pub final_url: String,
+    pub status: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    pub body_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcp_connect_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_handshake_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cipher: Option<String>,
+}
+
 /// Typed helpers to build common events. Not a closed set — any kind can
 /// be produced by constructing `EventEnvelope` directly.
 pub struct Event;
@@ -110,6 +189,13 @@ pub struct ArtifactSavedData {
     pub selector: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_url: Option<String>,
+    /// Where the artifact landed, returned by the storage backend that
+    /// accepted the write. Filesystem returns a path relative to the
+    /// storage root (e.g. `artifacts/<session>/<stem>.png`); SQLite
+    /// returns a `cas:<sha256>` URI pointing at its content-addressed
+    /// blob store; memory-only sinks return `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 impl Event {

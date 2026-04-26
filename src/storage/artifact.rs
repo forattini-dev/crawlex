@@ -55,7 +55,11 @@ pub trait ArtifactStorage: Send + Sync {
     /// Persist a per-URL screenshot. Default delegates to [`save_artifact`]
     /// using a synthetic `ArtifactMeta { kind: ScreenshotFullPage }`.
     /// Backends that maintain a legacy per-URL screenshot table override.
-    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<()> {
+    ///
+    /// Returns the storage location (path or URI) when the backend
+    /// actually persisted the bytes; `None` for sinks that no-op (e.g.
+    /// in-memory tests).
+    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<Option<String>> {
         let session_id = session_id_for_url(url);
         let meta = ArtifactMeta {
             url,
@@ -72,10 +76,15 @@ pub trait ArtifactStorage: Send + Sync {
     }
 
     /// Persist a single artifact (screenshot, snapshot, state dump) with
-    /// the unified `ArtifactMeta`. Backends that don't track artifacts
-    /// return `Ok(())` by default — useful for memory-only sinks.
-    async fn save_artifact(&self, _meta: &ArtifactMeta<'_>, _bytes: &[u8]) -> Result<()> {
-        Ok(())
+    /// the unified `ArtifactMeta`. Returns the storage location (path or
+    /// URI) when the backend actually persisted the bytes; `Ok(None)`
+    /// for sinks that no-op.
+    async fn save_artifact(
+        &self,
+        _meta: &ArtifactMeta<'_>,
+        _bytes: &[u8],
+    ) -> Result<Option<String>> {
+        Ok(None)
     }
 
     /// Read-side: list persisted artifacts filtered by optional

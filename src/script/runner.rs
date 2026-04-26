@@ -457,15 +457,16 @@ impl<'a> ScriptRunner<'a> {
         };
         let sha = sha256_hex(&png);
         let mime = art_kind.mime().to_string();
-        self.persist_artifact(
-            art_kind,
-            &name,
-            step_id,
-            "screenshot",
-            selector.as_deref(),
-            &png,
-        )
-        .await;
+        let path = self
+            .persist_artifact(
+                art_kind,
+                &name,
+                step_id,
+                "screenshot",
+                selector.as_deref(),
+                &png,
+            )
+            .await;
         let ar = ArtifactRef {
             step_id: step_id.to_string(),
             step_kind: "screenshot".to_string(),
@@ -487,6 +488,7 @@ impl<'a> ScriptRunner<'a> {
             step_kind: Some("screenshot".to_string()),
             selector,
             final_url,
+            path,
         };
         self.emit(EventKind::ArtifactSaved, move |_| {
             serde_json::to_value(&emit_data).unwrap_or(Value::Null)
@@ -576,7 +578,8 @@ impl<'a> ScriptRunner<'a> {
             .unwrap_or_else(|| format!("step_{step_id}_{}", kind_tag.replace('.', "_")));
         let sha = sha256_hex(&payload);
         let mime = art_kind.mime().to_string();
-        self.persist_artifact(art_kind, &name, step_id, "snapshot", None, &payload)
+        let path = self
+            .persist_artifact(art_kind, &name, step_id, "snapshot", None, &payload)
             .await;
         let ar = ArtifactRef {
             step_id: step_id.to_string(),
@@ -599,6 +602,7 @@ impl<'a> ScriptRunner<'a> {
             step_kind: Some("snapshot".to_string()),
             selector: None,
             final_url,
+            path,
         };
         self.emit(EventKind::ArtifactSaved, move |_| {
             serde_json::to_value(&emit_data).unwrap_or(Value::Null)
@@ -609,7 +613,9 @@ impl<'a> ScriptRunner<'a> {
     /// Persist a runner-produced artifact through the unified storage
     /// trait when a backend is wired. Swallow storage errors: a disk
     /// hiccup should not abort the script — it's already returned in
-    /// the `RunOutcome::artifacts` manifest.
+    /// the `RunOutcome::artifacts` manifest. Returns the storage
+    /// location (path or `cas:<sha256>` URI) when the backend reported
+    /// one, so the caller can pass it through to the NDJSON event.
     async fn persist_artifact(
         &self,
         kind: crate::storage::ArtifactKind,
@@ -618,11 +624,9 @@ impl<'a> ScriptRunner<'a> {
         step_kind: &str,
         selector: Option<&str>,
         bytes: &[u8],
-    ) {
-        let Some(storage) = self.storage.as_ref() else {
-            return;
-        };
-        let Some(url) = self.url.as_ref() else { return };
+    ) -> Option<String> {
+        let storage = self.storage.as_ref()?;
+        let url = self.url.as_ref()?;
         let final_url = self
             .page
             .url()
@@ -641,8 +645,12 @@ impl<'a> ScriptRunner<'a> {
             selector,
             mime: None,
         };
-        if let Err(e) = storage.save_artifact(&meta, bytes).await {
-            tracing::warn!(step_id, name, ?e, "save_artifact failed");
+        match storage.save_artifact(&meta, bytes).await {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(step_id, name, ?e, "save_artifact failed");
+                None
+            }
         }
     }
 

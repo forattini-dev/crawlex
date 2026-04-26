@@ -197,7 +197,7 @@ impl ArtifactStorage for FilesystemStorage {
         })
     }
 
-    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<()> {
+    async fn save_screenshot(&self, url: &Url, png: &[u8]) -> Result<Option<String>> {
         let root = self.root.clone();
         let blob_root = self.blob_root.clone();
         let png_owned = png.to_vec();
@@ -246,7 +246,7 @@ impl ArtifactStorage for FilesystemStorage {
         self.save_artifact(&meta, png).await
     }
 
-    async fn save_artifact(&self, meta: &ArtifactMeta<'_>, bytes: &[u8]) -> Result<()> {
+    async fn save_artifact(&self, meta: &ArtifactMeta<'_>, bytes: &[u8]) -> Result<Option<String>> {
         let session_id = meta.session_id;
         if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
             return Err(Error::Storage(format!(
@@ -279,7 +279,7 @@ impl ArtifactStorage for FilesystemStorage {
         let step_kind = meta.step_kind.map(str::to_string);
         let selector = meta.selector.map(str::to_string);
         let mime = meta.mime.unwrap_or(meta.kind.mime()).to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<Option<String>> {
             // Disk layout:
             //   artifacts/<session>/<ts>_<kind>_<sha8>.<ext>     bytes
             //   artifacts/<session>/<ts>_<kind>_<sha8>.meta.json sidecar
@@ -306,7 +306,7 @@ impl ArtifactStorage for FilesystemStorage {
             let sidecar = Sidecar {
                 url: url_s,
                 final_url: final_url_s,
-                session_id,
+                session_id: session_id.clone(),
                 kind: kind_wire,
                 name,
                 step_id,
@@ -325,7 +325,15 @@ impl ArtifactStorage for FilesystemStorage {
                 .map_err(|e| Error::Storage(format!("sidecar write: {e}")))?;
             fs::rename(&meta_tmp, &meta_path)
                 .map_err(|e| Error::Storage(format!("sidecar rename: {e}")))?;
-            Ok(())
+            // Return the path relative to the storage root so consumers
+            // can join it with their known root without exposing absolute
+            // host paths in the NDJSON stream.
+            let rel = bytes_path
+                .strip_prefix(&root)
+                .unwrap_or(&bytes_path)
+                .to_string_lossy()
+                .to_string();
+            Ok(Some(rel))
         })
         .await
         .map_err(|e| Error::Storage(format!("artifact write join: {e}")))?
