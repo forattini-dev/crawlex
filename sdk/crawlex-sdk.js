@@ -11,6 +11,16 @@
 //   1. CRAWLEX_FORCE_BINARY env
 //   2. <pkgRoot>/.crawlex/bin/crawlex[.exe]        (postinstall target)
 //   3. PATH lookup                                  (if user installed via `cargo install`)
+//
+// Stream contract:
+//   * The native binary writes one JSON envelope per line to stdout
+//     (`{ v, ts, event, run_id?, session_id?, url?, why?, data }`).
+//   * `crawl()` parses each line and yields it through an async iterator.
+//   * Lines that fail to parse as JSON yield `{ kind: 'raw', line }` so
+//     consumers can log/recover instead of dropping bytes silently.
+//   * TypeScript consumers should narrow with `'event' in ev` (real
+//     event) vs `'kind' in ev` (`raw` fallback). See `index.d.ts` for
+//     the discriminated union over the 19 event kinds.
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
