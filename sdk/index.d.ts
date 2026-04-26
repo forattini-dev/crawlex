@@ -290,13 +290,111 @@ export type StreamEvent = CrawlEvent | RawLine;
 
 // ─── crawl() options + handle ──────────────────────────────────────────
 
+/**
+ * Structured CLI args for `crawlex crawl`. camelCase keys map to the
+ * kebab-case flags the binary parses (`maxDepth` → `--max-depth`,
+ * `screenshotMode` → `--screenshot-mode`). Multi-value fields
+ * (`seeds`, `proxies`, `hookScripts`, `chromeFlags`) repeat the flag
+ * once per array element.
+ *
+ * Coverage is curated — flags not listed here can still be passed via
+ * `CrawlOptions.rawArgs`. Boolean flags whose Rust default is `true`
+ * (e.g. `--include-subdomains`) cannot be turned off from this object;
+ * use `rawArgs: ['--include-subdomains=false']` if needed.
+ */
+export interface CrawlArgs {
+  /** Seed URLs (repeated `--seed`). */
+  seeds?: string[];
+  /** Path to a newline-delimited file of seed URLs. */
+  seedsFile?: string;
+
+  /** Default fetch method. */
+  method?: 'spoof' | 'render' | 'auto' | string;
+  maxConcurrentHttp?: number;
+  maxConcurrentRender?: number;
+  maxDepth?: number;
+  sameHostOnly?: boolean;
+  /** Default `true`; cannot be unset from this object — use `rawArgs`. */
+  includeSubdomains?: boolean;
+  respectRobotsTxt?: boolean;
+
+  // ─── Render / browser ────────────────────────────────────────────
+  waitStrategy?: string;
+  waitIdleMs?: number;
+  renderRequestTimeoutMs?: number;
+  navigationLifecycle?: 'load' | 'domcontentloaded' | string;
+  /** Stealth profile name. See `crawlex stealth catalog list`. */
+  profile?: string;
+  /** Persona codename (`tux`, `office`, `gamer`, `atlas`, `pixel`). */
+  persona?: 'tux' | 'office' | 'gamer' | 'atlas' | 'pixel' | string;
+  /** Numeric persona index — mutually exclusive with `persona`. */
+  identityPreset?: number;
+  chromePath?: string;
+  /** Extra `--chrome-flag X` repeated per element. */
+  chromeFlags?: string[];
+  blockResource?: string;
+
+  // ─── Storage / queue ─────────────────────────────────────────────
+  storage?: 'memory' | 'filesystem' | 'sqlite' | string;
+  storagePath?: string;
+  queue?: 'memory' | 'sqlite' | 'redis' | string;
+  queuePath?: string;
+  queueRedisUrl?: string;
+
+  // ─── Output ──────────────────────────────────────────────────────
+  outputHtmlDir?: string;
+  outputGraph?: string;
+  outputMetadata?: string;
+  /** Toggle screenshot capture. */
+  screenshot?: boolean;
+  screenshotDir?: string;
+  /** `viewport` (default), `fullpage`, or `element:<css>`. */
+  screenshotMode?: 'viewport' | 'fullpage' | string;
+
+  // ─── Network ─────────────────────────────────────────────────────
+  doh?: 'off' | 'cloudflare' | 'google' | 'quad9' | string;
+  /** Proxy URLs (repeated `--proxy`). */
+  proxies?: string[];
+  proxyFile?: string;
+  proxyStrategy?: string;
+  proxyStickyPerHost?: boolean;
+  proxyHealthCheckIntervalSecs?: number;
+  raffelProxy?: boolean;
+  raffelProxyHost?: string;
+  raffelProxyPort?: number;
+
+  // ─── Hooks / discovery ───────────────────────────────────────────
+  hookScripts?: string[];
+  onDiscoveryFilterRegex?: string;
+  followAllAssets?: boolean;
+  crtsh?: boolean;
+  noRobotsPaths?: boolean;
+
+  // Allow forward-compat fields without breaking strict mode. Anything
+  // that doesn't match the typed surface above will still serialize as
+  // `--<kebab-case-key> <value>` (or the appropriate flag form).
+  [key: string]: string | number | boolean | string[] | number[] | undefined;
+}
+
 export interface CrawlOptions {
-  /** Seed URLs to enqueue. Forwarded as repeated `--seed` flags. */
+  /**
+   * Seed URLs to enqueue. Shorthand for `args.seeds`; forwarded as
+   * repeated `--seed` flags.
+   */
   seeds?: string[];
   /** Full crawlex config — serialized to JSON and piped on stdin. */
   config?: Record<string, unknown>;
-  /** Additional raw CLI arguments appended after `crawl --emit ndjson`. */
-  args?: string[];
+  /**
+   * Structured CLI args. Auto-converted to flags via camelCase →
+   * kebab-case mapping. See [`CrawlArgs`].
+   */
+  args?: CrawlArgs;
+  /**
+   * Raw CLI flag passthrough for advanced or future flags not yet
+   * typed in `CrawlArgs`. Appended verbatim after the structured
+   * args.
+   */
+  rawArgs?: string[];
   /** Override the resolved binary path. */
   bin?: string;
   /** Cancel the run. SIGTERM is sent to the child. */

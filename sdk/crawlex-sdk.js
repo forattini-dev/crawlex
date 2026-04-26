@@ -167,13 +167,78 @@ function parseLine(line) {
   }
 }
 
+// camelCase → kebab-case. Stable mapping so consumers don't have to
+// remember which Rust flag name corresponds to which JS field.
+function kebab(name) {
+  return name.replace(/[A-Z0-9]/g, (m, idx) => (idx === 0 ? m.toLowerCase() : `-${m.toLowerCase()}`));
+}
+
+// Multi-value flags emit `--flag VALUE` once per array element
+// (clap `ArgAction::Append`). The Rust side names these in singular —
+// `--seed`, `--proxy`, `--hook-script`, `--chrome-flag` — even though
+// the SDK exposes them as plural arrays.
+const MULTI_VALUE_FLAGS = {
+  seeds: 'seed',
+  proxies: 'proxy',
+  hookScripts: 'hook-script',
+  chromeFlags: 'chrome-flag',
+};
+
+// Top-level keys that are SDK-level concerns, not CLI flags. Keep the
+// serializer from accidentally turning them into `--bin` or `--signal`.
+const RESERVED_KEYS = new Set(['bin', 'signal', 'env', 'config', 'rawArgs']);
+
+/**
+ * Convert a structured `CrawlArgs` object into the array of CLI flags
+ * the binary expects. Booleans → flag presence; strings / numbers →
+ * `--flag VALUE`; arrays → repeated `--flag VALUE`. `null`/`undefined`
+ * are dropped silently. Anything in `rawArgs` is appended verbatim.
+ *
+ * Boolean flags with a Rust `default_value_t = true` (e.g.
+ * `--include-subdomains`) cannot be turned off from this serializer —
+ * pass the raw form via `rawArgs: ['--include-subdomains=false']` if
+ * you need to override.
+ */
+function serializeArgs(args = {}) {
+  const out = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined || value === null) continue;
+    if (RESERVED_KEYS.has(key)) continue;
+
+    if (key in MULTI_VALUE_FLAGS) {
+      if (!Array.isArray(value)) {
+        throw new TypeError(`crawlex: '${key}' must be an array`);
+      }
+      const flag = `--${MULTI_VALUE_FLAGS[key]}`;
+      for (const v of value) out.push(flag, String(v));
+      continue;
+    }
+
+    const flag = `--${kebab(key)}`;
+    if (typeof value === 'boolean') {
+      if (value) out.push(flag);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      // Default behaviour for un-mapped arrays: repeat the flag. Caller
+      // can always reach for `rawArgs` if they need a comma-joined form.
+      for (const v of value) out.push(flag, String(v));
+      continue;
+    }
+    out.push(flag, String(value));
+  }
+  return out;
+}
+
 /**
  * Spawn `crawlex crawl ...` with `--emit ndjson` and yield events.
  *
  * @param {object} opts
- * @param {string[]} [opts.seeds]         URLs to seed the frontier.
+ * @param {string[]} [opts.seeds]         URLs to seed the frontier (also accepted under `args.seeds`).
  * @param {object}   [opts.config]        Full config object; passed on stdin as JSON.
- * @param {string[]} [opts.args]          Extra raw CLI args.
+ * @param {object}   [opts.args]          Structured CLI args; see `CrawlArgs` in `index.d.ts`.
+ *                                        Auto-converted to flags (camelCase → kebab-case).
+ * @param {string[]} [opts.rawArgs]       Raw CLI flag passthrough for advanced/un-typed flags.
  * @param {string}   [opts.bin]           Override binary path.
  * @param {AbortSignal} [opts.signal]     Abort/cancel the run.
  * @param {object}   [opts.env]           Extra env vars for the child.
@@ -183,8 +248,12 @@ function crawl(opts = {}) {
   const bin = opts.bin || binaryPath();
   const args = ['crawl', '--emit', 'ndjson'];
   if (opts.config) args.push('--config', '-');
-  if (opts.seeds) for (const s of opts.seeds) args.push('--seed', s);
-  if (opts.args) args.push(...opts.args);
+  // top-level `seeds` is shorthand for `args.seeds`. Both spellings
+  // forward into the same `--seed` repetition.
+  const merged = { ...(opts.args || {}) };
+  if (opts.seeds && !merged.seeds) merged.seeds = opts.seeds;
+  args.push(...serializeArgs(merged));
+  if (opts.rawArgs) args.push(...opts.rawArgs);
 
   const child = spawn(bin, args, {
     stdio: ['pipe', 'pipe', 'inherit'],
@@ -281,6 +350,7 @@ module.exports = {
   ensureInstalled,
   binaryPath,
   assetBaseName,
+  serializeArgs,
   version: PKG_JSON.version,
 };
 
