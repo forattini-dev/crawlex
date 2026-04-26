@@ -343,6 +343,151 @@ function runCli(argv) {
   });
 }
 
+// ---------- JS hook bridge ----------
+//
+// `defineHooks({...})` returns an object the SDK feeds into the
+// `--hook-bridge` IPC channel exposed by the rust binary. The wire
+// protocol mirrors `src/hooks/bridge.rs`:
+//
+//   rust → js (stdout):  {kind:"hello", v, protocol}
+//                        {kind:"hook_invoke", id, event, ctx}
+//   js   → rust (fd):    {kind:"subscribe", subscribed:[...]}
+//                        {kind:"hook_result", id, decision, patch?}
+//
+// The handler signature: `(ctx, helpers) => Decision | Promise<Decision>`
+// where `Decision` is one of `'continue' | 'skip' | 'retry' | 'abort'`
+// or an object `{ decision, patch?: { capturedUrls?, userData?,
+// robotsAllowed?, allowRetry? } }`.
+
+const HOOK_EVENTS = Object.freeze([
+  'before_each_request',
+  'after_dns_resolve',
+  'after_tls_handshake',
+  'after_first_byte',
+  'on_response_body',
+  'after_load',
+  'after_idle',
+  'on_discovery',
+  'on_job_start',
+  'on_job_end',
+  'on_error',
+  'on_robots_decision',
+]);
+
+// camelCase JS handler name → wire event name. Handler keys also
+// accept the snake_case wire name directly so callers can copy-paste
+// from the rust enum if they prefer.
+const HANDLER_TO_EVENT = {
+  onBeforeEachRequest: 'before_each_request',
+  onAfterDnsResolve: 'after_dns_resolve',
+  onAfterTlsHandshake: 'after_tls_handshake',
+  onAfterFirstByte: 'after_first_byte',
+  onResponseBody: 'on_response_body',
+  onAfterLoad: 'after_load',
+  onAfterIdle: 'after_idle',
+  onDiscovery: 'on_discovery',
+  onJobStart: 'on_job_start',
+  onJobEnd: 'on_job_end',
+  onError: 'on_error',
+  onRobotsDecision: 'on_robots_decision',
+};
+
+const DECISION_SET = new Set(['continue', 'skip', 'retry', 'abort']);
+
+/**
+ * Build a hook spec from an `{ onAfterFirstByte: async (ctx) => ... }`
+ * map. Returns `{ subscribed, dispatch }`:
+ *
+ *   subscribed: string[]      // wire event names the SDK listens to
+ *   dispatch(envelope) → reply  // takes an inbound `hook_invoke`,
+ *                                  returns the matching `hook_result`
+ *
+ * The `crawl()` integration uses both: subscribed → emitted in the
+ * `subscribe` envelope; dispatch → bound to the bridge read loop.
+ */
+function defineHooks(handlerMap = {}) {
+  const handlers = {};
+  for (const [key, fn] of Object.entries(handlerMap)) {
+    if (typeof fn !== 'function') continue;
+    let event;
+    if (HANDLER_TO_EVENT[key]) {
+      event = HANDLER_TO_EVENT[key];
+    } else if (HOOK_EVENTS.includes(key)) {
+      event = key;
+    } else {
+      throw new Error(
+        `defineHooks: unknown handler '${key}'. Expected one of: ` +
+        Object.keys(HANDLER_TO_EVENT).concat(HOOK_EVENTS).join(', '),
+      );
+    }
+    handlers[event] = fn;
+  }
+
+  const subscribed = Object.keys(handlers);
+
+  async function dispatch(envelope) {
+    if (!envelope || envelope.kind !== 'hook_invoke') return null;
+    const { id, event, ctx } = envelope;
+    const handler = handlers[event];
+    if (!handler) {
+      return { kind: 'hook_result', id, decision: 'continue' };
+    }
+    let raw;
+    try {
+      raw = await handler(ctx);
+    } catch (err) {
+      // A throwing JS hook becomes an `abort` so the rust side surfaces
+      // it in the NDJSON event stream as `decision.made why=hook:throw`.
+      // The error message lands in `user_data.hook_error` so consumers
+      // can correlate.
+      return {
+        kind: 'hook_result',
+        id,
+        decision: 'abort',
+        patch: {
+          user_data: {
+            ...(ctx?.user_data || {}),
+            hook_error: String(err && err.message ? err.message : err),
+          },
+        },
+      };
+    }
+    return normalizeResult(id, raw);
+  }
+
+  return { subscribed, dispatch };
+}
+
+function normalizeResult(id, raw) {
+  // Allow shorthand: handler returns 'skip' instead of `{ decision: 'skip' }`.
+  if (typeof raw === 'string') {
+    if (!DECISION_SET.has(raw)) {
+      throw new Error(`hook returned unknown decision: '${raw}'`);
+    }
+    return { kind: 'hook_result', id, decision: raw };
+  }
+  if (raw == null) {
+    return { kind: 'hook_result', id, decision: 'continue' };
+  }
+  const decision = raw.decision || 'continue';
+  if (!DECISION_SET.has(decision)) {
+    throw new Error(`hook returned unknown decision: '${decision}'`);
+  }
+  // Translate the camelCase JS patch fields onto the snake_case wire
+  // names so the rust `ContextPatch` deserialiser sees them as-is.
+  const patch = raw.patch ? camelToSnakePatch(raw.patch) : undefined;
+  return { kind: 'hook_result', id, decision, ...(patch ? { patch } : {}) };
+}
+
+function camelToSnakePatch(p) {
+  const out = {};
+  if (Array.isArray(p.capturedUrls)) out.captured_urls = p.capturedUrls.map(String);
+  if (p.userData && typeof p.userData === 'object') out.user_data = p.userData;
+  if (typeof p.robotsAllowed === 'boolean') out.robots_allowed = p.robotsAllowed;
+  if (typeof p.allowRetry === 'boolean') out.allow_retry = p.allowRetry;
+  return out;
+}
+
 module.exports = {
   crawl,
   crawlAll,
@@ -351,6 +496,8 @@ module.exports = {
   binaryPath,
   assetBaseName,
   serializeArgs,
+  defineHooks,
+  HOOK_EVENTS,
   version: SDK_VERSION,
 };
 

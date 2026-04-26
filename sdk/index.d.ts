@@ -448,6 +448,85 @@ export function crawlAll(opts?: CrawlOptions): Promise<StreamEvent[]>;
 /** Run any subcommand with `--json` and return the parsed result. */
 export function runJson<T = unknown>(args: string[], opts?: RunJsonOptions): T;
 
+// ─── Hooks (JS bridge) ─────────────────────────────────────────────────
+
+/**
+ * Wire-shape `HookContext` shipped on each `hook_invoke` envelope. The
+ * subset is intentionally narrower than the rust `HookContext` —
+ * request/response bodies and binary headers are dropped. Hooks that
+ * need raw bytes should run as a Rust-native or Lua hook in-process.
+ */
+export interface HookCtx {
+  url: string;
+  depth: number;
+  response_status?: number;
+  response_headers?: Record<string, string>;
+  html_present: boolean;
+  body_size?: number;
+  captured_urls: string[];
+  proxy?: string;
+  retry_count: number;
+  allow_retry: boolean;
+  robots_allowed?: boolean;
+  user_data: Record<string, unknown>;
+  error?: string;
+}
+
+/** Patch the SDK can apply back onto the live HookContext. */
+export interface HookPatch {
+  capturedUrls?: string[];
+  userData?: Record<string, unknown>;
+  robotsAllowed?: boolean;
+  allowRetry?: boolean;
+}
+
+export type HookDecision = 'continue' | 'skip' | 'retry' | 'abort';
+
+/** Either a bare decision string or a structured result with patch. */
+export type HookResult = HookDecision | { decision: HookDecision; patch?: HookPatch };
+
+/** Async or sync handler signature used by `defineHooks`. */
+export type HookHandler = (ctx: HookCtx) => HookResult | Promise<HookResult>;
+
+/** Per-event handler map accepted by `defineHooks`. */
+export interface HookHandlers {
+  onBeforeEachRequest?: HookHandler;
+  onAfterDnsResolve?: HookHandler;
+  onAfterTlsHandshake?: HookHandler;
+  onAfterFirstByte?: HookHandler;
+  onResponseBody?: HookHandler;
+  onAfterLoad?: HookHandler;
+  onAfterIdle?: HookHandler;
+  onDiscovery?: HookHandler;
+  onJobStart?: HookHandler;
+  onJobEnd?: HookHandler;
+  onError?: HookHandler;
+  onRobotsDecision?: HookHandler;
+}
+
+/**
+ * Output of `defineHooks`. The bridge driver inside `crawl()` (when
+ * wired in a future SDK release) reads `subscribed` to send the
+ * `subscribe` envelope and routes every inbound `hook_invoke` through
+ * `dispatch`. Exposed here so library consumers can plug into custom
+ * IPC fabrics (`fork()`, worker threads, websockets) the same way.
+ */
+export interface HookSpec {
+  subscribed: string[];
+  dispatch(envelope: { kind: string; [k: string]: unknown }): Promise<{
+    kind: 'hook_result';
+    id: number;
+    decision: HookDecision;
+    patch?: Record<string, unknown>;
+  } | null>;
+}
+
+/** Build a hook spec from a typed handler map. */
+export function defineHooks(handlers: HookHandlers): HookSpec;
+
+/** Stable wire names of every supported event (snake_case). */
+export const HOOK_EVENTS: readonly string[];
+
 /** Download (and verify) the native binary into the package cache. */
 export function ensureInstalled(opts?: EnsureInstalledOptions): Promise<EnsureInstalledResult>;
 
