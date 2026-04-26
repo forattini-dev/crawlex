@@ -122,6 +122,156 @@ pub struct IdentityBundle {
     pub media_speaker_count: u8,
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// View structs — non-allocating, read-only groupings of related fields.
+// These DON'T own data; they just hold references into the bundle. Use
+// `bundle.browser()`, `bundle.device()`, etc. when you want a coherent
+// subset (e.g. the stealth shim renderer cares about `bundle.gpu()` as
+// a unit, not 7 individual fields).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Browser identity slice — UA, UA-CH brands, locale, timezone. Used by
+/// the HTTP impersonation layer + the stealth shim's UA substitution.
+#[derive(Debug, Clone, Copy)]
+pub struct BrowserInfoView<'a> {
+    pub ua: &'a str,
+    pub sec_ch_ua: &'a str,
+    pub ua_brands: &'a str,
+    pub ua_full_version_list: &'a str,
+    pub ua_full_version: &'a str,
+    pub ua_major: u32,
+    pub platform: &'a str,
+    pub ua_platform: &'a str,
+    pub locale: &'a str,
+    pub languages_json: &'a str,
+    pub accept_language: &'a str,
+    pub timezone: &'a str,
+    pub tz_offset_min: i32,
+}
+
+/// Device + display slice — viewport / screen / DPR / hardware. Used by
+/// the stealth shim's `screen` / `window.inner*` / `navigator.deviceMemory`
+/// / `navigator.hardwareConcurrency` substitutions.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceInfoView<'a> {
+    pub viewport_w: u32,
+    pub viewport_h: u32,
+    pub screen_w: u32,
+    pub screen_h: u32,
+    pub avail_screen_w: u32,
+    pub avail_screen_h: u32,
+    pub device_pixel_ratio: f32,
+    pub color_depth: u32,
+    pub device_memory: u32,
+    pub hardware_concurrency: u32,
+    pub scrollbar_width: u32,
+    pub heap_size_limit: u64,
+    /// Phantom borrow so the view shares the bundle's lifetime even when
+    /// no other reference fields land here in the future.
+    pub _bundle: std::marker::PhantomData<&'a ()>,
+}
+
+/// GPU slice — WebGL / WebGPU vendor + renderer + texture caps. Used by
+/// the stealth shim's `WEBGL_debug_renderer_info` + WebGPU adapter
+/// description substitutions.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuInfoView<'a> {
+    pub webgl_vendor: &'a str,
+    pub webgl_renderer: &'a str,
+    pub webgl_unmasked_vendor: &'a str,
+    pub webgl_unmasked_renderer: &'a str,
+    pub webgpu_adapter_description: &'a str,
+    pub max_texture_size: u32,
+    pub max_viewport_w: u32,
+    pub max_viewport_h: u32,
+}
+
+/// Audio slice — currently `AudioContext.sampleRate`. Single field today,
+/// kept as a view so future audio-adjacent fields (output channel count,
+/// preferred sample format) land in one place.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioInfoView {
+    pub sample_rate: u32,
+}
+
+/// MediaDevices slice — `navigator.mediaDevices.enumerateDevices()` counts.
+#[derive(Debug, Clone, Copy)]
+pub struct MediaInfoView {
+    pub mic_count: u8,
+    pub cam_count: u8,
+    pub speaker_count: u8,
+}
+
+impl IdentityBundle {
+    /// Coherent view of browser identity fields (UA, brands, locale).
+    pub fn browser(&self) -> BrowserInfoView<'_> {
+        BrowserInfoView {
+            ua: &self.ua,
+            sec_ch_ua: &self.sec_ch_ua,
+            ua_brands: &self.ua_brands,
+            ua_full_version_list: &self.ua_full_version_list,
+            ua_full_version: &self.ua_full_version,
+            ua_major: self.ua_major,
+            platform: &self.platform,
+            ua_platform: &self.ua_platform,
+            locale: &self.locale,
+            languages_json: &self.languages_json,
+            accept_language: &self.accept_language,
+            timezone: &self.timezone,
+            tz_offset_min: self.tz_offset_min,
+        }
+    }
+
+    /// Coherent view of device + display fields.
+    pub fn device(&self) -> DeviceInfoView<'_> {
+        DeviceInfoView {
+            viewport_w: self.viewport_w,
+            viewport_h: self.viewport_h,
+            screen_w: self.screen_w,
+            screen_h: self.screen_h,
+            avail_screen_w: self.avail_screen_w,
+            avail_screen_h: self.avail_screen_h,
+            device_pixel_ratio: self.device_pixel_ratio,
+            color_depth: self.color_depth,
+            device_memory: self.device_memory,
+            hardware_concurrency: self.hardware_concurrency,
+            scrollbar_width: self.scrollbar_width,
+            heap_size_limit: self.heap_size_limit,
+            _bundle: std::marker::PhantomData,
+        }
+    }
+
+    /// Coherent view of GPU / WebGL / WebGPU fields.
+    pub fn gpu(&self) -> GpuInfoView<'_> {
+        GpuInfoView {
+            webgl_vendor: &self.webgl_vendor,
+            webgl_renderer: &self.webgl_renderer,
+            webgl_unmasked_vendor: &self.webgl_unmasked_vendor,
+            webgl_unmasked_renderer: &self.webgl_unmasked_renderer,
+            webgpu_adapter_description: &self.webgpu_adapter_description,
+            max_texture_size: self.max_texture_size,
+            max_viewport_w: self.max_viewport_w,
+            max_viewport_h: self.max_viewport_h,
+        }
+    }
+
+    /// Coherent view of audio fields.
+    pub fn audio(&self) -> AudioInfoView {
+        AudioInfoView {
+            sample_rate: self.audio_sample_rate,
+        }
+    }
+
+    /// Coherent view of `mediaDevices` counts.
+    pub fn media(&self) -> MediaInfoView {
+        MediaInfoView {
+            mic_count: self.media_mic_count,
+            cam_count: self.media_cam_count,
+            speaker_count: self.media_speaker_count,
+        }
+    }
+}
+
 impl IdentityBundle {
     /// Build a bundle coherent with the installed Chromium major version.
     pub fn from_chromium(major: u32, session_seed: u64) -> Self {
