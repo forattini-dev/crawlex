@@ -15,7 +15,11 @@ pub mod keyboard;
 pub mod motion;
 #[cfg(feature = "cdp-backend")]
 pub mod page_pool;
+#[cfg(feature = "cdp-backend")]
+pub mod phases;
 pub mod pool;
+#[cfg(feature = "cdp-backend")]
+pub mod session;
 #[cfg(feature = "cdp-backend")]
 pub mod ref_resolver;
 pub mod selector;

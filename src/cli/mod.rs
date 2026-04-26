@@ -1,5 +1,8 @@
 pub mod args;
+pub mod command;
+pub mod commands;
 mod raffel_proxy;
+pub mod render;
 
 use std::io::Read as _;
 use std::sync::Arc;
