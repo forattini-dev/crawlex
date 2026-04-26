@@ -1150,6 +1150,7 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
             );
         }
     }
+    #[cfg(feature = "cdp-backend")]
     if let Some(raw) = c.mobile_profile.as_deref() {
         match crate::render::android_profile::parse_mobile_profile(raw) {
             Some(profile) => tracing::info!(

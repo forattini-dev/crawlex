@@ -337,11 +337,21 @@ impl PolicyEngine {
         if !matches!(action, SessionAction::GiveUp) {
             return None;
         }
-        if !crate::render::handoff::handoff_enabled() {
-            return None;
+        // Handoff path lives under `crate::render` (CDP-backend only).
+        // Mini build never produces a human handoff — silently no-op.
+        #[cfg(feature = "cdp-backend")]
+        {
+            if !crate::render::handoff::handoff_enabled() {
+                return None;
+            }
+            let req = crate::render::handoff::HandoffRequest::from_signal(signal, screenshot_path);
+            Some(req.into_policy_decision())
         }
-        let req = crate::render::handoff::HandoffRequest::from_signal(signal, screenshot_path);
-        Some(req.into_policy_decision())
+        #[cfg(not(feature = "cdp-backend"))]
+        {
+            let _ = (signal, screenshot_path);
+            None
+        }
     }
 
     /// P0-9 preemptive rotation: when the passive vendor-telemetry

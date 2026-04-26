@@ -155,6 +155,9 @@ impl Crawler {
             ),
         };
 
+        // `mut` is only consumed by the cdp-backend autodetect branch
+        // below; the mini build keeps the binding immutable.
+        #[cfg_attr(not(feature = "cdp-backend"), allow(unused_mut))]
         let mut identity_profile = config.user_agent_profile;
         #[cfg(feature = "cdp-backend")]
         if config.profile_autodetect && config.max_concurrent_render > 0 {
