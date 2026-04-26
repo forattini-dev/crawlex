@@ -65,3 +65,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build crawlex-mini (HTTP-only, no browser deps)
         run: cargo build --bin crawlex-mini --no-default-features --features cli,sqlite
+
+  package:
+    name: cargo publish dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang
+      - name: Verify Cargo.toml + package.json version match
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          CARGO=$(awk -F'"' '/^\[package\]/{p=1} p && /^version = /{print $2; exit}' Cargo.toml)
+          if [[ "$PKG" != "$CARGO" ]]; then
+            echo "::error::package.json ($PKG) != Cargo.toml ($CARGO)"; exit 1
+          fi
+          echo "version=$CARGO"
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
