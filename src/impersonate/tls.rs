@@ -1,11 +1,15 @@
 //! BoringSSL-based TLS impersonation, catalog-driven.
 //!
-//! The connector ships a JA3/JA4 that matches real Chrome / Chromium / Edge
-//! / Brave / Opera (Firefox routes through `tls_firefox.rs` because it uses
-//! NSS, not BoringSSL). Per-version cipher lists, supported groups,
-//! signature algorithms, ALPN, ALPS, cert_compression and supported_versions
-//! are all read from [`crate::impersonate::catalog`] at connect time —
-//! see `build_connector` for the wiring.
+//! Single connector path covers every browser variant: `TlsVariant::Chrome`
+//! for Chrome / Chromium / Edge / Brave / Opera / Safari, `TlsVariant::Firefox`
+//! for Firefox. The variant only flips `set_permute_extensions` (Chrome
+//! permutes per RFC 8701 since M110, Firefox keeps a stable order); every
+//! other knob (ciphers, groups, sigalgs, ALPN, ALPS, cert_compression,
+//! status_request, sct) is read from the captured `TlsFingerprint` flags.
+//!
+//! Even though Firefox uses NSS in the wild, our wire-level result is
+//! byte-equivalent for the fields detectors hash (JA3/JA4) — pulling NSS
+//! into the crate would be a 50 MB+ dep landmine.
 //!
 //! What's still hardcoded here:
 //! * GREASE enabled at the BoringSSL level (positions baked into catalog,
@@ -123,19 +127,34 @@ pub fn session_ticket_callback_count() -> u64 {
     *CALLBACK_HITS.lock()
 }
 
-pub fn build_connector(profile: Profile) -> Result<SslConnector> {
-    // Firefox uses NSS, not BoringSSL — different ClientHello shape.
-    // Dispatch to the dedicated builder for those profiles.
-    if matches!(profile, Profile::Firefox { .. }) {
-        return crate::impersonate::tls_firefox::build_connector(profile);
-    }
+/// Two flavours the connector knows how to emit. Driven by the catalog
+/// flags + the profile family — Chrome-family permutes extensions and
+/// always advertises OCSP+SCT; Firefox keeps a stable extension order
+/// and toggles OCSP+SCT off the captured fp flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TlsVariant {
+    Chrome,
+    Firefox,
+}
 
+impl TlsVariant {
+    fn from_profile(profile: Profile) -> Self {
+        if matches!(profile, Profile::Firefox { .. }) {
+            Self::Firefox
+        } else {
+            Self::Chrome
+        }
+    }
+}
+
+pub fn build_connector(profile: Profile) -> Result<SslConnector> {
     // Resolve the catalog fingerprint for this persona. Falls back to
     // the closest era's representative profile when the exact tuple
     // isn't yet captured (with a tracing::warn from the catalog layer).
     let fp = profile
         .tls()
         .ok_or_else(|| Error::Tls(format!("no TLS fingerprint in catalog for {:?}", profile)))?;
+    let variant = TlsVariant::from_profile(profile);
 
     let mut b =
         SslConnector::builder(SslMethod::tls()).map_err(|e| Error::Tls(format!("builder: {e}")))?;
@@ -150,10 +169,11 @@ pub fn build_connector(profile: Profile) -> Result<SslConnector> {
     // positions). BoringSSL emits actual GREASE bytes when this is on;
     // the positions we keep are stable per profile, the byte values rotate.
     b.set_grease_enabled(true);
-    // Chrome 110+ permutes extension order. Catalog stores the captured
-    // order but we don't pin it on the wire — Chrome itself permutes,
-    // so a fixed order from us would be the tell.
-    b.set_permute_extensions(true);
+    // Chrome 110+ permutes extension order; Firefox keeps a stable order
+    // per major version. Permute would be a tell on the Firefox path.
+    if variant == TlsVariant::Chrome {
+        b.set_permute_extensions(true);
+    }
 
     let cipher_list = crate::impersonate::catalog::render_cipher_list(fp);
     b.set_cipher_list(&cipher_list)
@@ -168,18 +188,21 @@ pub fn build_connector(profile: Profile) -> Result<SslConnector> {
         .map_err(|e| Error::Tls(format!("sigalgs: {e}")))?;
 
     // ALPN — order matters. Catalog ships `["h2", "http/1.1"]` for
-    // Chrome-family, `["h2", "http/1.1"]` for Firefox 100+, etc.
+    // Chrome-family and Firefox 100+ alike.
     let alpn_wire = crate::impersonate::catalog::encode_alpn_wire(fp.alpn);
     b.set_alpn_protos(&alpn_wire)
         .map_err(|e| Error::Tls(format!("alpn: {e}")))?;
 
-    // Chrome 131+ always advertises OCSP stapling (ext 5, status_request)
-    // and Signed Certificate Timestamps (ext 18, signed_certificate_timestamp)
-    // on every ClientHello. Absence of either ext is a strong "not Chrome"
-    // tell. BoringSSL exposes context-wide helpers that wire these on for
-    // all client handshakes.
-    b.enable_ocsp_stapling();
-    b.enable_signed_cert_timestamps();
+    // OCSP stapling (ext 5, status_request) + Signed Certificate Timestamps
+    // (ext 18) — toggled off the captured fp flags. Chrome 131+ ships both
+    // unconditionally so its captures have the flags set; Firefox captures
+    // toggle per major.
+    if fp.has_status_request {
+        b.enable_ocsp_stapling();
+    }
+    if fp.has_signed_certificate_timestamp {
+        b.enable_signed_cert_timestamps();
+    }
 
     b.set_verify(SslVerifyMode::PEER);
 
