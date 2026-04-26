@@ -112,7 +112,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(7);
         let v = compute_dwell_ms(0, 250, 40, 500, 10_000, &mut rng);
         assert!(
-            v >= 500 && v <= 10_000,
+            (500..=10_000).contains(&v),
             "zero-word base must still respect clamp, got {v}"
         );
 

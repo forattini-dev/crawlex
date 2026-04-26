@@ -161,11 +161,11 @@ fn alpn_wire_encoding_is_length_prefixed() {
     // First byte = first protocol length. For Chrome ["h2", "http/1.1"]:
     // \x02h2\x08http/1.1 = 2 + 2 + 1 + 8 = 13 bytes (no separators in wire).
     assert!(!wire.is_empty(), "alpn wire is empty");
+    let first_len = wire[0] as usize;
     assert!(
-        wire[0] as usize + 1 <= wire.len(),
-        "first alpn length byte ({}) > remaining wire ({})",
-        wire[0],
-        wire.len() - 1
+        first_len < wire.len(),
+        "first alpn length byte ({first_len}) >= wire len ({})",
+        wire.len()
     );
 }
 

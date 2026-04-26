@@ -127,7 +127,7 @@ async fn worker_navigator_user_agent_matches_persona() {
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if let Ok(eval) = page.evaluate("document.title").await {
-            if let Some(t) = eval.into_value::<String>().ok() {
+            if let Ok(t) = eval.into_value::<String>() {
                 if t != "pending" && !t.is_empty() {
                     payload = Some(t);
                     break;

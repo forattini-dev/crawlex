@@ -66,7 +66,10 @@ chromium-fetcher = [
 ]
 zip0 = ["dep:zip0"]
 zip8 = ["dep:zip8"]
-prometheus = ["dep:prometheus"]
+# `prometheus` cargo feature is a no-op stub — see comment in the
+# `[dependencies]` block. Kept so existing CI configs that pass
+# `--features prometheus` don't break.
+prometheus = []
 cdp-backend = [
     "dep:async-tungstenite",
     "dep:which",
@@ -107,7 +110,9 @@ boring-sys = "5"
 hyper = { version = "1", features = ["http1", "http2", "client"] }
 hyper-util = { version = "0.1", features = ["client", "tokio", "http1", "http2"] }
 http-body-util = "0.1"
-h2 = "0.4"
+# `h2` is NOT a direct dep — hyper pulls it transitively. We only patch it
+# below (`[patch.crates-io]`) so the Chrome 149 pseudo-header order
+# `(method, authority, scheme, path)` lands on every HTTP/2 handshake.
 tokio-boring = "5"
 foreign-types = "0.5"
 brotli = "8"
@@ -118,8 +123,8 @@ base64 = "0.22"
 hickory-resolver = "0.26"
 
 # HTML parsing & link extraction
+# (`html5ever` is pulled transitively by `scraper`; no direct dep needed.)
 scraper = "0.26"
-html5ever = "0.39"
 kuchikiki = "0.8"
 psl = "2"
 roxmltree = "0.20"
@@ -134,7 +139,11 @@ growable-bloom-filter = "2"
 # Optional backends
 clap = { version = "4", features = ["derive", "env"], optional = true }
 rusqlite = { version = "0.39", features = ["bundled"], optional = true }
-prometheus = { version = "0.14", optional = true }
+# `prometheus` crate isn't used — `src/metrics_server.rs` hand-rolls the
+# exposition format directly. Kept as a feature flag in case we ever want
+# the full registry-based expand-on-counter contract from the upstream
+# crate, but no code path imports it.
+# prometheus = { version = "0.14", optional = true }
 # CDP (Chrome DevTools Protocol) internal backend deps — formerly separate
 # crates, now inlined as modules under `src/cdp/`.
 async-tungstenite = { version = "0.32", features = ["tokio-runtime"], optional = true }

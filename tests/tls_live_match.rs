@@ -26,22 +26,14 @@ const PEET_WS_URL: &str = "https://tls.peet.ws/api/all";
 
 async fn fetch_peet_response(profile: Profile) -> Result<serde_json::Value, String> {
     use crawlex::impersonate::ImpersonateClient;
+    use url::Url;
 
     let client =
         ImpersonateClient::new(profile).map_err(|e| format!("ImpersonateClient::new: {e}"))?;
-
-    let req = http::Request::builder()
-        .method("GET")
-        .uri(PEET_WS_URL)
-        .header("user-agent", profile.user_agent())
-        .header("accept", "application/json")
-        .body(bytes::Bytes::new())
-        .map_err(|e| format!("build request: {e}"))?;
-
-    let resp = client.send(req).await.map_err(|e| format!("send: {e}"))?;
-
-    let body_bytes = resp.into_body();
-    serde_json::from_slice::<serde_json::Value>(&body_bytes).map_err(|e| format!("parse json: {e}"))
+    let url = Url::parse(PEET_WS_URL).map_err(|e| format!("parse url: {e}"))?;
+    let resp = client.get(&url).await.map_err(|e| format!("get: {e}"))?;
+    serde_json::from_slice::<serde_json::Value>(&resp.body)
+        .map_err(|e| format!("parse json: {e}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
