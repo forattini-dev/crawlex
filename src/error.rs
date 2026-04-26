@@ -138,6 +138,9 @@ pub enum Error {
     #[error("hook abort: {0}")]
     HookAbort(String),
 
+    #[error("hook bridge: {0}")]
+    Hook(String),
+
     #[error("job deferred: {0}")]
     JobDeferred(String),
 
@@ -173,6 +176,7 @@ impl Error {
             Self::Config(_) => "config",
             Self::RobotsDisallow(_) => "robots-disallow",
             Self::HookAbort(_) => "hook-abort",
+            Self::Hook(_) => "hook",
             Self::JobDeferred(_) => "job-deferred",
             Self::Other(_) => "other",
         }

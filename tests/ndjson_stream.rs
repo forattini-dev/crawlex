@@ -104,8 +104,10 @@ async fn auto_escalation_emits_decision_made_with_vendor_why() {
     crawler.seed(vec![url.clone()]).await.unwrap();
     // Don't wait for the render path to complete — it'd require a live
     // browser. We only care that the HTTP path emitted decision.made
-    // before failing/timing out on render.
-    let _ = tokio::time::timeout(Duration::from_secs(15), crawler.run()).await;
+    // before failing/timing out on render. 60s is generous so the
+    // assertion below still meaningfully fires even on a CI runner
+    // sharing IO with five other test binaries.
+    let _ = tokio::time::timeout(Duration::from_secs(60), crawler.run()).await;
 
     let events = sink.take();
     let decisions: Vec<_> = events

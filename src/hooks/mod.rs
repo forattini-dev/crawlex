@@ -59,11 +59,16 @@
 //! # Ok(()) }
 //! ```
 
+pub mod bridge;
 pub mod context;
 pub mod events;
 #[cfg(feature = "lua-hooks")]
 pub mod lua;
 
+pub use bridge::{
+    event_from_wire, event_wire_name, BridgeChannel, BridgeHookAdapter, BridgeInbound,
+    BridgeOutbound, ContextPatch, WireContext, WireDecision, HOOK_BRIDGE_PROTOCOL_VERSION,
+};
 pub use context::HookContext;
 pub use events::HookEvent;
 
