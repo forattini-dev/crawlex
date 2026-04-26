@@ -2,13 +2,23 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to release (e.g. 0.1.2). Must match Cargo.toml/package.json."
+      channel:
+        description: Release channel
         required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - next
+      version:
+        description: "Optional version (e.g. 1.0.1, next: 1.0.1-next.10)"
+        required: false
 
 permissions:
   contents: read
@@ -17,52 +27,121 @@ env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   plan:
-    name: Plan
+    name: Plan release
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.plan.outputs.version }}
-      tag: ${{ steps.plan.outputs.tag }}
+      should_skip: ${{ steps.plan.outputs.should_skip }}
+      release_channel: ${{ steps.plan.outputs.release_channel }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      package_version: ${{ steps.plan.outputs.package_version }}
+      npm_tag: ${{ steps.plan.outputs.npm_tag }}
+      github_prerelease: ${{ steps.plan.outputs.github_prerelease }}
+      skip_reason: ${{ steps.plan.outputs.skip_reason }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve version
+      - name: Decide release target
         id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel || 'stable' }}
+          INPUT_VERSION: ${{ github.event.inputs.version || '' }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-            VERSION="${TAG#v}"
+
+          REF="${GITHUB_REF}"
+
+          SHOULD_SKIP=false
+          RELEASE_CHANNEL=""
+          RELEASE_TAG=""
+          PACKAGE_VERSION=""
+          NPM_TAG=""
+          IS_PRERELEASE=false
+          SKIP_REASON=""
+
+          normalize_version() {
+            local value="$1"
+            echo "${value#v}"
+          }
+
+          next_version() {
+            local base_version="$1"
+            local run_number="${RUN_NUMBER}"
+            echo "${base_version}-next.${run_number}"
+          }
+
+          if [[ "$EVENT_NAME" == "push" && "$REF" == refs/tags/v* ]]; then
+            RELEASE_CHANNEL="stable"
+            RELEASE_TAG="${REF#refs/tags/}"
+            PACKAGE_VERSION="$(normalize_version "$RELEASE_TAG")"
+            NPM_TAG="latest"
+            IS_PRERELEASE=false
+          elif [[ "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
+            if [[ "$COMMIT_MSG" =~ ^chore:\ release ]] || [[ "$COMMIT_MSG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              SHOULD_SKIP=true
+              SKIP_REASON="Version bump/release commit; skipping next."
+            else
+              BASE_VERSION=$(awk -F'"' '/^\[package\]/{p=1} p && /^version = /{print $2; exit}' Cargo.toml)
+              PACKAGE_VERSION="$(next_version "$BASE_VERSION")"
+              RELEASE_CHANNEL="next"
+              RELEASE_TAG="v${PACKAGE_VERSION}"
+              NPM_TAG="next"
+              IS_PRERELEASE=true
+              SKIP_REASON="Main branch auto next release"
+            fi
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$INPUT_CHANNEL" == "stable" ]]; then
+              if [[ -z "$INPUT_VERSION" ]]; then
+                echo "Stable channel requires version input on workflow_dispatch."
+                exit 1
+              fi
+              RELEASE_CHANNEL="stable"
+              PACKAGE_VERSION="$(normalize_version "$INPUT_VERSION")"
+              RELEASE_TAG="v${PACKAGE_VERSION}"
+              NPM_TAG="latest"
+              IS_PRERELEASE=false
+            elif [[ "$INPUT_CHANNEL" == "next" ]]; then
+              BASE_VERSION=$(awk -F'"' '/^\[package\]/{p=1} p && /^version = /{print $2; exit}' Cargo.toml)
+              if [[ -n "$INPUT_VERSION" ]]; then
+                PACKAGE_VERSION="$(normalize_version "$INPUT_VERSION")"
+              else
+                PACKAGE_VERSION="$(next_version "$BASE_VERSION")"
+              fi
+              RELEASE_CHANNEL="next"
+              RELEASE_TAG="v${PACKAGE_VERSION}"
+              NPM_TAG="next"
+              IS_PRERELEASE=true
+            else
+              echo "Unsupported channel: $INPUT_CHANNEL"
+              exit 1
+            fi
           else
-            VERSION="${{ github.event.inputs.version }}"
-            TAG="v${VERSION}"
+            SHOULD_SKIP=true
+            SKIP_REASON="Unhandled event/ref for release workflow."
           fi
 
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          CARGO_VERSION=$(awk -F'"' '/^\[package\]/{p=1} p && /^version = /{print $2; exit}' Cargo.toml)
-
-          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
-            echo "::error::package.json version ($PKG_VERSION) != release version ($VERSION)"
-            exit 1
-          fi
-          if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
-            echo "::error::Cargo.toml version ($CARGO_VERSION) != release version ($VERSION)"
-            exit 1
-          fi
-
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "should_skip=${SHOULD_SKIP}" >> "${GITHUB_OUTPUT}"
+          echo "release_channel=${RELEASE_CHANNEL}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "package_version=${PACKAGE_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "npm_tag=${NPM_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "github_prerelease=${IS_PRERELEASE}" >> "${GITHUB_OUTPUT}"
+          echo "skip_reason=${SKIP_REASON}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build ${{ matrix.asset_name }}
     needs: [plan]
+    if: needs.plan.outputs.should_skip != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,27 +149,39 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            binary_name: crawlex
             asset_name: crawlex-linux-x86_64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            binary_name: crawlex
             asset_name: crawlex-linux-aarch64
+            cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary_name: crawlex
+            asset_name: crawlex-linux-aarch64-static
             cross: true
           - os: macos-13
             target: x86_64-apple-darwin
+            binary_name: crawlex
             asset_name: crawlex-macos-x86_64
           - os: macos-14
             target: aarch64-apple-darwin
+            binary_name: crawlex
             asset_name: crawlex-macos-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            binary_name: crawlex.exe
             asset_name: crawlex-windows-x86_64.exe
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.91"
           targets: ${{ matrix.target }}
 
       - name: Setup Go
@@ -98,13 +189,13 @@ jobs:
         with:
           go-version: 'stable'
 
-      - name: Install Linux build deps
+      - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang
+          sudo apt-get install -y ninja-build clang mold
 
-      - name: Install aarch64 cross toolchain
+      - name: Install cross-compilation tools
         if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
@@ -122,17 +213,39 @@ jobs:
           shared-key: release
 
       - name: Build release binary
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         shell: bash
         run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Build release binary (musl container)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
+        run: |
+          mkdir -p "${HOME}/.cargo/registry" "${HOME}/.cargo/git"
+
+          docker run --rm \
+            -v "${PWD}:/volume" \
+            -v "${HOME}/.cargo/registry:/root/.cargo/registry" \
+            -v "${HOME}/.cargo/git:/root/.cargo/git" \
+            -w /volume \
+            messense/rust-musl-cross:aarch64-musl \
+            bash -lc '
+              apt-get update >/dev/null &&
+              apt-get install -y golang-go ninja-build >/dev/null &&
+              export BORING_BSSL_SYSROOT="${TARGET_HOME}" &&
+              cargo build --locked --release --target aarch64-unknown-linux-musl
+            '
+
+          sudo chown -R "$(id -u):$(id -g)" target/aarch64-unknown-linux-musl
 
       - name: Stage binary (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cp "target/${{ matrix.target }}/release/crawlex" "${{ matrix.asset_name }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${{ matrix.asset_name }}"
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
             aarch64-linux-gnu-strip "${{ matrix.asset_name }}" || true
-          else
+          elif [[ "${{ matrix.target }}" != "aarch64-unknown-linux-musl" ]]; then
             strip "${{ matrix.asset_name }}" || true
           fi
           shasum -a 256 "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
@@ -141,7 +254,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item "target/${{ matrix.target }}/release/crawlex.exe" "${{ matrix.asset_name }}"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${{ matrix.asset_name }}"
           $hash = (Get-FileHash "${{ matrix.asset_name }}" -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ matrix.asset_name }}" | Out-File -FilePath "${{ matrix.asset_name }}.sha256" -Encoding ascii
 
@@ -153,72 +266,173 @@ jobs:
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
 
+  prepare-release:
+    name: Prepare release artifacts
+    needs: [plan, build]
+    if: needs.plan.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect payload
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "crawlex-*" -o -name "*.sha256" \) -exec cp {} release/ \;
+          if [ -f sdk/crawlex-sdk.js ]; then
+            cp sdk/crawlex-sdk.js release/crawlex-sdk.js
+            shasum -a 256 release/crawlex-sdk.js > release/crawlex-sdk.js.sha256
+          fi
+
+          cd release
+          echo "### SHA256 Checksums" > CHECKSUMS.txt
+          for f in *.sha256; do
+            cat "$f" >> CHECKSUMS.txt
+          done
+          cd ..
+
+          ls -la release/
+
+      - name: Upload release artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: release/
+          if-no-files-found: error
+
   publish-github:
     name: Publish GitHub release
-    needs: [plan, build]
+    needs: [plan, prepare-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
+    if: needs.plan.outputs.should_skip != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download artifacts
+      - name: Download release payload
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: release-bundle
+          path: release
+          merge-multiple: true
 
-      - name: Assemble release
-        run: |
-          mkdir -p release
-          find artifacts -type f \( -name "crawlex-*" \) -exec cp {} release/ \;
-          cd release
-          : > CHECKSUMS.txt
-          for f in *.sha256; do cat "$f" >> CHECKSUMS.txt; done
-          ls -la
-
-      - name: Changelog chunk
+      - name: Render release body
         id: changelog
         run: |
-          VERSION="${{ needs.plan.outputs.version }}"
-          CHUNK=""
-          if [[ -f CHANGELOG.md ]]; then
-            CHUNK=$(awk '/^## \['"${VERSION}"'\]/,/^## \[/{if(/^## \['"${VERSION}"'\]/){next}if(/^## \[/){exit}print}' CHANGELOG.md || true)
+          VERSION_NUMBER="${{ needs.plan.outputs.package_version }}"
+          CHANNEL="${{ needs.plan.outputs.release_channel }}"
+
+          if [[ "$CHANNEL" == "next" ]]; then
+            echo "changes<<EOF" >> "$GITHUB_OUTPUT"
+            echo "# crawlex Next Release" >> "$GITHUB_OUTPUT"
+            echo "" >> "$GITHUB_OUTPUT"
+            echo "**Version**: \`${{ needs.plan.outputs.release_tag }}\`" >> "$GITHUB_OUTPUT"
+            echo "**Channel**: \`next\`" >> "$GITHUB_OUTPUT"
+            echo "" >> "$GITHUB_OUTPUT"
+            echo "Generated from commit: \`${GITHUB_SHA}\`" >> "$GITHUB_OUTPUT"
+            echo "Build: \`#${{ github.run_number }}\`" >> "$GITHUB_OUTPUT"
+            echo "" >> "$GITHUB_OUTPUT"
+            echo "## Warning" >> "$GITHUB_OUTPUT"
+            echo "This is an automated pre-release and may contain unstable changes." >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          if [[ -z "$CHUNK" ]]; then
-            PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-            if [[ -n "$PREV" ]]; then
-              CHUNK=$(git log "${PREV}..HEAD" --pretty=format:"- %s" --no-merges)
+
+          CHANGELOG_CHUNK=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_CHUNK=$(awk '/^## \['"${VERSION_NUMBER}"'\]/,/^## \[/{if(/^## \['"${VERSION_NUMBER}"'\]/){next}if(/^## \[/){exit}print}' CHANGELOG.md)
+          fi
+
+          if [ -z "$CHANGELOG_CHUNK" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              CHANGELOG_CHUNK=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges)
             else
-              CHUNK=$(git log --pretty=format:"- %s" --no-merges -20)
+              CHANGELOG_CHUNK=$(git log --pretty=format:"- %s" --no-merges -10)
             fi
           fi
-          {
-            echo "body<<EOF"
-            echo "## Changes"
-            echo ""
-            echo "$CHUNK"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+
+          if [ -z "$CHANGELOG_CHUNK" ]; then
+            CHANGELOG_CHUNK="No changes detected."
+          fi
+
+          echo "changes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "## Changes" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG_CHUNK" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Delete old next releases
+        if: needs.plan.outputs.release_channel == 'next'
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        with:
+          keep_latest: 5
+          delete_tag_pattern: ".*-next.*"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.plan.outputs.tag }}
-          name: crawlex ${{ needs.plan.outputs.tag }}
-          body: ${{ steps.changelog.outputs.body }}
+          tag_name: ${{ needs.plan.outputs.release_tag }}
+          name: crawlex ${{ needs.plan.outputs.release_tag }}
+          body: |
+            # crawlex ${{ needs.plan.outputs.release_tag }}
+
+            ${{ steps.changelog.outputs.changes }}
+
+            ## Installation
+
+            ### Via npm (recommended)
+            ```bash
+            pnpm add -g crawlex
+            # or: npm install -g crawlex
+            crawlex --version
+            ```
+
+            ### Direct binary download
+            ```bash
+            # Linux x86_64
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ needs.plan.outputs.release_tag }}/crawlex-linux-x86_64 -o crawlex
+            chmod +x crawlex
+            sudo mv crawlex /usr/local/bin/
+            ```
+
+            ### Verify installation
+            ```bash
+            crawlex --version
+            crawlex --help
+            ```
+          prerelease: ${{ needs.plan.outputs.github_prerelease }}
           files: release/*
-          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Job summary
+        run: |
+          echo "## Release published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Channel** | \`${{ needs.plan.outputs.release_channel }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Tag** | \`${{ needs.plan.outputs.release_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **NPM Tag** | \`${{ needs.plan.outputs.npm_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+
   publish-npm:
-    name: Publish npm
-    needs: [plan, publish-github]
+    name: Publish npm package
+    needs: [plan, prepare-release, publish-github]
     runs-on: ubuntu-latest
+    if: needs.plan.outputs.should_skip != 'true'
     permissions:
       contents: read
       id-token: write
@@ -226,7 +440,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -235,19 +449,56 @@ jobs:
       - name: Install pnpm
         run: corepack enable && corepack prepare pnpm@9 --activate
 
-      - name: Pack & publish
+      - name: Set package version
+        run: |
+          VERSION="${{ needs.plan.outputs.package_version }}"
+          VERSION="$VERSION" node - <<'EOF'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = process.env.VERSION;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          EOF
+
+      - name: Validate package
+        run: |
+          pnpm install --no-frozen-lockfile --ignore-scripts
+          pnpm run build
+          pnpm run pack-check
+        env:
+          CRAWLEX_SKIP_POSTINSTALL: '1'
+
+      - name: Publish package
+        run: pnpm publish --tag "${{ needs.plan.outputs.npm_tag }}" --provenance --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          CRAWLEX_SKIP_POSTINSTALL: '1'
+
+      - name: Publish signal (no registry wait)
+        env:
+          EXPECTED_VERSION: ${{ needs.plan.outputs.package_version }}
+          NPM_TAG: ${{ needs.plan.outputs.npm_tag }}
         run: |
-          pnpm install --ignore-scripts --no-frozen-lockfile
-          pnpm run build
-          pnpm publish --provenance --no-git-checks --tag latest
+          EXPECTED_VERSION_CANONICAL="${EXPECTED_VERSION%%+*}"
+          echo "NPM publish finished: crawlex@${EXPECTED_VERSION_CANONICAL} (tag: ${NPM_TAG})"
+
+      - name: Job summary
+        run: |
+          echo "## NPM published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Package** | \`crawlex\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Version** | \`${{ needs.plan.outputs.package_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Tag** | \`${{ needs.plan.outputs.npm_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
   publish-crates:
     name: Publish crates.io
     needs: [plan, publish-github]
     runs-on: ubuntu-latest
+    # crates.io is stable-channel only (no prerelease semver mismatch with
+    # the next channel's `-next.N` suffix; crates.io accepts SemVer pre-
+    # release strings, but we keep the surface clean by only shipping
+    # tagged stable releases there).
+    if: needs.plan.outputs.should_skip != 'true' && needs.plan.outputs.release_channel == 'stable'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -265,7 +516,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang
+          sudo apt-get install -y ninja-build clang mold
 
       - name: Dry-run package
         run: cargo publish --dry-run --locked
@@ -274,3 +525,12 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
+
+      - name: Job summary
+        run: |
+          echo "## crates.io published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Crate** | \`crawlex\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Version** | \`${{ needs.plan.outputs.package_version }}\` |" >> "$GITHUB_STEP_SUMMARY"

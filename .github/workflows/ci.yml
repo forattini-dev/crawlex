@@ -1,17 +1,21 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
 
 jobs:
   fmt:
+    name: Formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -21,72 +25,90 @@ jobs:
       - run: cargo fmt --all -- --check
 
   clippy:
+    name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
           components: clippy
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang mold
       - uses: Swatinem/rust-cache@v2
-      - name: clippy default features
-        run: cargo clippy --all-targets -- -D warnings
-      - name: clippy all features
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Clippy default features
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy all features
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
+    name: Test Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang mold
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
+      - run: cargo test --locked --all-features
 
   build-full:
+    name: Build crawlex (full)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang mold
       - uses: Swatinem/rust-cache@v2
-      - name: build crawlex (full, HTTP + render)
-        run: cargo build --bin crawlex --all-features
+      - name: Build crawlex (full, HTTP + render)
+        run: cargo build --locked --bin crawlex --all-features
 
   build-mini:
+    name: Build crawlex-mini (HTTP-only)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang mold
       - uses: Swatinem/rust-cache@v2
-      - name: build crawlex-mini (HTTP-only, no browser deps)
-        run: cargo build --bin crawlex-mini --no-default-features --features cli,sqlite
+      - name: Build crawlex-mini (no browser deps)
+        run: cargo build --locked --bin crawlex-mini --no-default-features --features cli,sqlite
 
   package:
     name: cargo publish dry-run
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.91"
-      - uses: Swatinem/rust-cache@v2
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang
+          sudo apt-get install -y ninja-build clang mold
+      - uses: Swatinem/rust-cache@v2
       - name: Verify Cargo.toml + package.json version match
-        run: |
-          set -euo pipefail
-          PKG=$(node -p "require('./package.json').version")
-          CARGO=$(awk -F'"' '/^\[package\]/{p=1} p && /^version = /{print $2; exit}' Cargo.toml)
-          if [[ "$PKG" != "$CARGO" ]]; then
-            echo "::error::package.json ($PKG) != Cargo.toml ($CARGO)"; exit 1
-          fi
-          echo "version=$CARGO"
+        run: node scripts/sync-version.js --check
       - name: cargo publish --dry-run
         run: cargo publish --dry-run --locked
