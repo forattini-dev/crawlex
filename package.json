@@ -52,11 +52,14 @@
   "scripts": {
     "preversion": "node scripts/sync-version.js --check",
     "version": "node scripts/sync-version.js && git add Cargo.toml Cargo.lock",
+    "postversion": "echo 'tag created. push with: git push --follow-tags'",
+    "version:sync": "node scripts/sync-version.js",
     "postinstall": "node sdk/postinstall.js",
     "build": "node --check sdk/crawlex-sdk.js",
     "test": "node --test --test-reporter=spec sdk/test/*.test.js",
     "pack-check": "pnpm pack",
-    "prepublishOnly": "node scripts/sync-version.js --check && pnpm run build && pnpm run pack-check",
-    "publish:npm": "pnpm publish --provenance --no-git-checks"
+    "prepublishOnly": "node scripts/sync-version.js --check && pnpm run build && pnpm run test && pnpm run pack-check",
+    "publish:npm": "pnpm publish --provenance --no-git-checks",
+    "publish:npm:next": "pnpm publish --tag next --provenance --no-git-checks"
   }
 }
