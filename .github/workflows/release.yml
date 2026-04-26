@@ -156,11 +156,11 @@ jobs:
             binary_name: crawlex
             asset_name: crawlex-linux-aarch64
             cross: true
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            binary_name: crawlex
-            asset_name: crawlex-linux-aarch64-static
-            cross: true
+          # NOTE: Alpine/musl support deferred. The full crawlex binary
+          # links Chromium fetcher + lua-hooks which don't cross-compile
+          # cleanly to musl. When we add it back it should build the
+          # mini binary instead (`--bin crawlex-mini`, HTTP-only); see
+          # docs/getting-started/installation.md for the rationale.
           - os: macos-13
             target: x86_64-apple-darwin
             binary_name: crawlex
