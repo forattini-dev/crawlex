@@ -1202,6 +1202,33 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
             .with_events(sink.clone())
             .with_policy_profile(policy_profile);
 
+        // JS hook bridge wiring. When `--hook-bridge stdio` is set, we
+        // construct a bridge channel + adapter, plug it into the
+        // existing `HookRegistry` (so rust + lua + js hooks all run
+        // through one fire path), and spawn a pump task that drains
+        // inbound `subscribe`/`hook_result` envelopes from the SDK.
+        if let Some(spec) = c.hook_bridge.as_deref() {
+            let channel = crate::hooks::parse_bridge_spec(spec)?;
+            let adapter = std::sync::Arc::new(crate::hooks::BridgeHookAdapter::new(channel));
+            adapter.handshake().await?;
+            let pump = adapter.clone();
+            tokio::spawn(async move {
+                loop {
+                    if let Err(e) = pump.pump_once().await {
+                        tracing::debug!(?e, "hook bridge pump stopped");
+                        break;
+                    }
+                }
+            });
+            // The crawler exposes `with_hooks(HookRegistry)` to take
+            // ownership; we want to *augment* the existing registry
+            // (which lua + crawler-internal hooks may have populated),
+            // so reach for the public mutator.
+            let registry = crate::hooks::HookRegistry::new();
+            registry.register_bridge(adapter);
+            crawler = crawler.with_hooks(registry);
+        }
+
         let mut seeds: Vec<String> = c.seed.clone();
         if let Some(path) = c.seeds_file.as_ref() {
             let content = std::fs::read_to_string(path).map_err(crate::Error::Io)?;

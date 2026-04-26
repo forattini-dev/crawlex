@@ -382,6 +382,16 @@ pub struct CrawlArgs {
 
     #[arg(long = "hook-script", action = clap::ArgAction::Append)]
     pub hook_script: Vec<String>,
+
+    /// Drive lifecycle hooks via the JS bridge protocol. Format:
+    /// `stdio` (multiplex on stdin+stdout — bridge envelopes
+    /// disambiguated from NDJSON events by their `kind` field) or
+    /// `fd:N` for an explicit file-descriptor pair (`N` reads, `N+1`
+    /// writes). Spawn convention is owned by the SDK — see
+    /// `sdk/crawlex-sdk.js::crawl({hooks})`. Off by default.
+    #[arg(long = "hook-bridge")]
+    pub hook_bridge: Option<String>,
+
     #[arg(long)]
     pub on_discovery_filter_regex: Option<String>,
 

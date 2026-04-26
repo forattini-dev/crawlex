@@ -247,7 +247,10 @@ function serializeArgs(args = {}) {
 function crawl(opts = {}) {
   const bin = opts.bin || binaryPath();
   const args = ['crawl', '--emit', 'ndjson'];
-  if (opts.config) args.push('--config', '-');
+  // `--config -` reads from stdin. Mutually exclusive with `hooks`,
+  // which uses stdin as the bridge reply channel.
+  if (opts.config && !opts.hooks) args.push('--config', '-');
+  if (opts.hooks) args.push('--hook-bridge', 'stdio');
   // top-level `seeds` is shorthand for `args.seeds`. Both spellings
   // forward into the same `--seed` repetition.
   const merged = { ...(opts.args || {}) };
@@ -264,12 +267,29 @@ function crawl(opts = {}) {
     opts.signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
   }
 
-  if (opts.config) {
+  if (opts.config && !opts.hooks) {
     child.stdin.write(JSON.stringify(opts.config));
+    child.stdin.end();
+  } else if (!opts.hooks) {
+    child.stdin.end();
   }
-  child.stdin.end();
+  // When hooks are wired we keep stdin open for the lifetime of the
+  // crawl so the bridge can write `subscribe` + `hook_result` lines.
 
   const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+
+  // Subscribe announcement is sent as soon as we see the rust `hello`
+  // envelope. Done lazily so the test pump in `define-hooks.test.js`
+  // continues to work without a real binary.
+  let helloAcked = false;
+  const writeBridge = (msg) => {
+    try {
+      child.stdin.write(JSON.stringify(msg) + '\n');
+    } catch (e) {
+      // Stdin already closed (child exited) — swallow; the iterator
+      // will surface the exit code on `done`.
+    }
+  };
 
   const exited = new Promise((resolve, reject) => {
     child.once('error', reject);
@@ -283,11 +303,44 @@ function crawl(opts = {}) {
     try {
       for await (const line of rl) {
         if (!line) continue;
-        yield parseLine(line);
+        const msg = parseLine(line);
+        // Bridge envelopes carry `kind`; NDJSON event envelopes carry
+        // `event`. Disambiguate to either route through the dispatcher
+        // or yield to the consumer.
+        if (opts.hooks && msg && msg.kind && msg.kind !== 'raw') {
+          if (!helloAcked && msg.kind === 'hello') {
+            helloAcked = true;
+            writeBridge({ kind: 'subscribe', subscribed: opts.hooks.subscribed });
+            continue;
+          }
+          if (msg.kind === 'hook_invoke') {
+            // Run the dispatcher in the background so a slow handler
+            // doesn't block reading subsequent events. Replies are
+            // strictly ordered by `id`, not by stdout arrival order.
+            opts.hooks
+              .dispatch(msg)
+              .then((reply) => {
+                if (reply) writeBridge(reply);
+              })
+              .catch((e) => {
+                writeBridge({
+                  kind: 'hook_result',
+                  id: msg.id,
+                  decision: 'abort',
+                  patch: { user_data: { hook_dispatch_error: String(e) } },
+                });
+              });
+            continue;
+          }
+        }
+        yield msg;
       }
       await exited;
     } finally {
       rl.close();
+      if (opts.hooks) {
+        try { child.stdin.end(); } catch (_) {}
+      }
       if (!child.killed) child.kill('SIGTERM');
     }
   }

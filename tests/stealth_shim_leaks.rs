@@ -76,10 +76,11 @@ fn shim_contains_raf_hidden_throttle() {
 
 #[test]
 fn shim_contains_performance_now_precision_clamp() {
-    // Leak #12 — 5 µs grain.
+    // Leak #12 — 100 µs grain (matches Chrome's non-COI default; was
+    // 5 µs in early drafts, bumped after the leak inventory landed).
     let js = rendered();
     assert!(js.contains("performance.now"));
-    assert!(js.contains("0.005"));
+    assert!(js.contains("0.1"), "expected 100 µs grain ('0.1') in shim");
     assert!(js.contains("Math.floor"));
 }
 

@@ -323,6 +323,84 @@ impl BridgeHookAdapter {
     }
 }
 
+/// Stdio-backed channel: reads inbound NDJSON envelopes from stdin
+/// (one per line), writes outbound to stdout with the same convention.
+/// Stdout is shared with the NDJSON event sink — the two streams are
+/// disambiguated on the SDK side by the discriminator field
+/// (`event` for events, `kind` for bridge envelopes), so consumers
+/// route incoming lines without a separate FD.
+///
+/// Holds an internal `Mutex<BufWriter<Stdout>>` so concurrent emits
+/// don't interleave. The reader side is owned by a single task —
+/// `recv` is `&self`-callable via a tokio `Mutex` over `BufReader`.
+pub struct StdioBridgeChannel {
+    writer: tokio::sync::Mutex<tokio::io::BufWriter<tokio::io::Stdout>>,
+    reader: tokio::sync::Mutex<tokio::io::BufReader<tokio::io::Stdin>>,
+}
+
+impl Default for StdioBridgeChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StdioBridgeChannel {
+    pub fn new() -> Self {
+        Self {
+            writer: tokio::sync::Mutex::new(tokio::io::BufWriter::new(tokio::io::stdout())),
+            reader: tokio::sync::Mutex::new(tokio::io::BufReader::new(tokio::io::stdin())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl BridgeChannel for StdioBridgeChannel {
+    async fn send(&self, msg: &BridgeOutbound) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let line =
+            serde_json::to_string(msg).map_err(|e| Error::Hook(format!("serialize: {e}")))?;
+        let mut w = self.writer.lock().await;
+        w.write_all(line.as_bytes())
+            .await
+            .map_err(|e| Error::Hook(format!("stdout write: {e}")))?;
+        w.write_all(b"\n")
+            .await
+            .map_err(|e| Error::Hook(format!("stdout newline: {e}")))?;
+        w.flush()
+            .await
+            .map_err(|e| Error::Hook(format!("stdout flush: {e}")))?;
+        Ok(())
+    }
+
+    async fn recv(&self) -> Result<BridgeInbound> {
+        use tokio::io::AsyncBufReadExt;
+        let mut buf = String::new();
+        let mut r = self.reader.lock().await;
+        let n = r
+            .read_line(&mut buf)
+            .await
+            .map_err(|e| Error::Hook(format!("stdin read: {e}")))?;
+        if n == 0 {
+            return Err(Error::Hook("stdin closed (EOF)".into()));
+        }
+        serde_json::from_str(buf.trim())
+            .map_err(|e| Error::Hook(format!("stdin parse: {e} (line={buf:?})")))
+    }
+}
+
+/// Parse a `--hook-bridge` CLI value into a typed channel selector.
+/// `"stdio"` is the only currently supported form; future shapes
+/// (`"fd:3"`, `"unix:/path"`) plug in here without touching the
+/// adapter.
+pub fn parse_bridge_spec(spec: &str) -> Result<Arc<dyn BridgeChannel>> {
+    match spec.trim() {
+        "stdio" => Ok(Arc::new(StdioBridgeChannel::new())),
+        other => Err(Error::Hook(format!(
+            "unsupported --hook-bridge spec: {other:?} (expected `stdio`)"
+        ))),
+    }
+}
+
 /// Convert a wire event name back to the typed enum. Returns `None`
 /// for unknown names so the SDK can subscribe to events the rust side
 /// hasn't shipped yet without a hard error.

@@ -66,8 +66,9 @@ pub mod events;
 pub mod lua;
 
 pub use bridge::{
-    event_from_wire, event_wire_name, BridgeChannel, BridgeHookAdapter, BridgeInbound,
-    BridgeOutbound, ContextPatch, WireContext, WireDecision, HOOK_BRIDGE_PROTOCOL_VERSION,
+    event_from_wire, event_wire_name, parse_bridge_spec, BridgeChannel, BridgeHookAdapter,
+    BridgeInbound, BridgeOutbound, ContextPatch, StdioBridgeChannel, WireContext, WireDecision,
+    HOOK_BRIDGE_PROTOCOL_VERSION,
 };
 pub use context::HookContext;
 pub use events::HookEvent;
@@ -141,6 +142,38 @@ impl HookRegistry {
             + 'static,
     {
         self.on(event, Arc::new(f));
+    }
+
+    /// Plug a [`BridgeHookAdapter`] into every lifecycle event. The
+    /// crawler dispatches all 12 hooks through the bridge; events the
+    /// SDK didn't subscribe to short-circuit inside the adapter and
+    /// pay no IPC RTT. `Arc` so the same adapter can also drive the
+    /// pump task in the caller's runtime.
+    pub fn register_bridge(&self, adapter: Arc<bridge::BridgeHookAdapter>) {
+        use HookEvent::*;
+        for event in [
+            BeforeEachRequest,
+            AfterDnsResolve,
+            AfterTlsHandshake,
+            AfterFirstByte,
+            OnResponseBody,
+            AfterLoad,
+            AfterIdle,
+            OnDiscovery,
+            OnJobStart,
+            OnJobEnd,
+            OnError,
+            OnRobotsDecision,
+        ] {
+            let adapter = adapter.clone();
+            self.on(
+                event,
+                Arc::new(move |ctx| {
+                    let adapter = adapter.clone();
+                    Box::pin(async move { adapter.invoke(event, ctx).await })
+                }),
+            );
+        }
     }
 
     /// Run every registered hook for `event`. Iterates in registration

@@ -382,7 +382,12 @@ export interface CrawlOptions {
    * repeated `--seed` flags.
    */
   seeds?: string[];
-  /** Full crawlex config — serialized to JSON and piped on stdin. */
+  /**
+   * Full crawlex config — serialized to JSON and piped on stdin.
+   * **Mutually exclusive with `hooks`** (the bridge protocol uses
+   * stdin as the reply channel). Pass config flags via `args` instead
+   * when wiring hooks.
+   */
   config?: Record<string, unknown>;
   /**
    * Structured CLI args. Auto-converted to flags via camelCase →
@@ -395,6 +400,14 @@ export interface CrawlOptions {
    * args.
    */
   rawArgs?: string[];
+  /**
+   * JS hook spec built via [`defineHooks`]. When set, the SDK adds
+   * `--hook-bridge stdio` to the child invocation and routes inbound
+   * bridge envelopes through the dispatcher. The crawler yields
+   * NDJSON events for the consumer; hook traffic is consumed
+   * internally and never surfaces on the iterator.
+   */
+  hooks?: HookSpec;
   /** Override the resolved binary path. */
   bin?: string;
   /** Cancel the run. SIGTERM is sent to the child. */
