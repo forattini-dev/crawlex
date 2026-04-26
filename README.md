@@ -108,6 +108,38 @@ identity bundles, render pool tuning).
 
 Last validated: see [`production-validation/summary.md`](production-validation/summary.md).
 
+### Personas (mobile vs desktop)
+
+Five named personas ship in the catalog, each one a coherent bundle of UA
++ Sec-CH-UA + screen + viewport + DPR + GPU + fonts + media-device counts +
+TLS fingerprint:
+
+| Codename | OS | GPU | Locale | Form factor |
+|---|---|---|---|---|
+| `tux` | Linux | Intel UHD 630 | en-US | desktop 1920×1080 |
+| `office` | Windows 10 | Intel UHD 620 | en-US | laptop 1920×1080 (DPR 1.25) |
+| `gamer` | Windows 10 | NVIDIA GTX 1060 | pt-BR | desktop 1920×1080 |
+| `atlas` | macOS | Apple M1 | en-US | retina 1440×900 (DPR 2.0) |
+| `pixel` | Android 14 | Adreno 640 | pt-BR | **mobile** 412×823 (DPR 2.625) |
+
+Pick via CLI:
+
+```bash
+# Mobile Pixel-class persona (touch viewport, mobile UA, sec-ch-ua-mobile: ?1)
+crawlex pages run --seed https://example.com \
+  --method render --persona pixel
+
+# macOS Apple M1 (Retina DPR 2.0, en-US)
+crawlex pages run --seed https://example.com \
+  --method render --persona atlas
+
+# Windows NVIDIA gaming desktop (pt-BR)
+crawlex pages run --seed https://example.com --persona gamer
+```
+
+The legacy `--identity-preset <N>` numeric form still works, but the codename
+is recommended — it stays stable even if catalog ordering shifts.
+
 ### Browser fingerprint catalog
 
 `crawlex` ships a TLS fingerprint catalog covering the **last 30 Chrome

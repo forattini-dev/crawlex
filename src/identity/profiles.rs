@@ -67,6 +67,13 @@ impl PersonaGpu {
 /// Single coherent persona row.
 #[derive(Debug, Clone)]
 pub struct PersonaProfile {
+    /// Short codename usable on the CLI (`--persona tux`) and in
+    /// configuration files. Stable across releases — renaming a persona
+    /// breaks downstream automation.
+    pub name: &'static str,
+    /// One-line human description shown by `crawlex stealth catalog list`
+    /// and similar discovery surfaces.
+    pub description: &'static str,
     pub os: PersonaOs,
     pub platform: &'static str,    // navigator.platform
     pub ua_platform: &'static str, // Sec-CH-UA-Platform (bare, no quotes)
@@ -149,6 +156,22 @@ pub fn first_for(os: PersonaOs) -> Option<&'static PersonaProfile> {
     PERSONA_CATALOG.iter().find(|p| p.os == os)
 }
 
+/// Resolve a persona by its short name (`tux`, `office`, `gamer`, `atlas`,
+/// `pixel`). Case-insensitive. Used by `--persona <name>` on the CLI and
+/// by config-file consumers.
+pub fn lookup_by_name(name: &str) -> Option<&'static PersonaProfile> {
+    let lower = name.to_ascii_lowercase();
+    PERSONA_CATALOG.iter().find(|p| p.name == lower)
+}
+
+/// Stable codenames as a flat list. The order matches `catalog()` indices,
+/// so `name_for_index(idx)` gives the same string as
+/// `catalog()[idx].name`. Useful for surfacing every persona in
+/// `--help` output without iterating the full catalog struct.
+pub fn names() -> &'static [&'static str] {
+    &["tux", "office", "gamer", "atlas", "pixel"]
+}
+
 // Linux fonts: Liberation/DejaVu/Noto cluster — what every mainstream
 // distro ships. Windows core set: Arial/Segoe UI/Calibri. macOS: Helvetica
 // Neue / SF Pro / Menlo. Mobile Android: Roboto / Noto Sans.
@@ -162,6 +185,8 @@ const PERSONA_CATALOG: [PersonaProfile; 5] = [
     // historical IdentityBundle::from_chromium output so existing fixtures
     // don't shift.
     PersonaProfile {
+        name: "tux",
+        description: "Linux desktop, Intel UHD 630, en-US, America/Sao_Paulo",
         os: PersonaOs::Linux,
         platform: "Linux x86_64",
         ua_platform: "Linux",
@@ -200,6 +225,8 @@ const PERSONA_CATALOG: [PersonaProfile; 5] = [
     },
     // Row 1: Windows 10 en-US / Intel UHD 620 laptop.
     PersonaProfile {
+        name: "office",
+        description: "Windows 10 laptop, Intel UHD 620, en-US, America/New_York",
         os: PersonaOs::Windows,
         platform: "Win32",
         ua_platform: "Windows",
@@ -238,6 +265,8 @@ const PERSONA_CATALOG: [PersonaProfile; 5] = [
     },
     // Row 2: Windows 10 pt-BR / NVIDIA GTX 1060 desktop.
     PersonaProfile {
+        name: "gamer",
+        description: "Windows 10 desktop, NVIDIA GTX 1060, pt-BR, America/Sao_Paulo",
         os: PersonaOs::Windows,
         platform: "Win32",
         ua_platform: "Windows",
@@ -276,6 +305,8 @@ const PERSONA_CATALOG: [PersonaProfile; 5] = [
     },
     // Row 3: macOS en-US / Apple M1 laptop.
     PersonaProfile {
+        name: "atlas",
+        description: "macOS laptop, Apple M1 (8-core), en-US, America/Los_Angeles",
         os: PersonaOs::MacOs,
         platform: "MacIntel",
         ua_platform: "macOS",
@@ -313,6 +344,8 @@ const PERSONA_CATALOG: [PersonaProfile; 5] = [
     // Row 4: Android pt-BR / Adreno mobile. The bundle builder projects
     // this row as a mobile UA and emits `sec-ch-ua-mobile: ?1`.
     PersonaProfile {
+        name: "pixel",
+        description: "Android mobile (Pixel-class), Adreno 640, pt-BR, America/Sao_Paulo",
         os: PersonaOs::AndroidMobile,
         platform: "Linux armv8l",
         ua_platform: "Android",
@@ -356,6 +389,52 @@ mod tests {
     #[test]
     fn catalog_has_five_rows() {
         assert_eq!(catalog().len(), 5);
+    }
+
+    #[test]
+    fn every_persona_has_unique_name() {
+        let names: Vec<&str> = catalog().iter().map(|p| p.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            names.len(),
+            sorted.len(),
+            "duplicate persona name in catalog: {names:?}"
+        );
+        // Non-empty + lowercase + no whitespace (CLI-friendly).
+        for n in &names {
+            assert!(!n.is_empty(), "empty persona name");
+            assert!(
+                n.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "persona name `{n}` should be lowercase ASCII (with optional dashes)"
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_by_name_is_case_insensitive() {
+        assert!(lookup_by_name("tux").is_some());
+        assert!(lookup_by_name("TUX").is_some());
+        assert!(lookup_by_name("Tux").is_some());
+        assert!(lookup_by_name("nonexistent").is_none());
+    }
+
+    #[test]
+    fn names_constant_matches_catalog_order() {
+        let cat_names: Vec<&str> = catalog().iter().map(|p| p.name).collect();
+        assert_eq!(cat_names, names());
+    }
+
+    #[test]
+    fn pixel_persona_is_the_only_mobile() {
+        let mobile_count = catalog()
+            .iter()
+            .filter(|p| p.os == PersonaOs::AndroidMobile)
+            .count();
+        assert_eq!(mobile_count, 1);
+        let pixel = lookup_by_name("pixel").expect("pixel persona present");
+        assert_eq!(pixel.os, PersonaOs::AndroidMobile);
     }
 
     #[test]

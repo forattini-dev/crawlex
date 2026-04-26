@@ -388,9 +388,20 @@ pub struct CrawlArgs {
     /// Pick a persona from `identity::profiles::catalog()` (0-indexed).
     /// When set, overrides the historical Linux/Intel default and wires
     /// `IdentityBundle::from_persona(catalog()[N], …)` into the render
-    /// pool. Run `crawlex stealth inspect` to see valid indices.
+    /// pool. Prefer `--persona <name>` for legibility — this remains for
+    /// existing scripts that pass numeric indices.
     #[arg(long)]
     pub identity_preset: Option<u8>,
+
+    /// Pick a persona by codename (`tux`, `office`, `gamer`, `atlas`,
+    /// `pixel`). Resolves to the same row as `--identity-preset N` but
+    /// tracks the row even if catalog ordering shifts.
+    /// `tux` = Linux Intel desktop, `office` = Win10 Intel laptop,
+    /// `gamer` = Win10 NVIDIA desktop, `atlas` = macOS Apple M1,
+    /// `pixel` = Android mobile (Adreno). Run `crawlex stealth catalog list`
+    /// to see all rows. Mutually exclusive with `--identity-preset`.
+    #[arg(long, conflicts_with = "identity_preset")]
+    pub persona: Option<String>,
 
     /// Only follow URLs classified as page/document/api; other assets are
     /// stored but not enqueued. Set --follow-all-assets to disable.

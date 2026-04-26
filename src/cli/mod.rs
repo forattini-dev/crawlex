@@ -1687,6 +1687,31 @@ fn detect_chrome_profile(chrome_path: Option<&str>) -> Option<Profile> {
     None
 }
 
+/// Resolve the catalog persona index from CLI flags. `--persona <name>`
+/// wins over `--identity-preset <N>` when both are set (clap also enforces
+/// mutual exclusion, so this is just defence-in-depth). Returns `Ok(None)`
+/// when neither flag is present so the renderer falls back to its built-in
+/// default.
+fn resolve_persona_preset(
+    persona: Option<&str>,
+    identity_preset: Option<u8>,
+) -> Result<Option<u8>> {
+    if let Some(name) = persona {
+        let cat = crate::identity::profiles::catalog();
+        let idx = cat
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| {
+                let available = crate::identity::profiles::names().join(", ");
+                crate::Error::Config(format!(
+                    "unknown --persona `{name}`; available: {available}"
+                ))
+            })?;
+        return Ok(Some(idx as u8));
+    }
+    Ok(identity_preset)
+}
+
 fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
     // CLI → env wiring for the render-side timeout / lifecycle gates.
     // The values are read once via `OnceLock` inside the chrome handler
@@ -1797,7 +1822,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         // default None keeps the existing frontier behaviour.
         target_domain: None,
         infra_intel: crate::config::InfraIntelConfig::default(),
-        identity_preset: c.identity_preset,
+        identity_preset: resolve_persona_preset(c.persona.as_deref(), c.identity_preset)?,
         respect_robots_txt: c.respect_robots_txt.unwrap_or(true),
         user_agent_profile: profile,
         chrome_path: c.chrome_path.clone(),

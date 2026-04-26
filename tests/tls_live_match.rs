@@ -32,8 +32,7 @@ async fn fetch_peet_response(profile: Profile) -> Result<serde_json::Value, Stri
         ImpersonateClient::new(profile).map_err(|e| format!("ImpersonateClient::new: {e}"))?;
     let url = Url::parse(PEET_WS_URL).map_err(|e| format!("parse url: {e}"))?;
     let resp = client.get(&url).await.map_err(|e| format!("get: {e}"))?;
-    serde_json::from_slice::<serde_json::Value>(&resp.body)
-        .map_err(|e| format!("parse json: {e}"))
+    serde_json::from_slice::<serde_json::Value>(&resp.body).map_err(|e| format!("parse json: {e}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

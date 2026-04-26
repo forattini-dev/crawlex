@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Named personas
+
+- 5 catalog rows now carry stable codenames usable on the CLI:
+  - **`tux`** — Linux desktop, Intel UHD 630, en-US, America/Sao_Paulo
+  - **`office`** — Windows 10 laptop, Intel UHD 620, en-US, America/New_York
+  - **`gamer`** — Windows 10 desktop, NVIDIA GTX 1060, pt-BR, America/Sao_Paulo
+  - **`atlas`** — macOS laptop, Apple M1, en-US, America/Los_Angeles
+  - **`pixel`** — Android mobile (Pixel-class), Adreno 640, pt-BR, America/Sao_Paulo
+- New CLI flag `--persona <name>` (mutually exclusive with the
+  existing `--identity-preset <N>` numeric form). Prefer the codename
+  for legibility — it stays correct even if catalog ordering shifts.
+- `crate::identity::profiles::lookup_by_name()` and `names()` for
+  programmatic access. Catalog rows expose `name` + `description`
+  fields surfaced by `crawlex stealth catalog list`.
+
 ### Added — In-house reCAPTCHA v3 Invisible Solver
 
 - **`src/antibot/recaptcha/`** (~1.4k LOC, 7 modules) — server-side
