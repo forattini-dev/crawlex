@@ -1,6 +1,6 @@
 {
   "name": "crawlex",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Stealth crawler with Chrome-perfect TLS/H2 fingerprint, render pool, hooks, persistent queue",
   "type": "commonjs",
   "main": "./sdk/crawlex-sdk.js",
