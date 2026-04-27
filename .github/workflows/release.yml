@@ -481,7 +481,7 @@ jobs:
           CRAWLEX_SKIP_POSTINSTALL: '1'
 
       - name: Publish package
-        run: pnpm publish --tag "${{ needs.plan.outputs.npm_tag }}" --provenance --no-git-checks
+        run: npm publish --tag "${{ needs.plan.outputs.npm_tag }}" --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

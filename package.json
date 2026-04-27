@@ -6,8 +6,8 @@
   "main": "./sdk/crawlex-sdk.js",
   "types": "./sdk/index.d.ts",
   "bin": {
-    "crawlex": "./sdk/crawlex-sdk.js",
-    "cx": "./sdk/crawlex-sdk.js"
+    "crawlex": "sdk/crawlex-sdk.js",
+    "cx": "sdk/crawlex-sdk.js"
   },
   "exports": {
     ".": {
@@ -27,8 +27,7 @@
   },
   "packageManager": "pnpm@9.15.0",
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -60,7 +59,9 @@
     "test": "node --test --test-reporter=spec sdk/test/*.test.js",
     "pack-check": "pnpm pack",
     "prepublishOnly": "node scripts/sync-version.js --check && pnpm run build && pnpm run test && pnpm run pack-check",
-    "publish:npm": "pnpm publish --provenance --no-git-checks",
-    "publish:npm:next": "pnpm publish --tag next --provenance --no-git-checks"
+    "publish:npm": "npm publish --access public --provenance=false",
+    "publish:npm:next": "npm publish --tag next --access public --provenance=false",
+    "publish:npm:ci": "npm publish --access public --provenance",
+    "publish:npm:next:ci": "npm publish --tag next --access public --provenance"
   }
 }
