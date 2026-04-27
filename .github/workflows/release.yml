@@ -471,6 +471,7 @@ jobs:
           pkg.version = process.env.VERSION;
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           EOF
+          node scripts/sync-version.js
 
       - name: Validate package
         run: |
