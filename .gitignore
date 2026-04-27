@@ -1,3 +1,7 @@
 /target
 .claude/
 **/*.rs.bk
+PLAN.md
+skills-lock.json
+.dispatch/
+.agents/
