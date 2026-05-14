@@ -723,3 +723,79 @@ export declare class Request {
   readonly method: string;
   readonly sessionId?: string;
 }
+
+// ─── Spider DSL (slice 17) ────────────────────────────────────────────
+
+/** Response shape passed into `parse` by the JS spider runner. */
+export interface SpiderResponse {
+  request: { url: string; method: string; sessionId?: string };
+  finalUrl: string;
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: Buffer;
+}
+
+/** What `parse` yields. Items are arbitrary plain objects; new requests
+ *  must be `Request` instances so the runner can dedupe by method+URL. */
+export type ParseYield = Request | Record<string, unknown> | null | undefined;
+
+export interface SpiderSpec {
+  /** Seed URLs. Required, must be non-empty. */
+  startUrls: string[];
+  /** Sync/async generator (or any iterable) that yields items and `Request`s. */
+  parse: (resp: SpiderResponse) =>
+    | Iterable<ParseYield>
+    | AsyncIterable<ParseYield>
+    | ParseYield;
+  /** Per-host minimum gap between fetches, in milliseconds. */
+  downloadDelayMs?: number;
+  /** Honour `Disallow` + `Crawl-delay` against `opts.robotsCache`. */
+  robotsTxtObey?: boolean;
+  /** UA string used in robots evaluation and the default fetcher. */
+  userAgent?: string;
+  /** Stop after N items emitted. */
+  maxItems?: number;
+}
+
+export interface SpiderDef extends Required<Omit<SpiderSpec, 'maxItems' | 'userAgent' | 'downloadDelayMs' | 'robotsTxtObey'>> {
+  startUrls: string[];
+  parse: SpiderSpec['parse'];
+  downloadDelayMs: number;
+  robotsTxtObey: boolean;
+  userAgent: string;
+  maxItems: number | null;
+}
+
+/** Persistable runner state. Field naming mirrors the Rust `Checkpoint`
+ *  struct (snake_case) so a JS-paused run can be resumed in Rust. */
+export interface SpiderCheckpoint {
+  pending: Array<{ url: string; method: string; session_id?: string }>;
+  seen: string[];
+  items_emitted: number;
+}
+
+export interface RunSpiderOptions {
+  /** Override the default node:http(s) fetcher. */
+  fetcher?: (req: { url: string; method: string; sessionId?: string; userAgent?: string }) =>
+    Promise<SpiderResponse>;
+  /** Map<host, robots.txt body>. Required when `robotsTxtObey` is true. */
+  robotsCache?: Map<string, string>;
+  /** Abort the run (Ctrl-C). Returned handle's `checkpoint()` captures
+   *  the frontier at the pause point. */
+  signal?: AbortSignal;
+  /** Resume from a previously captured [`SpiderCheckpoint`]. */
+  resume?: SpiderCheckpoint;
+}
+
+/** Async iterable of items yielded by `parse`. Call `checkpoint()` after
+ *  the loop terminates to snapshot the frontier for a resumable pause. */
+export interface SpiderHandle extends AsyncIterableIterator<Record<string, unknown>> {
+  checkpoint(): SpiderCheckpoint;
+  isPaused(): boolean;
+}
+
+/** Validate + freeze a spider spec. */
+export function defineSpider(spec: SpiderSpec): SpiderDef;
+
+/** Drive a defined spider. */
+export function runSpider(spider: SpiderDef, opts?: RunSpiderOptions): SpiderHandle;

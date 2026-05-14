@@ -597,6 +597,233 @@ class Request {
   }
 }
 
+// --- v2 scraping framework: defineSpider / runSpider (slice 17) ------
+// Pure JS spider runtime: the Rust `SpiderRunner` is the production
+// driver, but a self-contained JS implementation is shipped here so
+// recipes can run end-to-end against a Node http(s) fetcher today.
+// Both share the same Checkpoint wire shape (see `src/scraping/spider.rs`)
+// so a JS run can pause and resume in Rust (or vice versa) once the
+// engine binding lands.
+
+function defineSpider(spec = {}) {
+  if (!spec || typeof spec !== 'object') {
+    throw new TypeError('defineSpider: spec must be an object');
+  }
+  if (!Array.isArray(spec.startUrls) || spec.startUrls.length === 0) {
+    throw new TypeError('defineSpider: startUrls must be a non-empty array');
+  }
+  if (typeof spec.parse !== 'function') {
+    throw new TypeError('defineSpider: parse must be a function');
+  }
+  return {
+    startUrls: spec.startUrls.slice(),
+    parse: spec.parse,
+    downloadDelayMs: Number(spec.downloadDelayMs) || 0,
+    robotsTxtObey: Boolean(spec.robotsTxtObey),
+    userAgent: typeof spec.userAgent === 'string' ? spec.userAgent : 'crawlex',
+    maxItems: Number.isInteger(spec.maxItems) && spec.maxItems > 0 ? spec.maxItems : null,
+  };
+}
+
+function reqKey(r) {
+  return `${r.method || 'GET'} ${r.url}`;
+}
+
+function hostOf(url) {
+  try { return new URL(url).host; } catch (_) { return ''; }
+}
+
+// Minimal robots.txt evaluator — Disallow + optional Crawl-delay only.
+// Honours UA-specific blocks falling back to `*`. Anything beyond what
+// slice 17 promises (no Allow precedence, no path globs beyond simple
+// prefix) is intentionally deferred to the Rust dispatcher.
+function evaluateRobots(body, userAgent, urlPath) {
+  if (!body) return { allowed: true, crawlDelayMs: 0 };
+  const uaLc = userAgent.toLowerCase();
+  let currentUAs = [];
+  let bestSpecificity = -1; // -1 none, 0 wildcard, 1 exact
+  let allowed = true;
+  let crawlDelayMs = 0;
+  let activeBlock = false;
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) {
+      currentUAs = [];
+      continue;
+    }
+    const m = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim();
+    if (key === 'user-agent') {
+      currentUAs.push(val.toLowerCase());
+      const spec = currentUAs.includes(uaLc) ? 1 : currentUAs.includes('*') ? 0 : -1;
+      activeBlock = spec >= bestSpecificity;
+      if (spec > bestSpecificity) {
+        bestSpecificity = spec;
+        allowed = true;
+        crawlDelayMs = 0;
+      }
+      continue;
+    }
+    if (!activeBlock) continue;
+    if (key === 'disallow') {
+      if (val && urlPath.startsWith(val)) allowed = false;
+    } else if (key === 'crawl-delay') {
+      const n = Number(val);
+      if (Number.isFinite(n)) crawlDelayMs = Math.max(crawlDelayMs, Math.round(n * 1000));
+    }
+  }
+  return { allowed, crawlDelayMs };
+}
+
+function sleep(ms) {
+  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
+async function defaultFetcher(req) {
+  const http = require('node:http');
+  const https = require('node:https');
+  const url = new URL(req.url);
+  const mod = url.protocol === 'https:' ? https : http;
+  return await new Promise((resolve, reject) => {
+    const r = mod.request(
+      {
+        method: req.method || 'GET',
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname + url.search,
+        headers: { 'user-agent': req.userAgent || 'crawlex' },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            request: req,
+            finalUrl: req.url,
+            status: res.statusCode || 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          });
+        });
+      },
+    );
+    r.on('error', reject);
+    r.end();
+  });
+}
+
+/**
+ * Drive a spider built by [`defineSpider`]. Async generator yielding
+ * each emitted item. Honours `AbortSignal` (Ctrl-C path) and returns a
+ * resumable checkpoint via `handle.checkpoint()` (call after `for await`
+ * loop exits).
+ */
+function runSpider(spider, opts = {}) {
+  const fetcher = opts.fetcher || defaultFetcher;
+  const robotsCache = opts.robotsCache || new Map(); // host -> body
+  const signal = opts.signal;
+
+  const seen = new Set();
+  const pending = [];
+  const lastFetchPerHost = new Map();
+  let itemsEmitted = 0;
+  let paused = false;
+
+  // Seed: resume from checkpoint or from start URLs.
+  if (opts.resume) {
+    itemsEmitted = opts.resume.items_emitted || 0;
+    for (const s of opts.resume.seen || []) seen.add(s);
+    for (const cr of opts.resume.pending || []) {
+      pending.push({ url: cr.url, method: cr.method || 'GET', sessionId: cr.session_id });
+    }
+  } else {
+    for (const u of spider.startUrls) {
+      const r = { url: u, method: 'GET' };
+      if (seen.has(reqKey(r))) continue;
+      seen.add(reqKey(r));
+      pending.push(r);
+    }
+  }
+
+  function snapshot() {
+    return {
+      pending: pending.map((r) => ({ url: r.url, method: r.method, session_id: r.sessionId })),
+      seen: Array.from(seen),
+      items_emitted: itemsEmitted,
+    };
+  }
+
+  async function* iterate() {
+    while (pending.length > 0) {
+      if (signal && signal.aborted) { paused = true; break; }
+      if (spider.maxItems && itemsEmitted >= spider.maxItems) { paused = true; break; }
+      const req = pending.shift();
+
+      // Robots gate.
+      if (spider.robotsTxtObey) {
+        const host = hostOf(req.url);
+        const body = robotsCache.get(host);
+        if (body) {
+          const path = (() => { try { const u = new URL(req.url); return u.pathname + u.search; } catch { return '/'; } })();
+          const { allowed, crawlDelayMs } = evaluateRobots(body, spider.userAgent, path);
+          if (!allowed) continue;
+          if (crawlDelayMs > 0) {
+            const last = lastFetchPerHost.get(host);
+            const delta = last ? Date.now() - last : Infinity;
+            const wait = Math.max(0, crawlDelayMs - delta);
+            await sleep(wait);
+          }
+        }
+      }
+
+      // Per-domain throttle.
+      if (spider.downloadDelayMs > 0) {
+        const host = hostOf(req.url);
+        const last = lastFetchPerHost.get(host);
+        if (last !== undefined) {
+          const delta = Date.now() - last;
+          await sleep(Math.max(0, spider.downloadDelayMs - delta));
+        }
+        lastFetchPerHost.set(host, Date.now());
+      } else {
+        lastFetchPerHost.set(hostOf(req.url), Date.now());
+      }
+
+      let resp;
+      try {
+        resp = await fetcher({ ...req, userAgent: spider.userAgent });
+      } catch (_) {
+        continue;
+      }
+
+      const yields = spider.parse(resp);
+      const asyncIter = yields && typeof yields[Symbol.asyncIterator] === 'function'
+        ? yields
+        : (yields && typeof yields[Symbol.iterator] === 'function' ? yields : [yields]);
+      for await (const y of asyncIter) {
+        if (y == null) continue;
+        if (y instanceof Request) {
+          const key = reqKey(y);
+          if (!seen.has(key)) {
+            seen.add(key);
+            pending.push({ url: y.url, method: y.method, sessionId: y.sessionId });
+          }
+        } else {
+          itemsEmitted += 1;
+          yield y;
+        }
+      }
+    }
+  }
+
+  const handle = iterate();
+  handle.checkpoint = snapshot;
+  handle.isPaused = () => paused;
+  return handle;
+}
+
 module.exports = {
   crawl,
   crawlAll,
@@ -609,6 +836,8 @@ module.exports = {
   defineHooks,
   HOOK_EVENTS,
   Request,
+  defineSpider,
+  runSpider,
   version: SDK_VERSION,
 };
 
