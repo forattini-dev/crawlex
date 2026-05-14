@@ -128,6 +128,7 @@
 | `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
 | `render_mode` | Operator-level switch: `"auto"` (impersonate first, escalate via policy), `"always"` (force render path, bumps `max_concurrent_render` to ≥1), `"never"` (pin to impersonate, refuse render escalation, never instantiate the render pool). Wins over `--method`. | `"auto"` |
 | `reject_resource_types` | Typed CDP reject list: `image`, `media`, `font`, `stylesheet`. Auto-disabled (with a warn-level log) when the job requests a screenshot. | `[]` |
+| `crawl_purposes` | Declared crawl purposes for the Content-Signal robots.txt extension. Subset of `search`, `ai-input`, `ai-train`. A host whose Content-Signal denies every declared purpose aborts on the first job with `Error::ContentSignalDenied` and a `decision.made why="content-signal:fully-denied"` event. | `["search", "ai-input", "ai-train"]` |
 
 ## Resource-type blocking
 
@@ -146,6 +147,19 @@ so you can swap from one to the other without changing observable bandwidth.
 
 CLI: `--reject-resource-type image --reject-resource-type media` (repeatable, or
 comma-separated: `--reject-resource-type image,media`).
+
+## Content-Signal robots.txt
+
+Operators declare why they're crawling via `crawl_purposes`. The robots.txt
+parser additionally honors the Cloudflare-pushed `Content-Signal:` per-agent
+directive (e.g. `Content-Signal: search=yes, ai-input=yes, ai-train=no`). When
+a host's directive denies every declared purpose, the first job to that host
+fails fast with `Error::ContentSignalDenied` and emits
+`decision.made why="content-signal:fully-denied"` so the run log carries the
+audit trail. Declared purposes are also echoed on `run.started`.
+
+CLI: `--crawl-purpose search --crawl-purpose ai-input` (repeatable, or
+`--crawl-purpose search,ai-input`).
 
 ## Include / exclude patterns
 

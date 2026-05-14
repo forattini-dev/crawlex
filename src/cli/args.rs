@@ -395,6 +395,13 @@ pub struct CrawlArgs {
     #[arg(long = "reject-resource-type", action = clap::ArgAction::Append)]
     pub reject_resource_type: Vec<String>,
 
+    /// Declared crawl purpose, honored against the `Content-Signal:`
+    /// directive in each host's robots.txt. Repeatable. Accepted values:
+    /// `search`, `ai-input`, `ai-train`. Comma-separated shorthand also
+    /// accepted. Empty (default) means all three.
+    #[arg(long = "crawl-purpose", action = clap::ArgAction::Append)]
+    pub crawl_purpose: Vec<String>,
+
     #[arg(long)]
     pub queue: Option<String>,
     #[arg(long)]

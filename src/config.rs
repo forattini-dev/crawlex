@@ -34,6 +34,13 @@ pub struct Config {
     #[serde(default)]
     pub identity_preset: Option<u8>,
     pub respect_robots_txt: bool,
+    /// Purposes the operator declares for this crawl. Honored against the
+    /// `Content-Signal:` directive in each host's robots.txt (Cloudflare
+    /// extension). Default is the full set; a site whose Content-Signal
+    /// denies every declared purpose aborts the run for that host before
+    /// any non-robots fetch occurs.
+    #[serde(default = "default_crawl_purposes")]
+    pub crawl_purposes: Vec<crate::robots::Purpose>,
     pub user_agent_profile: Profile,
     pub chrome_path: Option<String>,
     pub chrome_flags: Vec<String>,
@@ -684,6 +691,10 @@ impl Default for InfraIntelConfig {
     }
 }
 
+fn default_crawl_purposes() -> Vec<crate::robots::Purpose> {
+    crate::robots::Purpose::all().to_vec()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -696,6 +707,7 @@ impl Default for Config {
             infra_intel: InfraIntelConfig::default(),
             identity_preset: None,
             respect_robots_txt: true,
+            crawl_purposes: default_crawl_purposes(),
             user_agent_profile: Profile::Chrome131Stable,
             chrome_path: None,
             chrome_flags: Vec::new(),
@@ -850,6 +862,10 @@ impl ConfigBuilder {
     }
     pub fn respect_robots_txt(mut self, v: bool) -> Self {
         self.inner.respect_robots_txt = v;
+        self
+    }
+    pub fn crawl_purposes(mut self, p: Vec<crate::robots::Purpose>) -> Self {
+        self.inner.crawl_purposes = p;
         self
     }
     pub fn user_agent_profile(mut self, p: Profile) -> Self {
