@@ -69,6 +69,34 @@ pub enum Command {
     /// into an equivalent crawlex config (TOML/JSON) or Node SDK snippet.
     /// Slice 21.
     FromCurl(FromCurlArgs),
+    /// Interactive REPL for ad-hoc scraping. Drops into a prompt where
+    /// `.fetch <url>`, `.css <sel>`, `.xpath <expr>`, `.findByText <text>`,
+    /// `.findByRegex <pattern>`, `.save <id>`, `.open`, `.help`, `.exit`
+    /// drive the session. State persists across commands within the
+    /// session; readline history persists across sessions. Slice 22.
+    Shell(ShellArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ShellArgs {
+    /// Use the stealth (full ImpersonateClient + persona) backend on
+    /// every `.fetch`. Off by default — the bare HTTP backend is faster
+    /// for one-off probes.
+    #[arg(long, default_value_t = false)]
+    pub stealth: bool,
+    /// Override the readline history file. Defaults to
+    /// `$XDG_DATA_HOME/crawlex/shell_history` (or
+    /// `~/.local/share/crawlex/shell_history`).
+    #[arg(long)]
+    pub history_file: Option<String>,
+    /// Directory used to persist adaptive fingerprints written by
+    /// `.save <identifier>`. Defaults to `./.crawlex`.
+    #[arg(long, default_value = "./.crawlex")]
+    pub adaptive_dir: String,
+    /// Spider id used as the adaptive-store key (one file per spider).
+    /// Defaults to `shell`.
+    #[arg(long, default_value = "shell")]
+    pub spider_id: String,
 }
 
 #[derive(Args, Debug, Clone)]

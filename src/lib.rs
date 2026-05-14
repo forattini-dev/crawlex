@@ -66,6 +66,8 @@ pub mod render;
 pub mod robots;
 pub mod scheduler;
 pub mod scraping;
+#[cfg(feature = "cli")]
+pub mod shell;
 pub mod script;
 pub mod status;
 pub mod storage;
