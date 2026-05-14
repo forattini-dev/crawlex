@@ -29,11 +29,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use url::Url;
 
 use super::request::Request;
 use super::session::SessionManager;
+use crate::events::envelope::ItemScrapedData;
+use crate::events::sink::DynSink;
+use crate::events::{Event, EventKind};
 use crate::robots::RobotsCache;
 
 /// Outcome of fetching a [`Request`]. Body is plain bytes; recipes parse
@@ -111,6 +116,14 @@ pub trait Spider: Send + Sync {
             .map(Request::new)
             .collect()
     }
+    /// Optional identifier extractor for `ItemScraped` events. Default
+    /// looks for an `id` / `url` string field in the JSON payload.
+    fn item_identifier(&self, item: &serde_json::Value) -> Option<String> {
+        item.get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| item.get("url").and_then(|v| v.as_str()))
+            .map(str::to_string)
+    }
 }
 
 /// Fetcher abstraction. Real backends plug in via [`SessionManager::route`]
@@ -184,6 +197,15 @@ pub struct SpiderRunner {
     seen: HashSet<String>,
     last_fetch_per_host: HashMap<String, Instant>,
     items_emitted: usize,
+    spider_id: String,
+    /// Optional event sink. When set, every yielded item produces an
+    /// `EventKind::ItemScraped` envelope.
+    event_sink: Option<DynSink>,
+    /// Optional broadcaster. When set, every yielded item is published
+    /// to a `tokio::sync::broadcast` channel; subscribers built via
+    /// `stream()` consume from it. Slow consumers receive `Lagged`
+    /// errors and are skipped — the bus stays alive.
+    item_tx: Option<broadcast::Sender<serde_json::Value>>,
 }
 
 impl SpiderRunner {
@@ -196,12 +218,39 @@ impl SpiderRunner {
             seen: HashSet::new(),
             last_fetch_per_host: HashMap::new(),
             items_emitted: 0,
+            spider_id: "spider".into(),
+            event_sink: None,
+            item_tx: None,
         }
     }
 
     pub fn with_robots(mut self, robots: Arc<RobotsCache>) -> Self {
         self.robots = Some(robots);
         self
+    }
+
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.spider_id = id.into();
+        self
+    }
+
+    pub fn with_event_sink(mut self, sink: DynSink) -> Self {
+        self.event_sink = Some(sink);
+        self
+    }
+
+    /// Subscribe to a `Stream<Item = serde_json::Value>` of every item
+    /// the spider will yield from this point forward. The underlying
+    /// channel is a `tokio::sync::broadcast` of capacity `buffer`;
+    /// consumers that lag behind silently drop the oldest queued items
+    /// rather than blocking the producer.
+    pub fn stream(
+        &mut self,
+        buffer: usize,
+    ) -> impl Stream<Item = serde_json::Value> + Send + Unpin + 'static {
+        let (tx, rx) = broadcast::channel(buffer.max(1));
+        self.item_tx = Some(tx);
+        item_stream(rx)
     }
 
     /// Seed the frontier from a checkpoint (resume) or from the spider's
@@ -282,6 +331,24 @@ impl SpiderRunner {
         robots.check(url, &self.config.user_agent).unwrap_or(true)
     }
 
+    fn emit_item(&self, spider: &dyn Spider, v: &serde_json::Value) {
+        if self.event_sink.is_none() && self.item_tx.is_none() {
+            return;
+        }
+        if let Some(tx) = &self.item_tx {
+            let _ = tx.send(v.clone());
+        }
+        if let Some(sink) = &self.event_sink {
+            let payload = ItemScrapedData {
+                spider_id: self.spider_id.clone(),
+                identifier: spider.item_identifier(v),
+                payload: v.clone(),
+            };
+            let env = Event::of(EventKind::ItemScraped).with_data(&payload);
+            sink.emit(&env);
+        }
+    }
+
     /// Drive the spider to completion (or until `max_items` hits).
     /// Synchronous so tests stay deterministic. The fetcher is invoked
     /// in-line; real I/O blocking is the caller's problem until the
@@ -330,6 +397,7 @@ impl SpiderRunner {
             for y in spider.parse(&resp) {
                 match y {
                     ParseYield::Item(v) => {
+                        self.emit_item(spider, &v);
                         items.push(v);
                         self.items_emitted += 1;
                     }
@@ -338,6 +406,23 @@ impl SpiderRunner {
             }
         }
     }
+}
+
+/// Wrap a `broadcast::Receiver<Value>` as a `Stream<Item = Value>` that
+/// transparently skips `Lagged` errors (slow consumer dropped messages)
+/// and terminates when the sender side drops.
+fn item_stream(
+    rx: broadcast::Receiver<serde_json::Value>,
+) -> impl Stream<Item = serde_json::Value> + Send + Unpin + 'static {
+    Box::pin(futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(v) => return Some((v, rx)),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -594,6 +679,95 @@ mod tests {
         let out = runner.run(&BlockedSpider, &fetcher);
         assert!(out.items.is_empty(), "robots Disallow must short-circuit");
         assert!(fetcher.log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn emits_item_scraped_events_with_spider_id_and_identifier() {
+        use crate::events::sink::MemorySink;
+        let fetcher = MapFetcher::new()
+            .with("https://example.test/", 200, "go-next")
+            .with("https://example.test/next", 200, "leaf");
+        let sink = Arc::new(MemorySink::create());
+        let mut runner = SpiderRunner::new(SpiderConfig::default(), mgr())
+            .with_id("link-spider")
+            .with_event_sink(sink.clone());
+        let spider = LinkSpider;
+        runner.seed(&spider, None);
+        runner.run(&spider, &fetcher);
+        let events = sink.take();
+        let items: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e.event, EventKind::ItemScraped))
+            .collect();
+        assert_eq!(items.len(), 2, "one event per yielded item");
+        for ev in &items {
+            let d = &ev.data;
+            assert_eq!(d["spider_id"], "link-spider");
+            assert!(d["identifier"].is_string(), "url-style identifier");
+            assert!(d["payload"]["url"].is_string());
+        }
+        // Order matches yield order: root first, then /next.
+        assert_eq!(items[0].data["identifier"], "https://example.test/");
+        assert_eq!(items[1].data["identifier"], "https://example.test/next");
+    }
+
+    #[tokio::test]
+    async fn stream_yields_items_in_order() {
+        use futures::StreamExt;
+        let fetcher = MapFetcher::new()
+            .with("https://example.test/", 200, "go-next")
+            .with("https://example.test/next", 200, "leaf");
+        let mut runner = SpiderRunner::new(SpiderConfig::default(), mgr()).with_id("s");
+        let stream = runner.stream(16);
+        let spider = LinkSpider;
+        runner.seed(&spider, None);
+        // Run synchronously on a blocking task; the broadcast sender
+        // drops at the end of run() (when runner moves out of scope),
+        // which closes the stream.
+        let drive = tokio::task::spawn_blocking(move || {
+            runner.run(&spider, &fetcher);
+            // explicit drop ensures the broadcaster closes immediately.
+            drop(runner);
+        });
+        let items: Vec<_> = stream.collect().await;
+        drive.await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["url"], "https://example.test/");
+        assert_eq!(items[1]["url"], "https://example.test/next");
+    }
+
+    #[tokio::test]
+    async fn stream_survives_lagging_consumer() {
+        use futures::StreamExt;
+        // Capacity 2; spider yields 5 items in a tight loop with no
+        // consumer reads in between. A naive bus would crash or block;
+        // broadcast's Lagged is silently skipped.
+        struct BurstSpider;
+        impl Spider for BurstSpider {
+            fn start_urls(&self) -> Vec<String> {
+                vec!["https://b.test/".into()]
+            }
+            fn parse(&self, _r: &Response) -> Vec<ParseYield> {
+                (0..5)
+                    .map(|i| ParseYield::item(serde_json::json!({"n": i})))
+                    .collect()
+            }
+        }
+        let fetcher = MapFetcher::new().with("https://b.test/", 200, "");
+        let mut runner = SpiderRunner::new(SpiderConfig::default(), mgr());
+        let stream = runner.stream(2);
+        let spider = BurstSpider;
+        runner.seed(&spider, None);
+        let drive = tokio::task::spawn_blocking(move || {
+            runner.run(&spider, &fetcher);
+            drop(runner);
+        });
+        let items: Vec<_> = stream.collect().await;
+        drive.await.unwrap();
+        // At least the last `capacity` items survive; the bus did not
+        // crash and the run completed cleanly.
+        assert!(!items.is_empty());
+        assert!(items.len() <= 5);
     }
 
     #[test]

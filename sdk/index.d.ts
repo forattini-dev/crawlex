@@ -32,7 +32,8 @@ export type EventKind =
   | 'step.started'
   | 'step.completed'
   | 'vendor.telemetry_observed'
-  | 'tech.fingerprint_detected';
+  | 'tech.fingerprint_detected'
+  | 'item.scraped';
 
 /**
  * Canonical per-URL lifecycle status (slice 1). Mirrors
@@ -62,11 +63,11 @@ export type TerminalReason =
 /** Outer envelope — every NDJSON line decodes into this shape. */
 export interface BaseEnvelope<E extends EventKind = EventKind, D = unknown> {
   /**
-   * Wire schema version. Currently `2` — bumped from `1` in slice 1
-   * when the canonical `status` field was added. Older consumers that
+   * Wire schema version. Currently `3` — bumped from `2` in slice 18
+   * when `item.scraped` joined the event taxonomy. Older consumers that
    * only read `event`/`why`/`data` stay compatible.
    */
-  v: 2;
+  v: 3;
   /** ISO-8601 UTC timestamp with millisecond precision. */
   ts: string;
   /** Discriminator. */
@@ -337,6 +338,19 @@ export interface StepCompletedData {
 /** Reserved — not yet emitted as of v1.0.0. */
 export type VendorTelemetryObservedData = Record<string, unknown>;
 
+/**
+ * Mirrors `src/events/envelope.rs::ItemScrapedData` (slice 18). Emitted
+ * once per item yielded by a spider's `parse` invocation. Stream
+ * consumers built via `runSpider(...).stream()` see the `payload` shape;
+ * SDKs reading the raw event bus get the full descriptor including
+ * `spider_id` and the optional stable `identifier`.
+ */
+export interface ItemScrapedData {
+  spider_id: string;
+  identifier?: string;
+  payload: Record<string, unknown>;
+}
+
 export interface TechFingerprintDetectedData {
   host: string;
   url: string;
@@ -375,7 +389,8 @@ export type CrawlEvent =
   | BaseEnvelope<'step.started', StepStartedData>
   | BaseEnvelope<'step.completed', StepCompletedData>
   | BaseEnvelope<'vendor.telemetry_observed', VendorTelemetryObservedData>
-  | BaseEnvelope<'tech.fingerprint_detected', TechFingerprintDetectedData>;
+  | BaseEnvelope<'tech.fingerprint_detected', TechFingerprintDetectedData>
+  | BaseEnvelope<'item.scraped', ItemScrapedData>;
 
 /**
  * Fallback variant emitted by the SDK when a line fails to parse as
@@ -792,6 +807,21 @@ export interface RunSpiderOptions {
 export interface SpiderHandle extends AsyncIterableIterator<Record<string, unknown>> {
   checkpoint(): SpiderCheckpoint;
   isPaused(): boolean;
+  /**
+   * Independent broadcast subscriber over the items this spider yields.
+   * Calls return a fresh `AsyncIterable<Item>` each invocation — multiple
+   * consumers can `stream()` the same run in parallel. Backpressure: a
+   * slow subscriber sees the oldest items dropped from its bounded ring
+   * buffer (`bufferSize`, default 1024) rather than blocking the
+   * producer or crashing the bus. Mirrors the Rust
+   * `SpiderRunner::stream()` contract.
+   *
+   * Items only flow once the primary handle is iterated (or once the
+   * driver task has started), so consumers should typically subscribe
+   * before the first `await handle.next()` if they want a guaranteed
+   * count.
+   */
+  stream(opts?: { bufferSize?: number }): AsyncIterableIterator<Record<string, unknown>>;
 }
 
 /** Validate + freeze a spider spec. */

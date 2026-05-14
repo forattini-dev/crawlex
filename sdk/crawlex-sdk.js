@@ -731,6 +731,23 @@ function runSpider(spider, opts = {}) {
   let itemsEmitted = 0;
   let paused = false;
 
+  // Bounded broadcaster for `stream()` consumers. Each subscriber holds
+  // its own ring buffer; overflow drops the oldest item rather than
+  // blocking the producer (mirrors Rust's tokio::broadcast Lagged
+  // semantics). The primary `for await (item of handle)` iterator does
+  // NOT consume from this — it yields directly so the original API
+  // shape is unchanged.
+  const subscribers = new Set();
+  let driverDone = false;
+
+  function broadcastItem(v) {
+    for (const sub of subscribers) sub.push(v);
+  }
+  function broadcastClose() {
+    driverDone = true;
+    for (const sub of subscribers) sub.close();
+  }
+
   // Seed: resume from checkpoint or from start URLs.
   if (opts.resume) {
     itemsEmitted = opts.resume.items_emitted || 0;
@@ -812,16 +829,73 @@ function runSpider(spider, opts = {}) {
           }
         } else {
           itemsEmitted += 1;
+          broadcastItem(y);
           yield y;
         }
       }
     }
   }
 
-  const handle = iterate();
+  const inner = iterate();
+  // Wrap the inner generator so we can close stream() subscribers when
+  // the primary iterator drains (or the caller breaks out of the loop).
+  async function* outer() {
+    try {
+      for await (const item of inner) yield item;
+    } finally {
+      broadcastClose();
+    }
+  }
+  const handle = outer();
   handle.checkpoint = snapshot;
   handle.isPaused = () => paused;
+  handle.stream = (sopts = {}) => createStream(subscribers, sopts.bufferSize || 1024, () => driverDone);
   return handle;
+}
+
+function createStream(subscribers, bufferSize, isDone) {
+  // Bounded queue + wake-on-push. When the buffer is full we drop the
+  // oldest item — matches the tokio broadcast Lagged path (the bus
+  // stays alive; the slow consumer just loses history).
+  const queue = [];
+  let waiter = null;
+  let closed = false;
+  const sub = {
+    push(v) {
+      if (closed) return;
+      if (queue.length >= bufferSize) queue.shift();
+      queue.push(v);
+      if (waiter) {
+        const w = waiter;
+        waiter = null;
+        w();
+      }
+    },
+    close() {
+      closed = true;
+      if (waiter) {
+        const w = waiter;
+        waiter = null;
+        w();
+      }
+    },
+  };
+  subscribers.add(sub);
+  const it = (async function* () {
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          yield queue.shift();
+          continue;
+        }
+        if (closed || isDone()) return;
+        await new Promise((r) => (waiter = r));
+      }
+    } finally {
+      subscribers.delete(sub);
+    }
+  })();
+  return it;
 }
 
 module.exports = {
