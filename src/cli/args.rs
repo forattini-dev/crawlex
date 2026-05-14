@@ -373,6 +373,10 @@ pub struct CrawlArgs {
     /// validation probe.
     #[arg(long)]
     pub cache_max_age_secs: Option<u64>,
+    /// Skip pages whose stored `Last-Modified` is at-or-before this Unix
+    /// timestamp (seconds since epoch). Pre-network freshness check.
+    #[arg(long)]
+    pub modified_since: Option<u64>,
     /// Discovery-only mode: extract/enqueue links while skipping heavy page
     /// persistence and analysis.
     #[arg(long, default_value_t = false)]

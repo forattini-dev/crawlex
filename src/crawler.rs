@@ -391,23 +391,26 @@ impl Crawler {
         crawl_id: u64,
         ctx: &mut HookContext,
     ) -> Result<bool> {
-        if !self.config.cache_validation.enabled {
+        let max_age = self.config.cache_validation.max_age_secs;
+        let modified_since = self.config.cache_validation.modified_since;
+        if !self.config.cache_validation.enabled && max_age.is_none() && modified_since.is_none() {
             return Ok(false);
         }
         let Some(meta) = self.storage.page_cache_metadata(&job.url).await? else {
             return Ok(false);
         };
-        if !crate::cache_validator::is_fresh_by_age(
-            &meta,
-            self.config.cache_validation.max_age_secs,
+        let outcome = crate::cache_validator::evaluate_freshness(&meta, max_age, modified_since);
+        if !matches!(
+            outcome.status,
+            crate::cache_validator::CacheValidationStatus::Fresh
         ) {
             return Ok(false);
         }
         self.emit_cache_validation(
             &job.url,
             "cache_age",
-            crate::cache_validator::CacheValidationStatus::Fresh,
-            "cache row is younger than max age",
+            outcome.status,
+            &outcome.reason,
             Some(meta.status),
         );
         let _ = self.fire_all(HookEvent::OnJobEnd, ctx).await?;
