@@ -11,7 +11,7 @@
 
 pub mod selectors;
 
-pub use selectors::ElementHandle;
+pub use selectors::{ElementHandle, HandleSliceExt, TextMatch};
 
 use encoding_rs::{Encoding, UTF_8};
 

@@ -21,9 +21,73 @@
 // underlying `ego_tree` and skip non-element nodes.
 
 use ego_tree::NodeRef;
+use regex::Regex;
 use scraper::{node::Node, ElementRef, Selector};
 
 use super::TreeHandle;
+
+/// Options for [`ElementHandle::find_by_text`] / [`TreeHandle::find_by_text`].
+///
+/// Defaults are: substring match, case-sensitive, no trim.
+#[derive(Debug, Clone, Default)]
+pub struct TextMatch {
+    /// If true, the element's text must equal the needle. Otherwise a
+    /// substring (`contains`) match is performed.
+    pub exact: bool,
+    /// Case-insensitive comparison (ASCII + Unicode via `to_lowercase`).
+    pub case_insensitive: bool,
+    /// Trim whitespace from the element's text before comparison.
+    pub trim: bool,
+}
+
+impl TextMatch {
+    pub fn contains() -> Self {
+        Self::default()
+    }
+    pub fn exact() -> Self {
+        Self { exact: true, ..Self::default() }
+    }
+    pub fn with_case_insensitive(mut self, v: bool) -> Self {
+        self.case_insensitive = v;
+        self
+    }
+    pub fn with_trim(mut self, v: bool) -> Self {
+        self.trim = v;
+        self
+    }
+
+    fn matches(&self, haystack: &str, needle: &str) -> bool {
+        let h = if self.trim { haystack.trim() } else { haystack };
+        if self.case_insensitive {
+            let h = h.to_lowercase();
+            let n = needle.to_lowercase();
+            if self.exact { h == n } else { h.contains(&n) }
+        } else if self.exact {
+            h == needle
+        } else {
+            h.contains(needle)
+        }
+    }
+}
+
+/// Extension trait for filtering / refining collections of element handles.
+///
+/// Imported alongside the selector API so callers can write
+/// `tree.css("li").filter(|h| h.text().contains("alpha"))`.
+pub trait HandleSliceExt<'a> {
+    fn filter<F>(&self, pred: F) -> Vec<ElementHandle<'a>>
+    where
+        F: FnMut(&ElementHandle<'a>) -> bool;
+}
+
+impl<'a> HandleSliceExt<'a> for [ElementHandle<'a>] {
+    fn filter<F>(&self, mut pred: F) -> Vec<ElementHandle<'a>>
+    where
+        F: FnMut(&ElementHandle<'a>) -> bool,
+    {
+        self.iter().copied().filter(|h| pred(h)).collect()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct ElementHandle<'a> {
@@ -98,6 +162,39 @@ impl<'a> ElementHandle<'a> {
 
     pub fn xpath(&self, expr: &str) -> Vec<ElementHandle<'a>> {
         xpath_select(self.node, expr)
+    }
+
+    /// Walk descendants and return elements whose concatenated text
+    /// satisfies `opts` against `needle`. Empty `needle` matches no node.
+    pub fn find_by_text(&self, needle: &str, opts: TextMatch) -> Vec<ElementHandle<'a>> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for n in descendants(*self.node, false) {
+            if let Some(el) = ElementRef::wrap(n) {
+                let h = ElementHandle::from(el);
+                if opts.matches(&h.text(), needle) {
+                    out.push(h);
+                }
+            }
+        }
+        out
+    }
+
+    /// Walk descendants and return elements whose concatenated text
+    /// matches the supplied regex (uses `Regex::is_match`).
+    pub fn find_by_regex(&self, re: &Regex) -> Vec<ElementHandle<'a>> {
+        let mut out = Vec::new();
+        for n in descendants(*self.node, false) {
+            if let Some(el) = ElementRef::wrap(n) {
+                let h = ElementHandle::from(el);
+                if re.is_match(&h.text()) {
+                    out.push(h);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -528,6 +625,16 @@ impl TreeHandle {
         xpath_select(self.root_element(), expr)
     }
 
+    /// Tree-wide content search; see [`ElementHandle::find_by_text`].
+    pub fn find_by_text(&self, needle: &str, opts: TextMatch) -> Vec<ElementHandle<'_>> {
+        ElementHandle::from(self.root_element()).find_by_text(needle, opts)
+    }
+
+    /// Tree-wide regex search; see [`ElementHandle::find_by_regex`].
+    pub fn find_by_regex(&self, re: &Regex) -> Vec<ElementHandle<'_>> {
+        ElementHandle::from(self.root_element()).find_by_regex(re)
+    }
+
     /// XPath variant that resolves `text()` / `@attr` terminals to
     /// strings. Element-terminal expressions return serialised outer HTML.
     pub fn xpath_get_all(&self, expr: &str) -> Vec<String> {
@@ -682,6 +789,123 @@ mod tests {
         for k in kids {
             assert_eq!(k.name(), "li");
         }
+    }
+
+    #[test]
+    fn find_by_text_contains_default() {
+        let t = parse_tree(PAGE, None);
+        let hits = t.find_by_text("alpha", super::super::TextMatch::contains());
+        // <li>alpha</li> plus its ancestors (<ul>, <section>, <body>, <html>).
+        assert!(hits.iter().any(|h| h.name() == "li"));
+        let li_hits: Vec<_> = hits.iter().filter(|h| h.name() == "li").collect();
+        assert_eq!(li_hits.len(), 1);
+        assert_eq!(li_hits[0].text(), "alpha");
+    }
+
+    #[test]
+    fn find_by_text_exact_and_trim() {
+        let html = br#"<div><p>  hello  </p><p>hello world</p></div>"#;
+        let t = parse_tree(html, None);
+        let opts = super::super::TextMatch::exact().with_trim(true);
+        let ps: Vec<_> = t.find_by_text("hello", opts).into_iter()
+            .filter(|h| h.name() == "p").collect();
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].text().trim(), "hello");
+    }
+
+    #[test]
+    fn find_by_text_case_insensitive() {
+        let t = parse_tree(PAGE, None);
+        let opts = super::super::TextMatch::contains().with_case_insensitive(true);
+        let hits: Vec<_> = t.find_by_text("ALPHA", opts).into_iter()
+            .filter(|h| h.name() == "li").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text(), "alpha");
+    }
+
+    #[test]
+    fn find_by_text_unicode() {
+        let html = "<ul><li>日本</li><li>Tokyo</li><li>日本語</li></ul>".as_bytes();
+        let t = parse_tree(html, None);
+        let hits: Vec<_> = t.find_by_text("日本", super::super::TextMatch::contains())
+            .into_iter().filter(|h| h.name() == "li").collect();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn find_by_text_nested_concatenates() {
+        let html = b"<div><p>price <em>$<b>42</b></em></p></div>";
+        let t = parse_tree(html, None);
+        let hits: Vec<_> = t.find_by_text("$42", super::super::TextMatch::contains())
+            .into_iter().filter(|h| h.name() == "p").collect();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn find_by_regex_basic() {
+        let t = parse_tree(PAGE, None);
+        let re = regex::Regex::new(r"^(alpha|beta)$").unwrap();
+        let hits: Vec<_> = t.find_by_regex(&re).into_iter()
+            .filter(|h| h.name() == "li").collect();
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn find_by_regex_captures_work() {
+        let html = b"<ul><li>SKU-001</li><li>SKU-002</li><li>nope</li></ul>";
+        let t = parse_tree(html, None);
+        let re = regex::Regex::new(r"^SKU-(\d+)$").unwrap();
+        let hits: Vec<_> = t.find_by_regex(&re).into_iter()
+            .filter(|h| h.name() == "li").collect();
+        assert_eq!(hits.len(), 2);
+        // Re-run captures against the matched text to verify the regex
+        // surface is the standard `regex::Regex` (no wrapper).
+        let first_text = hits[0].text();
+        let caps = re.captures(&first_text).unwrap();
+        assert_eq!(&caps[1], "001");
+    }
+
+    #[test]
+    fn filter_composes_with_css() {
+        use super::super::HandleSliceExt;
+        let t = parse_tree(PAGE, None);
+        let lis = t.css("li.item");
+        let only_evens = lis.filter(|h| {
+            h.attr("data-id")
+                .and_then(|v| v.parse::<u32>().ok())
+                .map(|n| n % 2 == 0)
+                .unwrap_or(false)
+        });
+        assert_eq!(only_evens.len(), 1);
+        assert_eq!(only_evens[0].text(), "beta");
+    }
+
+    #[test]
+    fn filter_composes_with_xpath() {
+        use super::super::HandleSliceExt;
+        let t = parse_tree(PAGE, None);
+        let lis = t.xpath("//li");
+        let kept = lis.filter(|h| h.text() != "beta");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].text(), "alpha");
+        assert_eq!(kept[1].text(), "gamma");
+    }
+
+    #[test]
+    fn find_by_text_from_element_scoped() {
+        let html = br#"<div id="a"><p>hello</p></div><div id="b"><p>hello</p></div>"#;
+        let t = parse_tree(html, None);
+        let a = t.css("#a").into_iter().next().unwrap();
+        let hits: Vec<_> = a.find_by_text("hello", super::super::TextMatch::contains())
+            .into_iter().filter(|h| h.name() == "p").collect();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn find_by_text_empty_needle_returns_empty() {
+        let t = parse_tree(PAGE, None);
+        let hits = t.find_by_text("", super::super::TextMatch::contains());
+        assert!(hits.is_empty());
     }
 
     #[test]
