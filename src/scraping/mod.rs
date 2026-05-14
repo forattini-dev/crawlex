@@ -18,6 +18,11 @@
 
 pub mod request;
 pub mod session;
+pub mod spider;
 
 pub use request::Request;
 pub use session::{BackendKind, CookieJar, SessionEntry, SessionManager};
+pub use spider::{
+    Checkpoint, CheckpointRequest, FetchError, Fetcher, ParseYield, Response, RunOutcome, Spider,
+    SpiderConfig, SpiderRunner,
+};
