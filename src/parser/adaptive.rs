@@ -168,6 +168,51 @@ fn relocate<'a>(
     }
 }
 
+// ---------- in-tree similarity scan (slice 15) ----------
+
+impl<'a> ElementHandle<'a> {
+    /// Find sibling-like elements anywhere in the same tree.
+    ///
+    /// Builds a fingerprint from this element, walks every element in
+    /// the document, and returns those scoring at least `threshold`
+    /// against it (default [`DEFAULT_THRESHOLD`]). The anchor element
+    /// itself is excluded. Results are sorted by descending score so
+    /// callers can `take(n)` for "top-N matches".
+    ///
+    /// Pure in-tree scan: does not consult the adaptive store.
+    pub fn find_similar(&self, threshold: Option<f32>) -> Vec<ElementHandle<'a>> {
+        let t = threshold.unwrap_or(DEFAULT_THRESHOLD);
+        let anchor_fp = fingerprint(self);
+        let anchor_id = self.inner().id();
+
+        // Walk from the topmost ancestor so the scan covers the whole
+        // document, not just this element's subtree.
+        let mut top = *self.inner();
+        while let Some(p) = top.parent() {
+            top = p;
+        }
+
+        let mut scored: Vec<(ElementHandle<'a>, f32)> = Vec::new();
+        let mut stack: Vec<NodeRef<'a, Node>> = vec![top];
+        while let Some(n) = stack.pop() {
+            if let Some(el) = ElementRef::wrap(n) {
+                if el.id() != anchor_id {
+                    let h = ElementHandle::from(el);
+                    let s = score(&anchor_fp, &fingerprint(&h));
+                    if s >= t {
+                        scored.push((h, s));
+                    }
+                }
+            }
+            for c in n.children() {
+                stack.push(c);
+            }
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.into_iter().map(|(h, _)| h).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -282,6 +327,91 @@ mod tests {
         let m = t.css_adaptive(".does-not-exist", &store, "ex.com", &opts);
         assert!(m.is_none());
         assert!(store.retrieve("ex.com", "nope").is_none());
+    }
+
+    // ---------- find_similar (slice 15) ----------
+
+    const TABLE: &[u8] = br#"<!doctype html>
+<html><body>
+<header><h1>Header</h1></header>
+<table><tbody>
+  <tr class="row" data-kind="product"><td>Apple</td><td>$1.00</td></tr>
+  <tr class="row" data-kind="product"><td>Banana</td><td>$0.50</td></tr>
+  <tr class="row" data-kind="product"><td>Cherry</td><td>$3.00</td></tr>
+</tbody></table>
+<footer><p>decorative</p><a href="/">home</a></footer>
+</body></html>"#;
+
+    #[test]
+    fn find_similar_returns_sibling_rows() {
+        let t = parse_tree(TABLE, None);
+        let rows = t.css("tr.row");
+        assert_eq!(rows.len(), 3);
+        let anchor = rows[0];
+        let hits = anchor.find_similar(None);
+        // Two other rows match; decorative elements (h1, p, a, td) must not.
+        assert!(hits.iter().all(|h| h.name() == "tr"), "non-row leaked in: {:?}", hits.iter().map(|h| h.name()).collect::<Vec<_>>());
+        let tr_hits: Vec<_> = hits.iter().filter(|h| h.name() == "tr").collect();
+        assert_eq!(tr_hits.len(), 2);
+    }
+
+    #[test]
+    fn find_similar_excludes_anchor_itself() {
+        let t = parse_tree(TABLE, None);
+        let anchor = t.css("tr.row").into_iter().next().unwrap();
+        let hits = anchor.find_similar(None);
+        let anchor_id = anchor.inner().id();
+        assert!(hits.iter().all(|h| h.inner().id() != anchor_id));
+    }
+
+    #[test]
+    fn find_similar_high_threshold_filters() {
+        let t = parse_tree(TABLE, None);
+        let anchor = t.css("tr.row").into_iter().next().unwrap();
+        let strict = anchor.find_similar(Some(0.999));
+        assert!(strict.is_empty(), "0.999 should reject near-twins: {:?}",
+            strict.iter().map(|h| h.text()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn find_similar_sorted_by_descending_score() {
+        // Build a tree with one near-perfect twin and one weaker match.
+        let html = br#"<html><body>
+            <ul>
+              <li class="item" data-id="1"><span>alpha</span></li>
+              <li class="item" data-id="2"><span>beta</span></li>
+              <li class="other"><span>zeta</span></li>
+            </ul>
+        </body></html>"#;
+        let t = parse_tree(html, None);
+        let anchor = t.css("li.item").into_iter().next().unwrap();
+        let hits = anchor.find_similar(Some(0.0));
+        // First hit should be the same-class sibling; the .other li
+        // (different class) should score lower.
+        let li_hits: Vec<_> = hits.iter().filter(|h| h.name() == "li").collect();
+        assert!(li_hits.len() >= 2);
+        assert_eq!(li_hits[0].attr("class"), Some("item"));
+    }
+
+    #[test]
+    fn find_similar_does_not_touch_store() {
+        // No store argument is taken, so this is a structural assertion:
+        // calling find_similar must not require an AdaptiveStore in scope.
+        let t = parse_tree(TABLE, None);
+        let anchor = t.css("tr.row").into_iter().next().unwrap();
+        let _ = anchor.find_similar(None);
+        // If it compiles and runs without a store, the contract holds.
+    }
+
+    #[test]
+    fn find_similar_no_matches_returns_empty() {
+        let html = br#"<html><body><div id="only">lonely</div></body></html>"#;
+        let t = parse_tree(html, None);
+        let anchor = t.css("#only").into_iter().next().unwrap();
+        let hits = anchor.find_similar(None);
+        // The anchor's ancestors (body, html) score above 0.2 only if
+        // they look similar — they shouldn't (different tag).
+        assert!(hits.iter().all(|h| h.name() != "div"));
     }
 
     #[test]

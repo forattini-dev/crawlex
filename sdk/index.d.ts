@@ -688,4 +688,12 @@ export interface ElementHandle {
    * (`:nth-of-type` for CSS, `[N]` for XPath).
    */
   generateSelector(opts: { kind: SelectorKind }): string;
+  /**
+   * Find other elements in the same tree whose similarity score against
+   * this element meets `threshold` (default 0.2). The anchor itself is
+   * excluded. Results are sorted by descending score, so callers can
+   * `.slice(0, n)` for top-N matches. Pure in-tree scan — does not
+   * touch the adaptive store.
+   */
+  findSimilar(opts?: { threshold?: number }): ElementHandle[];
 }
