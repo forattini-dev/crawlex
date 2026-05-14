@@ -264,6 +264,29 @@ pub struct Config {
     /// instantiated.
     #[serde(default)]
     pub render_mode: RenderMode,
+    /// Slice 7 — wall-clock budget for the whole crawl. When `Some(n)`
+    /// a watchdog auto-cancels the run after `n` seconds, writes
+    /// `TerminalReason::CancelledDueToTimeout` to the `crawl_stats` row,
+    /// and stamps `result_expires_at` on the per-URL pages so the
+    /// reaper picks them up. `None` (default) keeps the historical
+    /// behaviour — no watchdog, no auto-cancel.
+    #[serde(default)]
+    pub job_max_runtime_secs: Option<u64>,
+    /// Slice 7 — TTL applied to a run's artifacts. When `Some(n)`,
+    /// finishing the run sets `result_expires_at = now + n` on every
+    /// `pages` and `crawl_stats` row written by it. The reaper task
+    /// (`reap_expired_blocking`) GCs those rows after the window
+    /// elapses. `None` (default) disables retention — rows live
+    /// forever, matching legacy behaviour.
+    #[serde(default)]
+    pub result_retention_secs: Option<u64>,
+    /// Slice 7 — hard cap on the number of per-URL pages successfully
+    /// recorded in a single run. When the cap is hit the crawler stops
+    /// dispatching new jobs and writes
+    /// `TerminalReason::CancelledDueToLimits` to the `crawl_stats` row.
+    /// `None` (default) preserves today's unbounded behaviour.
+    #[serde(default)]
+    pub max_pages: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -765,6 +788,9 @@ impl Default for Config {
             gpu_policy: GpuPolicy::default(),
             dom_capture: DomCaptureConfig::default(),
             render_mode: RenderMode::default(),
+            job_max_runtime_secs: None,
+            result_retention_secs: None,
+            max_pages: None,
         }
     }
 }
