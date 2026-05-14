@@ -61,6 +61,26 @@ pub enum Command {
     /// land (slice 25); flag parsing is the contract under test.
     #[command(subcommand)]
     Spider(SpiderVerb),
+    /// Fetch EasyList (or another adblock domain source) and merge the
+    /// extracted domain rules into the override file consulted by the
+    /// adblock gate at runtime. Slice 20.
+    UpdateBlocklist(UpdateBlocklistArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct UpdateBlocklistArgs {
+    /// Source URL. Defaults to the canonical EasyList feed.
+    #[arg(long, default_value = "https://easylist.to/easylist/easylist.txt")]
+    pub url: String,
+    /// Where to write the merged override file. Defaults to the
+    /// platform user-config path
+    /// (`$XDG_CONFIG_HOME/crawlex/blocklist.txt` on Linux).
+    #[arg(long)]
+    pub out: Option<String>,
+    /// Read the source from a local file instead of fetching it. Useful
+    /// for offline / CI / test scenarios.
+    #[arg(long)]
+    pub from_file: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

@@ -36,6 +36,7 @@ use url::Url;
 
 use super::request::Request;
 use super::session::SessionManager;
+use crate::adblock::BlockList;
 use crate::events::envelope::ItemScrapedData;
 use crate::events::sink::DynSink;
 use crate::events::{Event, EventKind};
@@ -89,6 +90,11 @@ pub struct SpiderConfig {
     pub user_agent: String,
     /// Stop after N items emitted. `None` = unbounded.
     pub max_items: Option<usize>,
+    /// Consult the [`adblock`](crate::adblock) gate before fetching each
+    /// request. Defaults to `false` so existing recipes are unaffected.
+    /// When `true`, blocked URLs are skipped (logged via `tracing`) and
+    /// never enter the dispatcher.
+    pub ad_block: bool,
 }
 
 impl Default for SpiderConfig {
@@ -98,6 +104,7 @@ impl Default for SpiderConfig {
             robots_txt_obey: false,
             user_agent: "crawlex".into(),
             max_items: None,
+            ad_block: false,
         }
     }
 }
@@ -206,6 +213,10 @@ pub struct SpiderRunner {
     /// `stream()` consume from it. Slow consumers receive `Lagged`
     /// errors and are skipped — the bus stays alive.
     item_tx: Option<broadcast::Sender<serde_json::Value>>,
+    /// Ad/tracker URL gate. Consulted only when `config.ad_block` is
+    /// `true`. `None` means "use the process-wide baseline+override"
+    /// — tests inject a custom list via [`SpiderRunner::with_block_list`].
+    block_list: Option<Arc<BlockList>>,
 }
 
 impl SpiderRunner {
@@ -221,6 +232,29 @@ impl SpiderRunner {
             spider_id: "spider".into(),
             event_sink: None,
             item_tx: None,
+            block_list: None,
+        }
+    }
+
+    /// Inject a custom [`BlockList`]. Only consulted when
+    /// `config.ad_block` is `true`. Tests use this to avoid hitting the
+    /// process-wide baseline.
+    pub fn with_block_list(mut self, list: Arc<BlockList>) -> Self {
+        self.block_list = Some(list);
+        self
+    }
+
+    fn ad_block_blocks(&self, url: &Url) -> bool {
+        if !self.config.ad_block {
+            return false;
+        }
+        let host = match url.host_str() {
+            Some(h) => h,
+            None => return false,
+        };
+        match &self.block_list {
+            Some(l) => l.matches_host(host),
+            None => crate::adblock::global().matches_host(host),
         }
     }
 
@@ -375,6 +409,10 @@ impl SpiderRunner {
 
             // Robots check uses the resolved URL.
             if let Ok(url) = Url::parse(&req.url) {
+                if self.ad_block_blocks(&url) {
+                    tracing::debug!(url = %url, "adblock: skipping request");
+                    continue;
+                }
                 if !self.robots_allows(&url) {
                     continue;
                 }
@@ -794,5 +832,58 @@ mod tests {
         runner.seed(&S, None);
         let out = runner.run(&S, &fetcher);
         assert_eq!(out.items.len(), 1);
+    }
+
+    #[test]
+    fn ad_block_skips_matching_request_when_enabled() {
+        struct S;
+        impl Spider for S {
+            fn start_urls(&self) -> Vec<String> {
+                vec![
+                    "https://tracker.test/pixel".into(),
+                    "https://ok.test/home".into(),
+                ]
+            }
+            fn parse(&self, resp: &Response) -> Vec<ParseYield> {
+                vec![ParseYield::item(serde_json::json!({"url": resp.final_url}))]
+            }
+        }
+        let fetcher = MapFetcher::new()
+            .with("https://tracker.test/pixel", 200, "")
+            .with("https://ok.test/home", 200, "");
+        let mut list = BlockList::empty();
+        list.extend_from_str("tracker.test\n");
+        let cfg = SpiderConfig {
+            ad_block: true,
+            ..Default::default()
+        };
+        let mut runner = SpiderRunner::new(cfg, mgr()).with_block_list(Arc::new(list));
+        runner.seed(&S, None);
+        let out = runner.run(&S, &fetcher);
+        assert_eq!(out.items.len(), 1, "ad-blocked URL should not yield");
+        let urls = fetcher.log.lock().unwrap().clone();
+        assert_eq!(urls, vec!["https://ok.test/home"]);
+    }
+
+    #[test]
+    fn ad_block_off_lets_tracker_through() {
+        struct S;
+        impl Spider for S {
+            fn start_urls(&self) -> Vec<String> {
+                vec!["https://tracker.test/pixel".into()]
+            }
+            fn parse(&self, _r: &Response) -> Vec<ParseYield> {
+                vec![ParseYield::item(serde_json::json!({}))]
+            }
+        }
+        let fetcher = MapFetcher::new().with("https://tracker.test/pixel", 200, "");
+        let mut list = BlockList::empty();
+        list.extend_from_str("tracker.test\n");
+        // ad_block defaults to false — list is set but inert.
+        let mut runner =
+            SpiderRunner::new(SpiderConfig::default(), mgr()).with_block_list(Arc::new(list));
+        runner.seed(&S, None);
+        let out = runner.run(&S, &fetcher);
+        assert_eq!(out.items.len(), 1, "gate is opt-in, default is off");
     }
 }
