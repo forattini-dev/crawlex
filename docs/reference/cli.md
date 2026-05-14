@@ -137,6 +137,36 @@ cat config.json | cargo run --release -- crawl \
   --emit ndjson
 ```
 
+## Interactive shells
+
+Two shells are available:
+
+- `crawlex shell` (native binary) — Rust REPL backed by the full
+  selector engine, stealth fetcher and adaptive store. See slice 22.
+- `npx crawlex shell` (SDK) — Node REPL with the `crawlex` global
+  preloaded. Helpers mirror the Rust shell:
+
+  ```text
+  crawlex> page = await crawlex.fetch('https://example.com')
+  crawlex> page.css('h1')
+  crawlex> page.findByText('Hello')
+  crawlex> page.findByRegex(/login/i)
+  crawlex> page.save('hero_title')
+  crawlex> last        // most recent page
+  ```
+
+  - `fetch(url)` uses `node:http(s)` (no stealth) — for the stealth
+    backend run the native `crawlex shell`.
+  - `css(sel)` / `xpath(expr)` support a minimal subset (`tag`, `#id`,
+    `.class`, `tag#id`, `tag.class`, `//tag`). Richer selectors raise
+    an error pointing back to the Rust shell.
+  - `findByText(needle)` and `findByRegex(re|str)` return every element
+    whose text content matches.
+  - `save(identifier)` writes the last selected element into the JSON
+    adaptive store at `$XDG_DATA_HOME/crawlex/adaptive_store.json`.
+  - Readline history is persisted at
+    `$XDG_DATA_HOME/crawlex/shell_history_node`.
+
 ## Known CLI gaps
 
 - `resume` is intentionally not wired yet.

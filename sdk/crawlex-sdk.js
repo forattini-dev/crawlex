@@ -384,6 +384,14 @@ function runJson(args, { bin, env, input } = {}) {
 // ---------- CLI passthrough ----------
 
 function runCli(argv) {
+  // Slice 23 — `crawlex shell` is a Node REPL handled in JS, not a
+  // passthrough to the rust binary. Match only the bare `shell`
+  // subcommand; flags like `--help` after `shell` still want help text
+  // from the native binary if it ever grows one.
+  if (argv[0] === 'shell' && argv.length === 1) {
+    require('./shell.js').startRepl();
+    return;
+  }
   const bin = binaryPath();
   if (!fs.existsSync(bin) && !process.env.CRAWLEX_FORCE_BINARY) {
     process.stderr.write(
