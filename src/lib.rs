@@ -31,6 +31,7 @@
     clippy::manual_inspect
 )]
 
+pub mod adblock;
 pub mod antibot;
 pub mod cache_validator;
 pub mod config;
