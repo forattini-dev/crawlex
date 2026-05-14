@@ -18,4 +18,5 @@
 
 pub mod html_clean;
 pub mod link_filter;
+pub mod pattern;
 pub mod sitemap;

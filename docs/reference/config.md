@@ -125,6 +125,42 @@
 | `dom_capture.remove_overlays` | Remove fixed/sticky overlays before HTML capture | `false` |
 | `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
 
+## Include / exclude patterns
+
+`crawlex::extract::link_filter::FilterLinksInput.includes` and `.excludes`
+accept `crawlex::extract::pattern::Pattern` predicates. Two forms are
+supported behind a single surface:
+
+* **Glob** (default) — shell-style. `*` matches any chars except `/`;
+  `**` matches any chars including `/`; `?` matches a single non-`/` char.
+  Compiled once into an anchored regex at config-load time.
+* **Regex** — escape hatch, selected by the `re:` prefix on the source
+  string when constructed via `Pattern::compile_auto`. Matched as written
+  (not anchored).
+
+When a URL matches both an `include` and an `exclude`, **exclude wins**.
+
+### Migration from regex to glob
+
+| Legacy regex | Equivalent glob |
+| --- | --- |
+| `^/blog/` | `/blog/**` |
+| `^/blog/[^/]+$` | `/blog/*` |
+| `^/(api/v[12])/users/\d+$` | use `re:^/(api/v[12])/users/\d+$` (keep regex via auto-detect) |
+
+Construct in Rust:
+
+```rust
+use crawlex::extract::pattern::Pattern;
+
+let includes = vec![
+    Pattern::glob("/blog/**")?,
+    Pattern::glob("/docs/*")?,
+    Pattern::compile_auto("re:^/api/v\\d+/users$")?, // regex escape hatch
+];
+let excludes = vec![Pattern::glob("/blog/admin/**")?];
+```
+
 ## When to prefer flags over JSON
 
 Use CLI flags when:

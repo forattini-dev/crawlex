@@ -7,6 +7,7 @@ use crawlex::extract::link_filter::{
     filter_links, get_url_depth, is_file, is_internal_link, is_non_web_protocol,
     is_social_media_or_email, is_subdomain, no_sections, FilterLinksInput,
 };
+use crawlex::extract::pattern::Pattern;
 use regex::Regex;
 use url::Url;
 
@@ -162,8 +163,8 @@ fn filter_robots_txt_blocks() {
 fn filter_include_exclude_patterns() {
     let base = u("https://example.com/");
     let initial = u("https://example.com/");
-    let excl = [Regex::new(r"/admin").unwrap()];
-    let incl = [Regex::new(r"/blog").unwrap()];
+    let excl = [Pattern::regex(Regex::new(r"/admin").unwrap())];
+    let incl = [Pattern::regex(Regex::new(r"/blog").unwrap())];
     let result = filter_links(FilterLinksInput {
         links: vec![
             "/blog/post".to_string(),
