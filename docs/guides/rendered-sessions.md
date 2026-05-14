@@ -39,8 +39,18 @@ Run it with:
 
 - `--chrome-path <path>` if the wrong browser is being detected
 - `--profile chrome-149-stable` if you need to pin the claimed identity
+- `--external-cdp-url http://127.0.0.1:9222` if Chrome is managed outside crawlex
+- `--gpu-policy stealth` when GPU-facing surfaces matter more than compatibility
+- `--flatten-shadow-dom` when web components hide the content you need
+- `--remove-overlays --remove-consent-popups` when modals pollute captured HTML
 - `--block-resource image,media,font` to cut noise on heavy apps
 - `--rate-per-host-rps 1.5` when the target rate limits aggressively
+
+## ScriptSpec and screenshots
+
+Prefer `--script-spec <path>` for multi-step flows. It supersedes the legacy `--actions-file` path and supports waits, interaction, extraction, assertions, exports and step-scoped screenshots.
+
+Use `--screenshot-mode viewport`, `--screenshot-mode fullpage`, or `--screenshot-mode 'element:<css>'` to control what is captured after waits/hooks/actions settle.
 
 ## When to prefer `render` over `auto`
 

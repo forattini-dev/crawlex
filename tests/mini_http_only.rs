@@ -136,6 +136,7 @@ async fn queue_batches_push_amplification() {
         handles.push(tokio::spawn(async move {
             q.push(crawlex::queue::Job {
                 id: 0,
+                crawl_id: 0,
                 url: url::Url::parse(&format!("https://example.com/p/{i}")).unwrap(),
                 depth: 0,
                 priority: 0,

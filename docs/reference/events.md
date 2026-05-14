@@ -38,15 +38,52 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 - `run.started`
 - `run.completed`
 - `session.created`
+- `session.state_changed`
+- `session.evicted`
 - `job.started`
 - `job.failed`
 - `decision.made`
 - `fetch.completed`
+- `crawl.attempted`
+- `crawl.resolved`
 - `render.completed`
 - `extract.completed`
 - `artifact.saved`
 - `proxy.scored`
 - `robots.decision`
+- `challenge.detected`
+- `step.started`
+- `step.completed`
+- `vendor.telemetry_observed`
+- `tech.fingerprint_detected`
+
+## High-signal payloads
+
+`fetch.completed` includes final URL, status, byte count, truncation flag and optional DNS/TCP/TLS/TTFB/download timings.
+
+`render.completed` includes final URL, status, SPA/PWA flags and a compact Web Vitals summary when collection is enabled.
+
+`artifact.saved` includes kind, MIME, size, sha256 and a backend path/handle when available.
+
+`crawl.attempted` is emitted for each HTTP spoof, render or fallback-fetch attempt. It carries attempt index, engine, status, latency, proxy, block classification and error fields.
+
+`crawl.resolved` summarizes the whole crawl id: attempt count, whether fallback fetch was used, final engine and success boolean.
+
+`decision.made` also reports non-policy gates such as cache validation:
+
+```json
+{
+  "event": "decision.made",
+  "why": "cache:fresh",
+  "data": {
+    "phase": "http_response",
+    "decision": "use_cache",
+    "cache_status": "fresh",
+    "reason": "etag matched",
+    "http_status": 200
+  }
+}
+```
 
 ## Consumer rules
 

@@ -16,7 +16,9 @@ use bytes::Bytes;
 use http::HeaderMap;
 use url::Url;
 
-use crate::storage::{session_id_for_url, ArtifactKind, ArtifactMeta, ArtifactRow, PageMetadata};
+use crate::storage::{
+    session_id_for_url, ArtifactKind, ArtifactMeta, ArtifactRow, PageCacheMetadata, PageMetadata,
+};
 use crate::Result;
 
 /// Blob persistence + artifact read API.
@@ -95,5 +97,11 @@ pub trait ArtifactStorage: Send + Sync {
         _kind: Option<ArtifactKind>,
     ) -> Result<Vec<ArtifactRow>> {
         Ok(Vec::new())
+    }
+
+    /// Read cache validators/fingerprints for a URL, when the backend keeps
+    /// page metadata. Default is `None` for write-only or memory-lite sinks.
+    async fn page_cache_metadata(&self, _url: &Url) -> Result<Option<PageCacheMetadata>> {
+        Ok(None)
     }
 }

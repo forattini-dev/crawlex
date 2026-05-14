@@ -59,6 +59,17 @@ cargo install crawlex
 
 ---
 
+## 🆕 Last 24h highlights
+
+- `1.0.4` release line is live across npm/crates/GitHub Releases, with docsify publishing through GitHub Pages.
+- JS/TS hooks now run through the SDK bridge, so `defineHooks()` can drive the same lifecycle decisions as embedded Rust hooks.
+- NDJSON events now carry richer artifacts, Web Vitals, per-fetch timings, crawl-attempt telemetry and crawl-resolution summaries.
+- `crawlex-mini` was hardened: CDP-only paths are gated cleanly in no-browser builds.
+- Large crawl efficiency grew: cache validation, prefetch discovery mode and best-first URL scoring are now available from CLI/config.
+- Render fallback grew: external CDP connection, GPU posture control, Shadow DOM flattening, overlay cleanup and last-resort fallback fetch are configurable.
+
+---
+
 ## 🏃 Quickstart
 
 ```bash
@@ -293,6 +304,25 @@ crawlex stealth test
 crawlex stealth catalog show chrome-149-linux --json
 ```
 
+### 6. Large crawl: validate cache, prefetch links, score the frontier
+
+```bash
+crawlex pages run \
+  --seed https://docs.example.com \
+  --method auto \
+  --queue sqlite --queue-path state/queue.db \
+  --storage sqlite --storage-path state/crawl.db \
+  --cache-validate \
+  --cache-max-age-secs 86400 \
+  --prefetch \
+  --best-first \
+  --score-keyword docs \
+  --score-keyword api \
+  --emit ndjson
+```
+
+This mode is for discovery passes: reuse fresh cache rows, harvest links cheaply, and let higher-value URLs rise in the queue before expensive render passes.
+
 ---
 
 ## 🎯 Features
@@ -321,12 +351,16 @@ crawlex stealth catalog show chrome-149-linux --json
 - 🔌 JS endpoint extraction from runtime
 - 🛡️ security.txt parser
 - 🧬 Asset-ref classification (JS / CSS / image / API / nav)
+- ⚡ Prefetch mode for fast discovery-only passes
+- 🎯 Best-first URL scoring with keyword bonuses
 - 🔓 TCP port scan (opt-in, network-active)
 
 ### 🛡️ Antibot policy engine
 - 🚧 Detect: Cloudflare, DataDome, PerimeterX, Akamai BMP, Imperva, hCaptcha, reCAPTCHA, Turnstile
 - 📊 Vendor telemetry observer (passive — sees outbound calls to known endpoints)
 - 🔄 Policy decisions: keep / drop / retry / scope-demote / proxy-rotate / give-up
+- 🧱 Unified block classifier with attempt-level crawl stats
+- 🪂 Fallback fetch command for last-resort HTML retrieval
 - 🎯 4 captcha solver adapters: in-house reCAPTCHA v3, 2captcha, anticaptcha, VLM
 
 </td>
@@ -334,8 +368,12 @@ crawlex stealth catalog show chrome-149-linux --json
 
 ### ⚙️ Pipeline
 - 🎯 Render pool — Chromium auto-fetch + isolated user-data dirs
+- 🔌 External CDP endpoint support for managed/browser-farm Chrome
+- 🌑 Shadow DOM flattening + overlay / consent-popup cleanup
+- 🖥️ GPU policy: compatibility mode or stealth-friendly GPU surfaces
 - 🔁 Persistent queue: in-memory / SQLite / Redis backends
 - 💾 Storage: filesystem / SQLite / memory — opt-in per concern (artifact, state, challenge, telemetry, intel)
+- 🧠 Smart cache validation: `ETag`, `Last-Modified`, `<head>` fingerprint
 - 🔄 Proxy rotator — health checks + sticky sessions + per-host affinity
 - 📊 Web Vitals + per-fetch network breakdown (DNS / TCP / TLS / TTFB / download)
 - 🎬 ScriptSpec runner — declarative `Plan` execution with assertions
@@ -344,9 +382,10 @@ crawlex stealth catalog show chrome-149-linux --json
 
 ### 📡 Observability
 - 📜 NDJSON event stream — versioned envelope (`v: 1`)
-- 🎬 19 event kinds covering full lifecycle
+- 🎬 21 event kinds covering full lifecycle
 - 🔬 Embedded `WebVitals` summary on `render.completed`
 - ⏱️ Per-request timings on `fetch.completed` (ALPN, cipher, TLS version)
+- 🧾 `crawl.attempted` / `crawl.resolved` telemetry for HTTP → render → fallback ladders
 - 📸 Artifact descriptors with on-disk path on the wire
 - 🪝 Hooks: 12 lifecycle points × 3 languages (Rust / JS / Lua)
 - 📊 Prometheus metrics endpoint
@@ -356,8 +395,9 @@ crawlex stealth catalog show chrome-149-linux --json
 - 🦀 Rust library — embed `Crawler` directly
 - 📘 TypeScript types — strict, full envelope coverage
 - 🔌 SDK `crawl()` async iterator
+- 🧩 SDK `defineHooks()` bridge for JS/TS lifecycle hooks
 - 📚 docsify docs site (GitHub Pages)
-- 🧪 386+ lib tests, 27 fpjs compliance, TLS catalog roundtrip suite
+- 🧪 390+ lib tests, 27 fpjs compliance, TLS catalog roundtrip suite
 - 🔐 Optional Lua hooks (`mlua`)
 - 🪶 Two binaries: `crawlex` (full) + `crawlex-mini` (HTTP-only, no Chromium)
 
@@ -369,16 +409,18 @@ crawlex stealth catalog show chrome-149-linux --json
 
 ## 📡 NDJSON event stream
 
-Every run emits one JSON envelope per line on stdout. Versioned, stable, 19 kinds:
+Every run emits one JSON envelope per line on stdout. Versioned, stable, 21 kinds:
 
 ```jsonl
 {"v":1,"event":"run.started","ts":"2026-04-26T19:42:00.000Z","run_id":42,"data":{"policy_profile":"strict","max_concurrent_http":8,"max_concurrent_render":2}}
 {"v":1,"event":"job.started","run_id":42,"url":"https://target.com/","data":{"job_id":"j_001","method":"render","depth":0,"priority":0,"attempts":0}}
 {"v":1,"event":"fetch.completed","run_id":42,"url":"https://target.com/","data":{"final_url":"https://target.com/","status":200,"bytes":98234,"body_truncated":false,"dns_ms":12,"tcp_connect_ms":18,"tls_handshake_ms":24,"ttfb_ms":142,"download_ms":83,"total_ms":280,"alpn":"h2","tls_version":"TLSv1.3","cipher":"TLS_AES_128_GCM_SHA256"}}
+{"v":1,"event":"crawl.attempted","run_id":42,"url":"https://target.com/","data":{"crawl_id":42,"attempt_index":1,"engine":"http_spoof","status":403,"blocked":true,"block_reason":"Cloudflare challenge form"}}
 {"v":1,"event":"render.completed","run_id":42,"session_id":"sess_abc","url":"https://target.com/","data":{"final_url":"https://target.com/","status":200,"manifest":true,"service_workers":1,"is_spa":true,"vitals":{"ttfb_ms":142,"first_contentful_paint_ms":380.5,"largest_contentful_paint_ms":920.1,"cumulative_layout_shift":0.03,"total_blocking_time_ms":50.0,"dom_nodes":1842,"js_heap_used_bytes":12345678,"resource_count":45,"total_transfer_bytes":982341}}}
 {"v":1,"event":"artifact.saved","run_id":42,"url":"https://target.com/","data":{"kind":"screenshot.full_page","mime":"image/png","size":1234567,"sha256":"a1b2c3...","path":"artifacts/sess_abc/1714123456_screenshot_full_page_a1b2c3d4.png"}}
 {"v":1,"event":"challenge.detected","run_id":42,"url":"https://protected.com/","data":{"vendor":"cloudflare_turnstile","level":"widget_present"}}
 {"v":1,"event":"decision.made","run_id":42,"url":"https://protected.com/","why":"render:js-challenge","data":{"decision":"retry","reason":{"code":"render:js-challenge"}}}
+{"v":1,"event":"crawl.resolved","run_id":42,"url":"https://target.com/","data":{"crawl_id":42,"attempts_count":2,"fallback_fetch_used":false,"resolved_by":"render","success":true}}
 {"v":1,"event":"run.completed","run_id":42}
 ```
 
@@ -429,14 +471,17 @@ crawlex pages run --seed https://target.com --persona pixel    # mobile
 flowchart LR
   S[Seeds] --> Q[Frontier<br/>+ dedupe + rate-limit]
   Q --> P[Policy Engine]
-  P -->|http| F[ImpersonateClient<br/>BoringSSL + h2 patched]
+  P --> C[Cache Validator<br/>ETag + Last-Modified + head fingerprint]
+  C -->|fresh| ST[Storage<br/>5 traits]
+  C -->|stale| F[ImpersonateClient<br/>BoringSSL + h2 patched]
+  P -->|http| F
   P -->|render| R[RenderPool<br/>Chromium + stealth shim]
   F --> X[Extractor<br/>+ Asset Refs]
   R --> X
   X --> D[Discovery<br/>Pipeline]
-  X --> ST[Storage<br/>5 traits]
+  X --> ST
   D --> Q
-  P --> EV[NDJSON Events<br/>19 kinds]
+  P --> EV[NDJSON Events<br/>21 kinds]
   R --> H1[Rust Hooks]
   R --> H2[JS Bridge]
   R --> H3[Lua Scripts]
@@ -448,6 +493,7 @@ flowchart LR
 - `discovery/` — 17-stage pipeline (DNS, RDAP, sitemap, robots, crtsh, wayback, well-known, …)
 - `policy/` — pure engine: `decide_pre_fetch`, `decide_post_fetch`, `decide_post_error`, `decide_post_challenge`
 - `antibot/` — vendor classifier + 4 captcha solver adapters
+- `cache_validator/` — cache freshness by HTTP validators and head fingerprints
 - `storage/` — 5 concern-oriented traits (artifact / state / challenge / telemetry / intel)
 - `events/` — NDJSON envelope + sink (stdout / null / memory)
 - `hooks/` — registry + JS bridge + Lua host
@@ -509,7 +555,7 @@ git clone https://github.com/forattini-dev/crawlex
 cd crawlex
 
 # Unit tests + offline shim compliance
-cargo test --lib                    # 386+ tests
+cargo test --lib                    # 390+ tests
 cargo test --test fpjs_compliance   # 27 cases
 cargo test --test tls_catalog_coverage --test tls_catalog_roundtrip
 

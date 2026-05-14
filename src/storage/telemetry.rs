@@ -23,4 +23,17 @@ pub trait TelemetryStorage: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+
+    /// Persist a single crawl attempt across the HTTP/render/fallback ladder.
+    async fn record_crawl_attempt(
+        &self,
+        _attempt: &crate::crawl_stats::CrawlAttemptRecord,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persist the resolved crawl-level summary. Default no-op.
+    async fn record_crawl_stats(&self, _stats: &crate::crawl_stats::CrawlStats) -> Result<()> {
+        Ok(())
+    }
 }

@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::render::chrome::browser::{Browser, BrowserConfig};
+use crate::render::chrome::handler::HandlerConfig;
 use crate::render::chrome::page::Page;
 use crate::render::chrome_protocol::cdp::browser_protocol::browser::BrowserContextId;
 use crate::render::chrome_protocol::cdp::browser_protocol::emulation::{
@@ -98,6 +99,61 @@ fn diff(start: f64, end: f64) -> Option<f64> {
     }
 }
 
+const SHADOW_ROOT_CAPTURE_JS: &str = r#"
+;(() => {
+  if (Element.prototype.__crawlexAttachShadowPatched__) return;
+  const original = Element.prototype.attachShadow;
+  Object.defineProperty(Element.prototype, "__crawlexAttachShadowPatched__", { value: true });
+  Element.prototype.attachShadow = function(init) {
+    const root = original.call(this, init);
+    try { Object.defineProperty(this, "__crawlexShadowRoot", { value: root, configurable: true }); } catch (_) {}
+    return root;
+  };
+})();
+"#;
+
+const DOM_CLEANUP_JS: &str = r#"
+;(() => {
+  const removeConsent = __REMOVE_CONSENT__;
+  const removeOverlays = __REMOVE_OVERLAYS__;
+  const consentRe = /(cookie|cookies|consent|privacy|gdpr|ccpa|didomi|onetrust|trustarc|quantcast|iubenda|cookiebot)/i;
+  const shouldDrop = (el) => {
+    const idClass = `${el.id || ""} ${el.className || ""} ${el.getAttribute("aria-label") || ""}`;
+    if (removeConsent && consentRe.test(idClass)) return true;
+    if (!removeOverlays) return false;
+    const style = window.getComputedStyle(el);
+    if (!style) return false;
+    const rect = el.getBoundingClientRect();
+    const coversViewport = rect.width >= innerWidth * 0.35 && rect.height >= innerHeight * 0.18;
+    const highZ = Number.parseInt(style.zIndex || "0", 10) >= 1000;
+    return coversViewport && highZ && (style.position === "fixed" || style.position === "sticky");
+  };
+  for (const el of Array.from(document.querySelectorAll("body *"))) {
+    try {
+      if (shouldDrop(el)) el.remove();
+    } catch (_) {}
+  }
+})();
+"#;
+
+const FLATTEN_SHADOW_DOM_JS: &str = r#"
+;(() => {
+  const walk = (node) => {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
+    const root = node.shadowRoot || node.__crawlexShadowRoot;
+    if (root && !node.querySelector(":scope > template[data-crawlex-shadow-root]")) {
+      const tpl = document.createElement("template");
+      tpl.setAttribute("data-crawlex-shadow-root", root.mode || "closed");
+      tpl.innerHTML = root.innerHTML;
+      node.appendChild(tpl);
+    }
+    for (const child of Array.from(node.children || [])) walk(child);
+  };
+  walk(document.documentElement);
+  return document.documentElement.outerHTML;
+})();
+"#;
+
 /// Build the Chromium launch argv for a browser instance.
 ///
 /// Single source of truth for the set of `--flag=value` tokens passed to
@@ -149,6 +205,24 @@ pub fn build_launch_args(
     languages: &str,
     extra: &[String],
 ) -> Vec<String> {
+    build_launch_args_with_gpu(
+        bundle,
+        proxy,
+        user_data_dir,
+        languages,
+        crate::config::GpuPolicy::Compat,
+        extra,
+    )
+}
+
+pub fn build_launch_args_with_gpu(
+    bundle: &crate::identity::IdentityBundle,
+    proxy: Option<&Url>,
+    user_data_dir: &std::path::Path,
+    languages: &str,
+    gpu_policy: crate::config::GpuPolicy,
+    extra: &[String],
+) -> Vec<String> {
     // Viewport / DPR come from the bundle so the launched Chrome matches
     // what the stealth shim and UA-CH payload claim. Fall back to a
     // conservative desktop default if the bundle somehow has a zero
@@ -172,9 +246,6 @@ pub fn build_launch_args(
     let mut flags: Vec<String> = vec![
         // Stability -----------------------------------------------------
         "--disable-dev-shm-usage".into(),
-        // GPU: conservative default. Headless/docker rarely has DRM.
-        // Operators flip this on via `Config::chrome_flags` (see doc).
-        "--disable-gpu".into(),
         // Stealth -------------------------------------------------------
         "--disable-blink-features=AutomationControlled".into(),
         // Feature toggles we turn OFF. Keep WebRtcHideLocalIpsWithMdns
@@ -212,6 +283,17 @@ pub fn build_launch_args(
         // fingerprinting surface without breaking normal WebAssembly.
         "--js-flags=--noexpose-wasm".into(),
     ];
+    match gpu_policy {
+        crate::config::GpuPolicy::Compat => {
+            // Conservative default. Headless/docker rarely has DRM.
+            flags.push("--disable-gpu".into());
+        }
+        crate::config::GpuPolicy::Stealth => {
+            flags.push("--enable-gpu-rasterization".into());
+            flags.push("--use-gl=angle".into());
+            flags.push("--use-angle=swiftshader".into());
+        }
+    }
 
     // Route this browser through the requested proxy. Per-job rotation
     // is achieved by keying `browsers` on the proxy URL — each unique
@@ -844,7 +926,10 @@ impl RenderPool {
             return s.clone();
         }
         let bundle = self.bundle();
-        let js = render_shim_from_bundle(&bundle);
+        let mut js = render_shim_from_bundle(&bundle);
+        if self.config.dom_capture.flatten_shadow_dom {
+            js.push_str(SHADOW_ROOT_CAPTURE_JS);
+        }
         *self.shim_cache.lock() = Some(js.clone());
         js
     }
@@ -872,13 +957,116 @@ impl RenderPool {
     /// resolved path so callers can log it. Safe to call even when no render
     /// is planned — in that case `Err` is typically ignored by the caller.
     pub async fn preflight(&self) -> Result<String> {
+        if let Some(endpoint) = self.config.external_cdp_url.as_deref() {
+            tracing::info!(
+                external_cdp_url = endpoint,
+                "render pool: using external CDP endpoint"
+            );
+            return Ok(endpoint.to_string());
+        }
         let path = self.resolve_chrome_path_async().await?;
         tracing::info!(chrome = %path, "render pool: using Chrome binary");
         Ok(path)
     }
 
+    fn browser_key_for(&self, proxy: Option<&Url>) -> String {
+        self.config
+            .external_cdp_url
+            .as_ref()
+            .map(|u| format!("external:{u}"))
+            .unwrap_or_else(|| proxy.map(|u| u.to_string()).unwrap_or_default())
+    }
+
+    fn spawn_child_shim_watcher(&self, browser: Arc<Browser>) {
+        let shim = self.shim_js();
+        tokio::spawn(async move {
+            let mut seen: std::collections::HashSet<
+                crate::render::chrome_protocol::cdp::browser_protocol::target::TargetId,
+            > = std::collections::HashSet::new();
+            let install = AddScriptToEvaluateOnNewDocumentParams {
+                source: shim,
+                world_name: None,
+                include_command_line_api: Some(false),
+                run_immediately: Some(true),
+            };
+            loop {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let pages = match browser.pages().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                for p in pages {
+                    let id = p.target_id().clone();
+                    if seen.insert(id.clone()) {
+                        if let Err(e) = p.execute(install.clone()).await {
+                            tracing::debug!(target = ?id, ?e, "shim install on child target failed (likely worker — handled via Runtime.evaluate)");
+                        } else {
+                            tracing::debug!(target = ?id, "stealth shim installed on child target");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn register_browser(&self, key: String, browser: Arc<Browser>) {
+        self.browsers.insert(key.clone(), browser);
+        if let Some(c) = self.counters_opt() {
+            c.browsers_active
+                .store(self.browsers.len(), std::sync::atomic::Ordering::Relaxed);
+        }
+        let max_browsers = self.config.max_browsers.max(1);
+        {
+            let mut mru = self.mru.lock();
+            mru.retain(|k| k != &key);
+            mru.push_front(key.clone());
+            while mru.len() > max_browsers {
+                if let Some(old) = mru.pop_back() {
+                    if let Some((_, b)) = self.browsers.remove(&old) {
+                        drop(b);
+                        self.browser_locks.remove(&old);
+                        let prefix = if old.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{old}|")
+                        };
+                        let ctx_keys: Vec<String> = self
+                            .contexts
+                            .iter()
+                            .filter(|kv| {
+                                if prefix.is_empty() {
+                                    !kv.key().contains('|')
+                                } else {
+                                    kv.key().starts_with(&prefix)
+                                }
+                            })
+                            .map(|kv| kv.key().clone())
+                            .collect();
+                        for ck in &ctx_keys {
+                            self.page_pool.drop_context(ck);
+                        }
+                        if prefix.is_empty() {
+                            self.contexts.retain(|k, _| k.contains('|'));
+                            self.context_locks.retain(|k, _| k.contains('|'));
+                        } else {
+                            self.contexts.retain(|k, _| !k.starts_with(&prefix));
+                            self.context_locks.retain(|k, _| !k.starts_with(&prefix));
+                        }
+                        tracing::debug!(proxy = %old, "render pool evicted browser");
+                    }
+                }
+            }
+        }
+        if let Some(c) = self.counters_opt() {
+            c.browsers_active
+                .store(self.browsers.len(), std::sync::atomic::Ordering::Relaxed);
+            c.contexts_active
+                .store(self.contexts.len(), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     async fn ensure_browser(&self, proxy: Option<&Url>) -> Result<Arc<Browser>> {
-        let key = proxy.map(|u| u.to_string()).unwrap_or_default();
+        let key = self.browser_key_for(proxy);
         // Fast path: browser already launched for this proxy.
         if let Some(b) = self.browsers.get(&key) {
             return Ok(b.clone());
@@ -893,6 +1081,50 @@ impl RenderPool {
         if let Some(b) = self.browsers.get(&key) {
             return Ok(b.clone());
         }
+        if let Some(endpoint) = self.config.external_cdp_url.as_deref() {
+            if proxy.is_some() {
+                tracing::debug!(
+                    external_cdp_url = endpoint,
+                    "external CDP is configured; per-job proxy launch flags are owned by the external browser"
+                );
+            }
+            let stealth = crate::render::chrome::browser::StealthConfig {
+                runtime_enable_skip: true,
+                worker_init_script: Some(self.worker_shim_js()),
+            };
+            let handler_config = HandlerConfig {
+                request_timeout: Duration::from_secs(60),
+                stealth,
+                ..Default::default()
+            };
+            let (browser, mut handler) = Browser::connect_with_config(endpoint, handler_config)
+                .await
+                .map_err(|e| Error::Render(format!("external cdp connect: {e}")))?;
+            tokio::spawn(async move {
+                while let Some(ev) = handler.next().await {
+                    if let Err(e) = ev {
+                        warn!(?e, "cdp handler error");
+                    }
+                }
+            });
+            let auto_attach = SetAutoAttachParams::builder()
+                .auto_attach(true)
+                .wait_for_debugger_on_start(false)
+                .flatten(true)
+                .build()
+                .map_err(|e| Error::Render(format!("setAutoAttach build: {e}")))?;
+            if let Err(e) = browser.execute(auto_attach).await {
+                warn!(
+                    ?e,
+                    "Target.setAutoAttach failed; child targets won't get the stealth shim"
+                );
+            }
+            let browser = Arc::new(browser);
+            self.spawn_child_shim_watcher(browser.clone());
+            self.register_browser(key, browser.clone());
+            return Ok(browser);
+        }
+
         let bundle = self.bundle();
         // Lock in the Chrome binary once: user override wins, otherwise we
         // walk `CHROME_CANDIDATES` and fail loudly if nothing is installed.
@@ -912,7 +1144,14 @@ impl RenderPool {
         };
         let udd = self.user_data_root.join(udd_name);
         let _ = std::fs::create_dir_all(&udd);
-        let flags = build_launch_args(&bundle, proxy, &udd, &languages, &self.config.chrome_flags);
+        let flags = build_launch_args_with_gpu(
+            &bundle,
+            proxy,
+            &udd,
+            &languages,
+            self.config.gpu_policy,
+            &self.config.chrome_flags,
+        );
         builder = builder.args(flags);
         builder = builder.request_timeout(Duration::from_secs(60));
         // P0-4 stealth: suppress `Runtime.enable` on new targets so
@@ -1567,6 +1806,50 @@ impl RenderPool {
         if let Err(e) = page.evaluate_expression(params).await {
             tracing::debug!(?e, "spa observer post-nav reinject failed");
         }
+    }
+
+    async fn prepare_dom_capture(&self, page: &Page) {
+        if !self.config.dom_capture.remove_overlays
+            && !self.config.dom_capture.remove_consent_popups
+        {
+            return;
+        }
+        let js = DOM_CLEANUP_JS
+            .replace(
+                "__REMOVE_CONSENT__",
+                if self.config.dom_capture.remove_consent_popups {
+                    "true"
+                } else {
+                    "false"
+                },
+            )
+            .replace(
+                "__REMOVE_OVERLAYS__",
+                if self.config.dom_capture.remove_overlays {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
+        if let Err(e) = crate::render::interact::eval_js(page, &js).await {
+            tracing::debug!(?e, "dom capture cleanup failed");
+        }
+    }
+
+    async fn capture_dom_html(&self, page: &Page) -> Result<String> {
+        if self.config.dom_capture.flatten_shadow_dom {
+            match crate::render::interact::eval_js(page, FLATTEN_SHADOW_DOM_JS).await {
+                Ok(v) => {
+                    if let Some(html) = v.as_str() {
+                        return Ok(html.to_string());
+                    }
+                }
+                Err(e) => tracing::debug!(?e, "shadow DOM flatten capture failed"),
+            }
+        }
+        page.content()
+            .await
+            .map_err(|e| Error::Render(format!("content: {e}")))
     }
 
     /// Read the two observer globals in one round-trip. Returns
@@ -2467,7 +2750,7 @@ impl RenderPool {
         let _permit = self.sem.clone().acquire_owned().await.unwrap();
         let render_started = std::time::Instant::now();
         let browser = self.ensure_browser(proxy).await?;
-        let browser_key = proxy.map(|u| u.to_string()).unwrap_or_default();
+        let browser_key = self.browser_key_for(proxy);
         let session_id = self.session_id_for_url(url);
         let ctx_id = self
             .ensure_session_context(&browser_key, &browser, &session_id)
@@ -2893,10 +3176,8 @@ impl RenderPool {
             }
         }
 
-        let html = page
-            .content()
-            .await
-            .map_err(|e| Error::Render(format!("content: {e}")))?;
+        self.prepare_dom_capture(&page).await;
+        let html = self.capture_dom_html(&page).await?;
 
         let screenshot_png = if screenshot {
             let mode =

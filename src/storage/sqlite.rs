@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use url::Url;
 use crate::config::ContentStoreConfig;
 use crate::storage::{
     ArtifactKind, ArtifactMeta, ArtifactRow, ArtifactStorage, ChallengeStorage, HostFacts,
-    IntelStorage, PageMetadata, StateStorage, Storage, TelemetryStorage,
+    IntelStorage, PageCacheMetadata, PageMetadata, StateStorage, Storage, TelemetryStorage,
 };
 use crate::{Error, Result};
 
@@ -39,6 +39,9 @@ enum Op {
         mime: String,
         body_truncated: i64,
         kind: String,
+        etag: Option<String>,
+        last_modified: Option<String>,
+        head_fingerprint: Option<String>,
     },
     SaveRendered {
         url: String,
@@ -51,6 +54,7 @@ enum Op {
         blob_size: i64,
         blob_path: Option<String>,
         kind: String,
+        head_fingerprint: Option<String>,
     },
     SaveEdge {
         src: String,
@@ -135,6 +139,32 @@ enum Op {
         payload_size: i64,
         payload_shape: String,
         pattern_label: String,
+        observed_at: i64,
+    },
+    RecordCrawlAttempt {
+        crawl_id: i64,
+        url: String,
+        attempt_index: i64,
+        engine: String,
+        proxy_requested: Option<String>,
+        proxy_effective: Option<String>,
+        status: Option<i64>,
+        blocked: i64,
+        block_reason: Option<String>,
+        vendor: Option<String>,
+        level: Option<String>,
+        latency_ms: i64,
+        error: Option<String>,
+        observed_at: i64,
+    },
+    RecordCrawlStats {
+        crawl_id: i64,
+        url: String,
+        attempts_json: String,
+        attempts_count: i64,
+        fallback_fetch_used: i64,
+        resolved_by: Option<String>,
+        success: i64,
         observed_at: i64,
     },
     ArchiveSession {
@@ -324,6 +354,9 @@ impl SqliteStorage {
                 html_mime TEXT,
                 body_truncated INTEGER NOT NULL DEFAULT 0,
                 headers_json TEXT,
+                etag TEXT,
+                last_modified TEXT,
+                head_fingerprint TEXT,
                 kind TEXT,
                 favicon_mmh3 INTEGER,
                 saved_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
@@ -478,6 +511,38 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_vendor_telem_session ON vendor_telemetry(session_id);
             CREATE INDEX IF NOT EXISTS idx_vendor_telem_vendor ON vendor_telemetry(vendor);
             CREATE INDEX IF NOT EXISTS idx_vendor_telem_observed ON vendor_telemetry(observed_at);
+            CREATE TABLE IF NOT EXISTS crawl_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                crawl_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                attempt_index INTEGER NOT NULL,
+                engine TEXT NOT NULL,
+                proxy_requested TEXT,
+                proxy_effective TEXT,
+                status INTEGER,
+                blocked INTEGER NOT NULL,
+                block_reason TEXT,
+                vendor TEXT,
+                level TEXT,
+                latency_ms INTEGER NOT NULL,
+                error TEXT,
+                observed_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crawl_attempts_crawl ON crawl_attempts(crawl_id);
+            CREATE INDEX IF NOT EXISTS idx_crawl_attempts_url ON crawl_attempts(url);
+            CREATE INDEX IF NOT EXISTS idx_crawl_attempts_observed ON crawl_attempts(observed_at);
+            CREATE TABLE IF NOT EXISTS crawl_stats (
+                crawl_id INTEGER PRIMARY KEY,
+                url TEXT NOT NULL,
+                attempts_json TEXT NOT NULL,
+                attempts_count INTEGER NOT NULL,
+                fallback_fetch_used INTEGER NOT NULL,
+                resolved_by TEXT,
+                success INTEGER NOT NULL,
+                observed_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crawl_stats_url ON crawl_stats(url);
+            CREATE INDEX IF NOT EXISTS idx_crawl_stats_observed ON crawl_stats(observed_at);
             CREATE TABLE IF NOT EXISTS artifacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
@@ -708,6 +773,9 @@ impl SqliteStorage {
             "ALTER TABLE pages ADD COLUMN body_mime TEXT",
             "ALTER TABLE pages ADD COLUMN html_mime TEXT",
             "ALTER TABLE pages ADD COLUMN body_truncated INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE pages ADD COLUMN etag TEXT",
+            "ALTER TABLE pages ADD COLUMN last_modified TEXT",
+            "ALTER TABLE pages ADD COLUMN head_fingerprint TEXT",
         ] {
             let _ = conn.execute(sql, []);
         }
@@ -946,6 +1014,9 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
             mime,
             body_truncated,
             kind,
+            etag,
+            last_modified,
+            head_fingerprint,
         } => {
             if let Some(blob_path) = blob_path.as_ref() {
                 tx.execute(
@@ -962,8 +1033,8 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
             tx.execute(
                 "INSERT INTO pages (url, final_url, status, bytes, rendered, sha256, body,
                         body_sha256, body_blob_path, body_size, body_mime, body_truncated,
-                        headers_json, kind)
-                 VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?)
+                        headers_json, etag, last_modified, head_fingerprint, kind)
+                 VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON CONFLICT(url) DO UPDATE SET
                     final_url=excluded.final_url, status=excluded.status,
                     bytes=excluded.bytes, sha256=excluded.sha256, body=excluded.body,
@@ -972,7 +1043,11 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     body_size=excluded.body_size,
                     body_mime=excluded.body_mime,
                     body_truncated=excluded.body_truncated,
-                    headers_json=excluded.headers_json, kind=excluded.kind,
+                    headers_json=excluded.headers_json,
+                    etag=excluded.etag,
+                    last_modified=excluded.last_modified,
+                    head_fingerprint=COALESCE(excluded.head_fingerprint, pages.head_fingerprint),
+                    kind=excluded.kind,
                     saved_at=strftime('%s','now')",
                 params![
                     url,
@@ -987,6 +1062,9 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     mime,
                     body_truncated,
                     headers_json,
+                    etag,
+                    last_modified,
+                    head_fingerprint,
                     kind
                 ],
             )?;
@@ -1002,6 +1080,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
             blob_size,
             blob_path,
             kind,
+            head_fingerprint,
         } => {
             if let Some(blob_path) = blob_path.as_ref() {
                 tx.execute(
@@ -1017,8 +1096,8 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
             }
             tx.execute(
                 "INSERT INTO pages (url, final_url, status, bytes, rendered, sha256, html,
-                        html_sha256, html_blob_path, html_size, html_mime, kind)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                        html_sha256, html_blob_path, html_size, html_mime, head_fingerprint, kind)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON CONFLICT(url) DO UPDATE SET
                     final_url=excluded.final_url, status=excluded.status, bytes=excluded.bytes,
                     rendered=excluded.rendered, sha256=excluded.sha256, html=excluded.html,
@@ -1026,6 +1105,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     html_blob_path=excluded.html_blob_path,
                     html_size=excluded.html_size,
                     html_mime=excluded.html_mime,
+                    head_fingerprint=COALESCE(excluded.head_fingerprint, pages.head_fingerprint),
                     kind=excluded.kind, saved_at=strftime('%s','now')",
                 params![
                     url,
@@ -1039,6 +1119,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     blob_path,
                     blob_size,
                     "text/html",
+                    head_fingerprint,
                     kind
                 ],
             )?;
@@ -1401,6 +1482,81 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                 ],
             )?;
         }
+        Op::RecordCrawlAttempt {
+            crawl_id,
+            url,
+            attempt_index,
+            engine,
+            proxy_requested,
+            proxy_effective,
+            status,
+            blocked,
+            block_reason,
+            vendor,
+            level,
+            latency_ms,
+            error,
+            observed_at,
+        } => {
+            tx.execute(
+                "INSERT INTO crawl_attempts
+                    (crawl_id, url, attempt_index, engine, proxy_requested,
+                     proxy_effective, status, blocked, block_reason, vendor,
+                     level, latency_ms, error, observed_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                params![
+                    crawl_id,
+                    url,
+                    attempt_index,
+                    engine,
+                    proxy_requested,
+                    proxy_effective,
+                    status,
+                    blocked,
+                    block_reason,
+                    vendor,
+                    level,
+                    latency_ms,
+                    error,
+                    observed_at,
+                ],
+            )?;
+        }
+        Op::RecordCrawlStats {
+            crawl_id,
+            url,
+            attempts_json,
+            attempts_count,
+            fallback_fetch_used,
+            resolved_by,
+            success,
+            observed_at,
+        } => {
+            tx.execute(
+                "INSERT INTO crawl_stats
+                    (crawl_id, url, attempts_json, attempts_count,
+                     fallback_fetch_used, resolved_by, success, observed_at)
+                 VALUES (?,?,?,?,?,?,?,?)
+                 ON CONFLICT(crawl_id) DO UPDATE SET
+                    url=excluded.url,
+                    attempts_json=excluded.attempts_json,
+                    attempts_count=excluded.attempts_count,
+                    fallback_fetch_used=excluded.fallback_fetch_used,
+                    resolved_by=excluded.resolved_by,
+                    success=excluded.success,
+                    observed_at=excluded.observed_at",
+                params![
+                    crawl_id,
+                    url,
+                    attempts_json,
+                    attempts_count,
+                    fallback_fetch_used,
+                    resolved_by,
+                    success,
+                    observed_at,
+                ],
+            )?;
+        }
         Op::ArchiveSession {
             session_id,
             scope,
@@ -1603,6 +1759,9 @@ impl ArtifactStorage for SqliteStorage {
         let hash = hex::encode(Sha256::digest(body));
         let body_vec = body.to_vec();
         let body_size = body_vec.len() as i64;
+        let head_fingerprint = crate::cache_validator::looks_like_html(headers, &body_vec)
+            .then(|| String::from_utf8_lossy(&body_vec).to_string())
+            .and_then(|html| crate::cache_validator::compute_head_fingerprint(&html));
         let blob_path = if self.content_store_enabled {
             Some(
                 write_blob(
@@ -1624,6 +1783,8 @@ impl ArtifactStorage for SqliteStorage {
         let hdrs = headers_to_json(headers);
         let ct = headers.get("content-type").and_then(|v| v.to_str().ok());
         let mime = ct.unwrap_or("application/octet-stream").to_string();
+        let etag = crate::cache_validator::header_string(headers, "etag");
+        let last_modified = crate::cache_validator::header_string(headers, "last-modified");
         let kind = crate::discovery::classify_with_mime(url, ct)
             .as_str()
             .to_string();
@@ -1639,6 +1800,9 @@ impl ArtifactStorage for SqliteStorage {
             mime,
             body_truncated: if truncated { 1 } else { 0 },
             kind,
+            etag,
+            last_modified,
+            head_fingerprint,
         })
         .await
     }
@@ -1662,6 +1826,7 @@ impl ArtifactStorage for SqliteStorage {
         } else {
             None
         };
+        let head_fingerprint = crate::cache_validator::compute_head_fingerprint(html_post_js);
         self.send(Op::SaveRendered {
             url: url.to_string(),
             final_url: meta.final_url.to_string(),
@@ -1673,6 +1838,7 @@ impl ArtifactStorage for SqliteStorage {
             blob_size,
             blob_path,
             kind: meta.kind.as_str().to_string(),
+            head_fingerprint,
         })
         .await
     }
@@ -1853,6 +2019,56 @@ impl ArtifactStorage for SqliteStorage {
         })
         .await
         .map_err(|e| Error::Storage(format!("artifacts join: {e}")))?
+    }
+
+    async fn page_cache_metadata(&self, url: &Url) -> Result<Option<PageCacheMetadata>> {
+        let path = self.path.clone();
+        let url_s = url.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<PageCacheMetadata>> {
+            let conn = rusqlite::Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(|e| Error::Storage(format!("page cache read open: {e}")))?;
+            let row = conn
+                .query_row(
+                    "SELECT url, final_url, status, etag, last_modified, head_fingerprint, saved_at
+                     FROM pages
+                     WHERE url = ?1",
+                    params![url_s],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, Option<String>>(4)?,
+                            r.get::<_, Option<String>>(5)?,
+                            r.get::<_, i64>(6)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(|e| Error::Storage(format!("page cache query: {e}")))?;
+            let Some((url_s, final_url_s, status, etag, last_modified, head_fingerprint, saved_at)) =
+                row
+            else {
+                return Ok(None);
+            };
+            let url = Url::parse(&url_s).map_err(Error::UrlParse)?;
+            let final_url = Url::parse(&final_url_s).map_err(Error::UrlParse)?;
+            Ok(Some(PageCacheMetadata {
+                url,
+                final_url,
+                status: status.clamp(0, u16::MAX as i64) as u16,
+                etag,
+                last_modified,
+                head_fingerprint,
+                saved_at_unix: saved_at.max(0) as u64,
+            }))
+        })
+        .await
+        .map_err(|e| Error::Storage(format!("page cache join: {e}")))?
     }
 }
 
@@ -2104,6 +2320,45 @@ impl TelemetryStorage for SqliteStorage {
             payload_shape: shape_json,
             pattern_label: telem.pattern_label.to_string(),
             observed_at,
+        })
+        .await
+    }
+
+    async fn record_crawl_attempt(
+        &self,
+        attempt: &crate::crawl_stats::CrawlAttemptRecord,
+    ) -> Result<()> {
+        self.send(Op::RecordCrawlAttempt {
+            crawl_id: attempt.crawl_id as i64,
+            url: attempt.url.to_string(),
+            attempt_index: attempt.attempt_index as i64,
+            engine: attempt.engine.as_str().to_string(),
+            proxy_requested: attempt.proxy_requested.as_ref().map(ToString::to_string),
+            proxy_effective: attempt.proxy_effective.as_ref().map(ToString::to_string),
+            status: attempt.status.map(|v| v as i64),
+            blocked: if attempt.blocked { 1 } else { 0 },
+            block_reason: attempt.block_reason.clone(),
+            vendor: attempt.vendor.map(|v| v.as_str().to_string()),
+            level: attempt.level.map(|v| v.as_str().to_string()),
+            latency_ms: attempt.latency_ms as i64,
+            error: attempt.error.clone(),
+            observed_at: attempt.observed_at,
+        })
+        .await
+    }
+
+    async fn record_crawl_stats(&self, stats: &crate::crawl_stats::CrawlStats) -> Result<()> {
+        let attempts_json = serde_json::to_string(&stats.attempts)
+            .map_err(|e| Error::Storage(format!("crawl stats JSON: {e}")))?;
+        self.send(Op::RecordCrawlStats {
+            crawl_id: stats.crawl_id as i64,
+            url: stats.url.to_string(),
+            attempts_json,
+            attempts_count: stats.attempts.len() as i64,
+            fallback_fetch_used: if stats.fallback_fetch_used { 1 } else { 0 },
+            resolved_by: stats.resolved_by.map(|e| e.as_str().to_string()),
+            success: if stats.success { 1 } else { 0 },
+            observed_at: crate::crawl_stats::now_unix(),
         })
         .await
     }

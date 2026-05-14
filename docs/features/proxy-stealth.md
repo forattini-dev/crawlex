@@ -53,3 +53,23 @@ cargo run --release -- test-stealth
 ```
 
 They are the fastest way to see whether a profile or transport change drifted.
+
+## Render stealth and anti-bot fallback
+
+Recent render controls:
+
+- `--external-cdp-url <url>` connects to an already-running Chrome/Chromium endpoint instead of launching a local browser.
+- `--gpu-policy compat|stealth` chooses between maximum compatibility and keeping GPU surfaces closer to a normal Chrome profile.
+- `--flatten-shadow-dom` serializes open shadow-root content into captured HTML.
+- `--remove-overlays` removes fixed/sticky modal overlays before DOM capture.
+- `--remove-consent-popups` removes common cookie/consent banners before DOM capture.
+
+When a known block page is detected after HTTP or render attempts, `--fallback-fetch-command` can call an external fetcher. Crawlex sends JSON on stdin and expects JSON on stdout with fields such as `status`, `final_url`, `headers`, `html` or `body`.
+
+```bash
+crawlex crawl \
+  --seed https://protected.example \
+  --method auto \
+  --fallback-fetch-command ./web-unlocker \
+  --fallback-fetch-timeout-ms 60000
+```

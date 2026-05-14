@@ -226,6 +226,46 @@ async fn sqlite_content_store_writes_blobs_without_legacy_inline_columns_by_defa
 }
 
 #[tokio::test]
+async fn sqlite_page_cache_metadata_round_trips_validators_and_head_fingerprint() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("cache.db");
+    let sq = crawlex::storage::sqlite::SqliteStorage::open(&db_path).unwrap();
+
+    let url = Url::parse("https://cache.example/page").unwrap();
+    let final_url = Url::parse("https://cache.example/page?final=1").unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("etag", "\"v1\"".parse().unwrap());
+    headers.insert(
+        "last-modified",
+        "Mon, 27 Apr 2026 12:00:00 GMT".parse().unwrap(),
+    );
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let body = Bytes::from_static(
+        br#"<html><head><title>Cache Me</title><meta name="description" content="stable"></head><body>v1</body></html>"#,
+    );
+
+    sq.save_raw_response(&url, &final_url, 200, &headers, &body, false)
+        .await
+        .unwrap();
+
+    for _ in 0..20 {
+        if let Some(meta) = sq.page_cache_metadata(&url).await.unwrap() {
+            assert_eq!(meta.final_url, final_url);
+            assert_eq!(meta.status, 200);
+            assert_eq!(meta.etag.as_deref(), Some("\"v1\""));
+            assert_eq!(
+                meta.last_modified.as_deref(),
+                Some("Mon, 27 Apr 2026 12:00:00 GMT")
+            );
+            assert!(meta.head_fingerprint.is_some());
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("cache metadata was not persisted");
+}
+
+#[tokio::test]
 async fn sqlite_content_store_can_keep_legacy_inline_columns() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("legacy.db");

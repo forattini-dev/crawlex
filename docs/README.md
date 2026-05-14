@@ -10,6 +10,15 @@ This repository publishes the `crawlex` CLI, library and JavaScript wrapper. The
 - It keeps state outside the process through SQLite queues and storage backends, so long crawls survive restarts.
 - It emits a stable NDJSON event envelope that SDKs and pipelines can consume without scraping terminal text.
 - It adds discovery probes around the main crawl path: robots paths, `/.well-known`, PWA manifests, Wayback, DNS, favicon hashes, peer certs and RDAP.
+- It can validate cached pages before reprocessing them, run discovery-only prefetch passes, and score the frontier so high-value links run first.
+
+## Last 24h update
+
+- Releases `1.0.1` through `1.0.4` shipped, including docsify GitHub Pages deployment.
+- JS hook bridge support landed in the SDK through `defineHooks()`.
+- The event stream gained artifact paths, Web Vitals, fetch timings, crawl attempts and crawl-resolution summaries.
+- The HTTP-only mini build was hardened so CDP-only behavior fails cleanly.
+- The current tree also documents cache validation, prefetch discovery mode, best-first scoring, external CDP, GPU posture, DOM cleanup and fallback fetch.
 
 ## What a run looks like
 
@@ -17,8 +26,9 @@ This repository publishes the `crawlex` CLI, library and JavaScript wrapper. The
 flowchart LR
   A[Seeds] --> B[Queue]
   B --> C[Policy]
-  C --> D[HTTP spoof fetch]
-  C --> E[Chrome render]
+  C --> V[Cache validation]
+  V --> D[HTTP spoof fetch]
+  V --> E[Chrome render]
   D --> F[Extraction]
   E --> F
   F --> G[Storage]
@@ -34,6 +44,8 @@ cargo run --release -- crawl \
   --method auto \
   --queue sqlite --queue-path state/queue.db \
   --storage sqlite --storage-path state/crawl.db \
+  --cache-validate \
+  --best-first \
   --emit ndjson \
   --explain
 ```

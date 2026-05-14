@@ -32,13 +32,16 @@
 )]
 
 pub mod antibot;
+pub mod cache_validator;
 pub mod config;
+pub mod crawl_stats;
 pub mod crawler;
 pub mod discovery;
 pub mod error;
 pub mod escalation;
 pub mod events;
 pub mod extract;
+pub mod fallback_fetch;
 pub mod frontier;
 pub mod hooks;
 pub mod http;

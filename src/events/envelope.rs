@@ -45,6 +45,10 @@ pub enum EventKind {
     DecisionMade,
     #[serde(rename = "fetch.completed")]
     FetchCompleted,
+    #[serde(rename = "crawl.attempted")]
+    CrawlAttempted,
+    #[serde(rename = "crawl.resolved")]
+    CrawlResolved,
     #[serde(rename = "render.completed")]
     RenderCompleted,
     #[serde(rename = "extract.completed")]

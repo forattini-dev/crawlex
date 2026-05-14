@@ -16,6 +16,7 @@
 //! path that provides `ChallengeSignal` (vendor + level + url + metadata)
 //! consumed by `policy::decide_post_challenge` + SQLite telemetry.
 
+pub mod block_detector;
 pub mod bypass;
 pub mod cookie_pin;
 pub mod recaptcha;
@@ -24,7 +25,6 @@ pub mod solver;
 pub mod telemetry;
 
 use http::HeaderMap;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
@@ -185,148 +185,15 @@ fn origin_of(url: &url::Url) -> String {
     }
 }
 
-/// ---------------------------------------------------------------------
-/// HTML detection
-/// ---------------------------------------------------------------------
-
-fn body_slice(body: &[u8]) -> std::borrow::Cow<'_, str> {
-    let slice = &body[..body.len().min(32 * 1024)];
-    String::from_utf8_lossy(slice)
-}
-
 /// Scan HTML text (pre- or post-JS) for vendor substrings. Ordered by
 /// specificity: the most diagnostic patterns (CF JS challenge title +
 /// script, Turnstile iframe URL) run first.
 pub fn detect_from_html(
     html: &str,
-    _url: &url::Url,
+    url: &url::Url,
     headers: Option<&HeaderMap>,
 ) -> Option<RawChallenge> {
-    let lower = html.to_ascii_lowercase();
-
-    // 1. Cloudflare JS challenge — require TITLE + platform script (two signals)
-    let cf_title = lower.contains("<title>just a moment");
-    let cf_bypass = lower.contains("cf-chl-bypass");
-    let cf_platform = lower.contains("/cdn-cgi/challenge-platform/");
-    if cf_title && (cf_bypass || cf_platform) {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::CloudflareJsChallenge,
-            level: ChallengeLevel::ChallengePage,
-            metadata: html_metadata(
-                html,
-                true,
-                &[
-                    "title:just-a-moment",
-                    if cf_bypass {
-                        "cf-chl-bypass"
-                    } else {
-                        "challenge-platform"
-                    },
-                ],
-            ),
-        });
-    }
-
-    // 2. Cloudflare Turnstile (widget embedded)
-    if lower.contains("challenges.cloudflare.com/turnstile") {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::CloudflareTurnstile,
-            level: ChallengeLevel::WidgetPresent,
-            metadata: html_metadata(html, true, &["turnstile-iframe"]),
-        });
-    }
-
-    // 3. reCAPTCHA Enterprise (check before plain reCAPTCHA; URL is more specific)
-    if lower.contains("recaptcha/enterprise.js") {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::RecaptchaEnterprise,
-            level: ChallengeLevel::WidgetPresent,
-            metadata: html_metadata(html, true, &["enterprise.js"]),
-        });
-    }
-
-    // 4. reCAPTCHA v2/v3
-    if lower.contains("www.google.com/recaptcha/api.js")
-        || lower.contains("google.com/recaptcha/api2/")
-    {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::Recaptcha,
-            level: ChallengeLevel::WidgetPresent,
-            metadata: html_metadata(html, true, &["recaptcha/api.js"]),
-        });
-    }
-
-    // 5. hCaptcha
-    if lower.contains("hcaptcha.com/1/api.js")
-        || lower.contains("js.hcaptcha.com/1/api.js")
-        || (lower.contains("<iframe") && lower.contains("hcaptcha.com"))
-    {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::HCaptcha,
-            level: ChallengeLevel::WidgetPresent,
-            metadata: html_metadata(html, true, &["hcaptcha.com"]),
-        });
-    }
-
-    // 6. DataDome
-    if lower.contains("captcha-delivery.com") || lower.contains("dd-captcha-container") {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::DataDome,
-            level: ChallengeLevel::ChallengePage,
-            metadata: html_metadata(html, true, &["captcha-delivery"]),
-        });
-    }
-
-    // 7. PerimeterX
-    if lower.contains(r#"id="px-captcha""#)
-        || lower.contains("client.perimeterx.net")
-        || lower.contains("captcha.px-cdn.net")
-    {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::PerimeterX,
-            level: ChallengeLevel::ChallengePage,
-            metadata: html_metadata(html, true, &["px-captcha"]),
-        });
-    }
-
-    // 8. Akamai — DOM signature needs corroboration with header (handled
-    // by HTTP detect). Pure-HTML path only matches when we see both the
-    // bm-verify script and a very short body, which is rare but strong.
-    if lower.contains("/_bm/_data") || lower.contains("_abck") {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::Akamai,
-            level: ChallengeLevel::ChallengePage,
-            metadata: html_metadata(html, false, &["akamai-bm"]),
-        });
-    }
-
-    // 9. Generic captcha / access-denied interstitial fallback. These are
-    // intentionally narrow: require <title> match AND short body so a news
-    // article titled "Access Denied (book review)" doesn't trigger.
-    if html.len() < 4096 {
-        let title_captcha =
-            lower.contains("<title>attention required") || lower.contains("<title>access denied");
-        if title_captcha {
-            // Distinguish CF/Akamai-fronted access denied from generic
-            let vendor = if headers
-                .and_then(|h| h.get("server"))
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_ascii_lowercase().contains("cloudflare"))
-                .unwrap_or(false)
-            {
-                ChallengeVendor::CloudflareJsChallenge
-            } else {
-                ChallengeVendor::AccessDenied
-            };
-            return Some(RawChallenge {
-                vendor,
-                level: ChallengeLevel::HardBlock,
-                metadata: html_metadata(html, false, &["access-denied-title"]),
-            });
-        }
-    }
-
-    None
+    block_detector::classify_html(html, url, headers).into_raw_challenge()
 }
 
 /// ---------------------------------------------------------------------
@@ -339,107 +206,7 @@ pub fn detect_from_http_response(
     headers: &HeaderMap,
     url: &url::Url,
 ) -> Option<RawChallenge> {
-    let server = headers
-        .get("server")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_ascii_lowercase())
-        .unwrap_or_default();
-    let cf_mitigated = headers.get("cf-mitigated").is_some();
-    let set_cookie: Vec<String> = headers
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|v| v.to_str().ok().map(|s| s.to_ascii_lowercase()))
-        .collect();
-
-    // Akamai hard-block: Server: AkamaiGHost + 403.
-    if status == 403 && server.contains("akamaighost") {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::Akamai,
-            level: ChallengeLevel::HardBlock,
-            metadata: serde_json::json!({
-                "source": "http",
-                "server": server,
-                "status": status,
-            }),
-        });
-    }
-
-    // Cloudflare JS challenge — typically served as 403/503 with
-    // `server: cloudflare` AND CF body markers.
-    if matches!(status, 403 | 503) && server.contains("cloudflare") {
-        if let Some(mut raw) = detect_from_html(&body_slice(body), url, Some(headers)) {
-            // Upgrade metadata with http context
-            raw.metadata = merge_json(
-                raw.metadata,
-                serde_json::json!({
-                    "surface": "http_response",
-                    "status_code": status,
-                    "server": server,
-                }),
-            );
-            return Some(raw);
-        }
-        if cf_mitigated {
-            return Some(RawChallenge {
-                vendor: ChallengeVendor::CloudflareJsChallenge,
-                level: ChallengeLevel::ChallengePage,
-                metadata: serde_json::json!({
-                    "surface": "http_response",
-                    "cf_mitigated": true,
-                    "status_code": status,
-                }),
-            });
-        }
-    }
-
-    // DataDome — x-dd-b header or datadome cookie.
-    let has_datadome_cookie = set_cookie.iter().any(|c| c.starts_with("datadome="));
-    if headers.get("x-dd-b").is_some() || has_datadome_cookie {
-        let level = if status >= 400 {
-            ChallengeLevel::ChallengePage
-        } else {
-            ChallengeLevel::Suspected
-        };
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::DataDome,
-            level,
-            metadata: serde_json::json!({
-                "surface": "http_response",
-                "cookie": has_datadome_cookie,
-                "status_code": status,
-            }),
-        });
-    }
-
-    // PerimeterX cookie
-    if set_cookie.iter().any(|c| c.starts_with("_px3=")) {
-        return Some(RawChallenge {
-            vendor: ChallengeVendor::PerimeterX,
-            level: ChallengeLevel::Suspected,
-            metadata: serde_json::json!({"surface": "http_response", "cookie": "_px3"}),
-        });
-    }
-
-    // Body-based detection for remaining vendors on 4xx/5xx.
-    if matches!(status, 403 | 429 | 503) {
-        if let Some(raw) = detect_from_html(&body_slice(body), url, Some(headers)) {
-            return Some(raw);
-        }
-        // Tiny body + error status → generic HardBlock
-        if body.len() < 512 && status == 403 {
-            return Some(RawChallenge {
-                vendor: ChallengeVendor::AccessDenied,
-                level: ChallengeLevel::HardBlock,
-                metadata: serde_json::json!({
-                    "surface": "http_response",
-                    "status_code": status,
-                    "body_bytes": body.len()
-                }),
-            });
-        }
-    }
-
-    None
+    block_detector::classify_http_response(status, body, headers, url).into_raw_challenge()
 }
 
 /// ---------------------------------------------------------------------
@@ -466,71 +233,6 @@ pub fn detect_from_cookies(cookie_names: &[&str]) -> Option<RawChallenge> {
         }
     }
     None
-}
-
-fn html_metadata(html: &str, widget_present: bool, signals: &[&str]) -> serde_json::Value {
-    serde_json::json!({
-        "surface": "html",
-        "signals": signals,
-        "title": extract_html_title(html),
-        "widget_present": widget_present,
-        "sitekey": extract_sitekey(html),
-        "action": extract_action(html),
-        "iframe_srcs": extract_iframe_srcs(html),
-    })
-}
-
-fn extract_html_title(html: &str) -> Option<String> {
-    Regex::new(r"(?is)<title[^>]*>\s*(.*?)\s*</title>")
-        .ok()
-        .and_then(|re| re.captures(html))
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn extract_sitekey(html: &str) -> Option<String> {
-    let data_attr = Regex::new(r#"(?i)data-sitekey\s*=\s*["']([^"']+)["']"#)
-        .ok()
-        .and_then(|re| re.captures(html))
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string());
-    if data_attr.is_some() {
-        return data_attr;
-    }
-    Regex::new(r#"(?i)[?&]render=([^"'&\s>]+)"#)
-        .ok()
-        .and_then(|re| re.captures(html))
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
-}
-
-fn extract_action(html: &str) -> Option<String> {
-    Regex::new(r#"(?i)data-action\s*=\s*["']([^"']+)["']"#)
-        .ok()
-        .and_then(|re| re.captures(html))
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
-}
-
-fn extract_iframe_srcs(html: &str) -> Vec<String> {
-    Regex::new(r#"(?is)<iframe[^>]+src\s*=\s*["']([^"']+)["']"#)
-        .ok()
-        .map(|re| {
-            re.captures_iter(html)
-                .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-fn merge_json(mut base: serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
-    if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
-        for (k, v) in e {
-            b.insert(k.clone(), v.clone());
-        }
-    }
-    base
 }
 
 /// SystemTime serde helper — serialize as unix millis.

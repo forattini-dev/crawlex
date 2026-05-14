@@ -29,6 +29,9 @@
 - `--policy fast|balanced|deep|forensics`
 - `--wait-strategy networkidle|load|domcontentloaded|fixed`
 - `--wait-idle-ms <ms>`
+- `--prefetch`
+- `--best-first`
+- `--score-keyword <term>`
 
 ### Queue and storage
 
@@ -36,14 +39,23 @@
 - `--queue-path <path>`
 - `--storage memory|sqlite|filesystem`
 - `--storage-path <path>`
+- `--cache-validate`
+- `--cache-max-age-secs <seconds>`
 
 ### Render and browser
 
 - `--max-concurrent-render <n>`
 - `--chrome-path <path>`
 - `--chrome-flag <flag>`
+- `--external-cdp-url <url>`
+- `--gpu-policy compat|stealth`
+- `--flatten-shadow-dom`
+- `--remove-overlays`
+- `--remove-consent-popups`
 - `--actions-file <json>`
+- `--script-spec <path>`
 - `--screenshot`
+- `--screenshot-mode viewport|fullpage|element:<css>`
 - `--no-fetch-chromium`
 
 ### Proxy and rate control
@@ -75,6 +87,37 @@
 - `--metrics-net`
 - `--metrics-vitals`
 - `--metrics-prometheus-port <port>`
+
+### Hooks and SDK bridge
+
+- `--hook-script <lua-file>`
+- `--hook-bridge stdio|fd:<n>`
+
+### Anti-bot fallback
+
+- `--fallback-fetch-command <cmd>`
+- `--fallback-fetch-arg <arg>`
+- `--fallback-fetch-timeout-ms <ms>`
+- `--fallback-fetch-max-bytes <bytes>`
+
+## Recent crawl-efficiency flags
+
+`--cache-validate` asks the storage backend for prior page metadata and can skip full processing when the cached row is still fresh by `ETag`, `Last-Modified`, or `<head>` fingerprint. Add `--cache-max-age-secs 86400` to accept rows younger than one day without a validation probe.
+
+`--prefetch` is a discovery-only pass. It still fetches or renders enough HTML to extract links and feed the queue, but it skips expensive page analysis and rendered-page persistence.
+
+`--best-first` changes newly discovered URL priority. `--score-keyword` may be repeated to give matching paths/hosts/query strings an extra boost.
+
+```bash
+crawlex crawl \
+  --seed https://docs.example.com \
+  --queue sqlite --queue-path state/queue.db \
+  --storage sqlite --storage-path state/crawl.db \
+  --cache-validate \
+  --prefetch \
+  --best-first \
+  --score-keyword api
+```
 
 ## Config file mode
 

@@ -313,6 +313,51 @@ pub struct CrawlArgs {
     pub chrome_path: Option<String>,
     #[arg(long = "chrome-flag", action = clap::ArgAction::Append)]
     pub chrome_flag: Vec<String>,
+    /// Connect to an existing Chrome/Chromium CDP endpoint instead of
+    /// launching a local browser, e.g. `http://127.0.0.1:9222`.
+    #[arg(long)]
+    pub external_cdp_url: Option<String>,
+    /// GPU posture for managed Chrome: `compat` keeps `--disable-gpu`,
+    /// `stealth` keeps GPU surfaces enabled where Chrome can support them.
+    #[arg(long)]
+    pub gpu_policy: Option<String>,
+    /// Flatten open shadow roots into serialized HTML before extraction.
+    #[arg(long, default_value_t = false)]
+    pub flatten_shadow_dom: bool,
+    /// Remove fixed/sticky modal overlays before serializing rendered HTML.
+    #[arg(long, default_value_t = false)]
+    pub remove_overlays: bool,
+    /// Remove common consent/cookie banners before serializing rendered HTML.
+    #[arg(long, default_value_t = false)]
+    pub remove_consent_popups: bool,
+    /// Enable a last-resort fetch adapter command. The command receives JSON
+    /// on stdin and returns JSON on stdout.
+    #[arg(long)]
+    pub fallback_fetch_command: Option<String>,
+    /// Additional argument for `--fallback-fetch-command`. Repeatable.
+    #[arg(long = "fallback-fetch-arg", action = clap::ArgAction::Append)]
+    pub fallback_fetch_arg: Vec<String>,
+    #[arg(long)]
+    pub fallback_fetch_timeout_ms: Option<u64>,
+    #[arg(long)]
+    pub fallback_fetch_max_bytes: Option<u64>,
+    /// Validate existing cached pages and skip full processing when fresh.
+    #[arg(long, default_value_t = false)]
+    pub cache_validate: bool,
+    /// Accept cache rows younger than this many seconds without a network
+    /// validation probe.
+    #[arg(long)]
+    pub cache_max_age_secs: Option<u64>,
+    /// Discovery-only mode: extract/enqueue links while skipping heavy page
+    /// persistence and analysis.
+    #[arg(long, default_value_t = false)]
+    pub prefetch: bool,
+    /// Score newly discovered URLs and process higher-value links first.
+    #[arg(long, default_value_t = false)]
+    pub best_first: bool,
+    /// Keyword bonus for `--best-first`. Repeatable.
+    #[arg(long = "score-keyword", action = clap::ArgAction::Append)]
+    pub score_keyword: Vec<String>,
     #[arg(long)]
     pub block_resource: Option<String>,
 

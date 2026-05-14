@@ -73,7 +73,28 @@
   "max_redirects": 10,
   "profile_autodetect": true,
   "user_agent_override": null,
-  "auto_fetch_chromium": true
+  "auto_fetch_chromium": true,
+  "cache_validation": {
+    "enabled": true,
+    "max_age_secs": 86400
+  },
+  "prefetch": false,
+  "crawl_scoring": {
+    "enabled": true,
+    "keywords": ["docs", "api"],
+    "same_host_bonus": 5,
+    "keyword_bonus": 8,
+    "depth_penalty": 2,
+    "path_depth_penalty": 1
+  },
+  "fallback_fetch": null,
+  "external_cdp_url": null,
+  "gpu_policy": "compat",
+  "dom_capture": {
+    "flatten_shadow_dom": false,
+    "remove_overlays": false,
+    "remove_consent_popups": false
+  }
 }
 ```
 
@@ -86,6 +107,23 @@
 | `queue_backend` | `"InMemory"` or `{ "Sqlite": { "path": "queue.db" } }` |
 | `storage_backend` | `"Memory"`, `{ "Sqlite": { "path": "crawl.db" } }`, `{ "Filesystem": { "root": "crawl-out" } }` |
 | `proxy.strategy` | `"RoundRobin"`, `"Sequential"`, `"Random"`, `"StickyPerHost"` |
+| `gpu_policy` | `"compat"` or `"stealth"` |
+
+## Recent fields
+
+| Field | Purpose | Default |
+| --- | --- | --- |
+| `cache_validation.enabled` | Validate stored page metadata before full processing | `false` |
+| `cache_validation.max_age_secs` | Accept cache rows younger than this age without a validation probe | `null` |
+| `prefetch` | Discovery-only mode: harvest links and skip heavy page analysis | `false` |
+| `crawl_scoring.enabled` | Score newly discovered URLs before enqueueing | `false` |
+| `crawl_scoring.keywords` | Keyword bonuses applied to host/path/query | `[]` |
+| `fallback_fetch` | Last-resort external command receiving JSON stdin and returning JSON stdout | `null` |
+| `external_cdp_url` | Connect to an existing Chrome/Chromium CDP endpoint | `null` |
+| `gpu_policy` | Managed Chrome GPU posture | `"compat"` |
+| `dom_capture.flatten_shadow_dom` | Serialize open shadow roots into captured HTML | `false` |
+| `dom_capture.remove_overlays` | Remove fixed/sticky overlays before HTML capture | `false` |
+| `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
 
 ## When to prefer flags over JSON
 

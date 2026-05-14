@@ -10,7 +10,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use crate::config::{
-    ChallengeMode, Config, ProxyConfig, QueueBackend, RenderSessionScope, StorageBackend,
+    CacheValidationConfig, ChallengeMode, Config, CrawlScoringConfig, DomCaptureConfig,
+    FallbackFetchConfig, GpuPolicy, ProxyConfig, QueueBackend, RenderSessionScope, StorageBackend,
 };
 use crate::events::{EventEnvelope, EventKind, EventSink, NdjsonStdoutSink, NullSink};
 use crate::impersonate::Profile;
@@ -52,6 +53,16 @@ fn parse_challenge_mode(s: &str) -> Result<ChallengeMode> {
         "solver_ready" | "solver-ready" | "" => Ok(ChallengeMode::SolverReady),
         other => Err(crate::Error::Config(format!(
             "unknown --challenge-mode `{other}`; expected avoidance|solver-ready"
+        ))),
+    }
+}
+
+fn parse_gpu_policy(s: &str) -> Result<GpuPolicy> {
+    match s.to_ascii_lowercase().as_str() {
+        "compat" | "" => Ok(GpuPolicy::Compat),
+        "stealth" => Ok(GpuPolicy::Stealth),
+        other => Err(crate::Error::Config(format!(
+            "unknown --gpu-policy `{other}`; expected compat|stealth"
         ))),
     }
 }
@@ -1177,6 +1188,7 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
         } else {
             build_config_from_args(&c)?
         };
+        apply_crawl_cli_overrides(&mut config, &c)?;
         #[cfg(not(feature = "cdp-backend"))]
         reject_browser_only_config(&config)?;
         if c.method != "spoof" && c.max_concurrent_render.is_none() {
@@ -1993,7 +2005,92 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         },
         http_limits: crate::config::HttpLimits::default(),
         content_store: crate::config::ContentStoreConfig::default(),
+        cache_validation: CacheValidationConfig {
+            enabled: c.cache_validate,
+            max_age_secs: c.cache_max_age_secs,
+        },
+        prefetch: c.prefetch,
+        crawl_scoring: CrawlScoringConfig {
+            enabled: c.best_first || !c.score_keyword.is_empty(),
+            keywords: c.score_keyword.clone(),
+            ..Default::default()
+        },
+        fallback_fetch: c.fallback_fetch_command.as_ref().map(|cmd| {
+            let mut command = Vec::with_capacity(1 + c.fallback_fetch_arg.len());
+            command.push(cmd.clone());
+            command.extend(c.fallback_fetch_arg.clone());
+            FallbackFetchConfig {
+                command,
+                timeout_ms: c.fallback_fetch_timeout_ms.unwrap_or(60_000),
+                max_output_bytes: c.fallback_fetch_max_bytes.unwrap_or(32 * 1024 * 1024),
+            }
+        }),
+        external_cdp_url: c.external_cdp_url.clone(),
+        gpu_policy: c
+            .gpu_policy
+            .as_deref()
+            .map(parse_gpu_policy)
+            .transpose()?
+            .unwrap_or_default(),
+        dom_capture: DomCaptureConfig {
+            flatten_shadow_dom: c.flatten_shadow_dom,
+            remove_overlays: c.remove_overlays,
+            remove_consent_popups: c.remove_consent_popups,
+        },
     })
+}
+
+fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result<()> {
+    if let Some(cmd) = c.fallback_fetch_command.as_ref() {
+        let mut command = Vec::with_capacity(1 + c.fallback_fetch_arg.len());
+        command.push(cmd.clone());
+        command.extend(c.fallback_fetch_arg.clone());
+        config.fallback_fetch = Some(FallbackFetchConfig {
+            command,
+            timeout_ms: c.fallback_fetch_timeout_ms.unwrap_or(60_000),
+            max_output_bytes: c.fallback_fetch_max_bytes.unwrap_or(32 * 1024 * 1024),
+        });
+    } else if let Some(ms) = c.fallback_fetch_timeout_ms {
+        if let Some(fallback) = config.fallback_fetch.as_mut() {
+            fallback.timeout_ms = ms;
+        }
+    }
+    if let Some(max) = c.fallback_fetch_max_bytes {
+        if let Some(fallback) = config.fallback_fetch.as_mut() {
+            fallback.max_output_bytes = max;
+        }
+    }
+    if let Some(url) = c.external_cdp_url.as_ref() {
+        config.external_cdp_url = Some(url.clone());
+    }
+    if let Some(raw) = c.gpu_policy.as_deref() {
+        config.gpu_policy = parse_gpu_policy(raw)?;
+    }
+    if c.flatten_shadow_dom {
+        config.dom_capture.flatten_shadow_dom = true;
+    }
+    if c.remove_overlays {
+        config.dom_capture.remove_overlays = true;
+    }
+    if c.remove_consent_popups {
+        config.dom_capture.remove_consent_popups = true;
+    }
+    if c.cache_validate {
+        config.cache_validation.enabled = true;
+    }
+    if let Some(max_age) = c.cache_max_age_secs {
+        config.cache_validation.max_age_secs = Some(max_age);
+    }
+    if c.prefetch {
+        config.prefetch = true;
+    }
+    if c.best_first || !c.score_keyword.is_empty() {
+        config.crawl_scoring.enabled = true;
+    }
+    if !c.score_keyword.is_empty() {
+        config.crawl_scoring.keywords = c.score_keyword.clone();
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cdp-backend")]
@@ -2026,6 +2123,11 @@ fn reject_browser_only_flags(c: &args::CrawlArgs) -> Result<()> {
         || c.screenshot_dir.is_some()
         || c.screenshot_mode.is_some()
         || c.chrome_path.is_some()
+        || c.external_cdp_url.is_some()
+        || c.gpu_policy.is_some()
+        || c.flatten_shadow_dom
+        || c.remove_overlays
+        || c.remove_consent_popups
         || !c.chrome_flag.is_empty()
         || c.block_resource.is_some()
         || c.wait_strategy.is_some()
@@ -2051,6 +2153,11 @@ fn reject_browser_only_config(config: &Config) -> Result<()> {
         || config.output.screenshot_dir.is_some()
         || config.collect_web_vitals
         || config.chrome_path.is_some()
+        || config.external_cdp_url.is_some()
+        || !matches!(config.gpu_policy, GpuPolicy::Compat)
+        || config.dom_capture.flatten_shadow_dom
+        || config.dom_capture.remove_overlays
+        || config.dom_capture.remove_consent_popups
         || !config.chrome_flags.is_empty()
         || !config.block_resources.is_empty();
     if render_requested {

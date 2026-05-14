@@ -10,6 +10,7 @@ cargo run --release -- crawl \
   --method auto \
   --queue sqlite --queue-path state/queue.db \
   --storage sqlite --storage-path state/crawl.db \
+  --cache-validate \
   --emit ndjson \
   --explain
 ```
@@ -32,6 +33,23 @@ cargo run --release -- crawl \
 ```
 
 The SQLite queue backend reclaims any rows left in `in_flight`.
+
+## Re-crawl cheaply
+
+For repeated runs over the same target, enable cache validation. Crawlex will read prior SQLite page metadata and skip full processing when the cache row is fresh by age, `ETag`, `Last-Modified`, or `<head>` fingerprint.
+
+```bash
+cargo run --release -- crawl \
+  --seed https://example.com \
+  --method auto \
+  --queue sqlite --queue-path state/queue.db \
+  --storage sqlite --storage-path state/crawl.db \
+  --cache-validate \
+  --cache-max-age-secs 86400 \
+  --emit ndjson
+```
+
+For a first pass that only builds the frontier, add `--prefetch --best-first` and optional `--score-keyword` terms. Run a later full crawl against the same queue/storage once the frontier is shaped.
 
 ## Export state for offline analysis
 

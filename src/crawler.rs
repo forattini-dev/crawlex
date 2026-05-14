@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::{Config, QueueBackend, StorageBackend};
+use crate::crawl_stats::{AttemptEngine, CrawlAttemptRecord, CrawlStats};
 use crate::discovery::{
     assets::{classify_url, classify_with_mime, AssetKind},
     DiscoveryGraph,
@@ -97,6 +98,9 @@ pub struct Crawler {
     /// `session_scope_auto` can demote on login pages / hard blocks
     /// without taking the whole Config on a write path.
     render_scope: Arc<parking_lot::RwLock<crate::config::RenderSessionScope>>,
+    /// Attempt ledger keyed by stable crawl_id. Used to summarize a URL
+    /// across HTTP → render → fallback transitions.
+    crawl_attempts: Arc<dashmap::DashMap<u64, Vec<CrawlAttemptRecord>>>,
 }
 
 #[derive(Debug)]
@@ -117,6 +121,14 @@ enum JobDisposition {
     FailedPermanent {
         error: String,
     },
+}
+
+fn effective_crawl_id(job: &Job) -> u64 {
+    if job.crawl_id == 0 {
+        job.id
+    } else {
+        job.crawl_id
+    }
 }
 
 impl Crawler {
@@ -258,6 +270,7 @@ impl Crawler {
                 config.session_ttl_secs,
             )),
             render_scope: Arc::new(parking_lot::RwLock::new(config.render_session_scope)),
+            crawl_attempts: Arc::new(dashmap::DashMap::new()),
             config: config_arc,
         })
     }
@@ -290,6 +303,425 @@ impl Crawler {
 
     pub fn events(&self) -> &Arc<dyn EventSink> {
         &self.events
+    }
+
+    fn next_crawl_attempt_index(&self, crawl_id: u64) -> u32 {
+        self.crawl_attempts
+            .get(&crawl_id)
+            .map(|attempts| attempts.len().saturating_add(1) as u32)
+            .unwrap_or(1)
+    }
+
+    async fn record_crawl_attempt(&self, attempt: CrawlAttemptRecord) {
+        self.crawl_attempts
+            .entry(attempt.crawl_id)
+            .or_default()
+            .push(attempt.clone());
+        self.events.emit(
+            &Event::of(EventKind::CrawlAttempted)
+                .with_run(self.run_id)
+                .with_url(attempt.url.as_str())
+                .with_data(&attempt),
+        );
+        if let Err(e) = self.storage.record_crawl_attempt(&attempt).await {
+            tracing::debug!(?e, "record_crawl_attempt failed");
+        }
+    }
+
+    async fn finish_crawl_stats(
+        &self,
+        crawl_id: u64,
+        url: Url,
+        resolved_by: Option<AttemptEngine>,
+        success: bool,
+        fallback_fetch_used: bool,
+    ) {
+        let attempts = self
+            .crawl_attempts
+            .remove(&crawl_id)
+            .map(|(_, attempts)| attempts)
+            .unwrap_or_default();
+        let mut stats = CrawlStats::new(crawl_id, url);
+        stats.attempts = attempts;
+        stats.resolved_by = resolved_by;
+        stats.success = success;
+        stats.fallback_fetch_used = fallback_fetch_used;
+        self.events.emit(
+            &Event::of(EventKind::CrawlResolved)
+                .with_run(self.run_id)
+                .with_url(stats.url.as_str())
+                .with_data(&stats),
+        );
+        if let Err(e) = self.storage.record_crawl_stats(&stats).await {
+            tracing::debug!(?e, "record_crawl_stats failed");
+        }
+    }
+
+    fn emit_cache_validation(
+        &self,
+        url: &Url,
+        phase: &str,
+        status: crate::cache_validator::CacheValidationStatus,
+        reason: &str,
+        http_status: Option<u16>,
+    ) {
+        let decision = if matches!(status, crate::cache_validator::CacheValidationStatus::Fresh) {
+            "use_cache"
+        } else {
+            "continue"
+        };
+        self.events.emit(
+            &Event::of(EventKind::DecisionMade)
+                .with_run(self.run_id)
+                .with_url(url.as_str())
+                .with_why(format!("cache:{}", status.as_str()))
+                .with_data(&serde_json::json!({
+                    "phase": phase,
+                    "decision": decision,
+                    "cache_status": status.as_str(),
+                    "reason": reason,
+                    "http_status": http_status,
+                })),
+        );
+    }
+
+    async fn maybe_complete_fresh_cache_by_age(
+        &self,
+        job: &Job,
+        crawl_id: u64,
+        ctx: &mut HookContext,
+    ) -> Result<bool> {
+        if !self.config.cache_validation.enabled {
+            return Ok(false);
+        }
+        let Some(meta) = self.storage.page_cache_metadata(&job.url).await? else {
+            return Ok(false);
+        };
+        if !crate::cache_validator::is_fresh_by_age(
+            &meta,
+            self.config.cache_validation.max_age_secs,
+        ) {
+            return Ok(false);
+        }
+        self.emit_cache_validation(
+            &job.url,
+            "cache_age",
+            crate::cache_validator::CacheValidationStatus::Fresh,
+            "cache row is younger than max age",
+            Some(meta.status),
+        );
+        let _ = self.fire_all(HookEvent::OnJobEnd, ctx).await?;
+        self.finish_crawl_stats(
+            crawl_id,
+            job.url.clone(),
+            Some(AttemptEngine::HttpSpoof),
+            true,
+            false,
+        )
+        .await;
+        Ok(true)
+    }
+
+    async fn maybe_complete_from_cache_response(
+        &self,
+        job: &Job,
+        crawl_id: u64,
+        phase: &str,
+        status: u16,
+        headers: &http::HeaderMap,
+        body: &[u8],
+        ctx: &mut HookContext,
+    ) -> Result<bool> {
+        if !self.config.cache_validation.enabled {
+            return Ok(false);
+        }
+        let Some(meta) = self.storage.page_cache_metadata(&job.url).await? else {
+            return Ok(false);
+        };
+        let outcome = crate::cache_validator::validate_response(&meta, status, headers, body);
+        self.emit_cache_validation(
+            &job.url,
+            phase,
+            outcome.status,
+            &outcome.reason,
+            Some(status),
+        );
+        if !matches!(
+            outcome.status,
+            crate::cache_validator::CacheValidationStatus::Fresh
+        ) {
+            return Ok(false);
+        }
+        let _ = self.fire_all(HookEvent::OnJobEnd, ctx).await?;
+        self.finish_crawl_stats(
+            crawl_id,
+            job.url.clone(),
+            Some(AttemptEngine::HttpSpoof),
+            true,
+            false,
+        )
+        .await;
+        Ok(true)
+    }
+
+    async fn maybe_complete_render_from_cache_probe(
+        &self,
+        job: &Job,
+        crawl_id: u64,
+        proxy: Option<&Url>,
+        ctx: &mut HookContext,
+    ) -> Result<bool> {
+        if !self.config.cache_validation.enabled {
+            return Ok(false);
+        }
+        if self.storage.page_cache_metadata(&job.url).await?.is_none() {
+            return Ok(false);
+        }
+
+        let started = std::time::Instant::now();
+        let fetch = self
+            .client
+            .get_via(
+                &job.url,
+                proxy,
+                crate::discovery::assets::SecFetchDest::Document,
+            )
+            .await;
+        let resp = match fetch {
+            Ok(resp) => resp,
+            Err(e) => {
+                self.emit_cache_validation(
+                    &job.url,
+                    "render_preflight",
+                    crate::cache_validator::CacheValidationStatus::Unknown,
+                    &format!("validation fetch failed: {e}"),
+                    None,
+                );
+                return Ok(false);
+            }
+        };
+        let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        self.record_crawl_attempt(CrawlAttemptRecord::new(
+            crawl_id,
+            job.url.clone(),
+            self.next_crawl_attempt_index(crawl_id),
+            AttemptEngine::HttpSpoof,
+            proxy.cloned(),
+            proxy.cloned(),
+            Some(resp.status.as_u16()),
+            false,
+            None,
+            None,
+            None,
+            latency_ms,
+            None,
+        ))
+        .await;
+        ctx.response_status = Some(resp.status.as_u16());
+        ctx.response_headers = Some(resp.headers.clone());
+        ctx.body = Some(resp.body.clone());
+        self.maybe_complete_from_cache_response(
+            job,
+            crawl_id,
+            "render_preflight",
+            resp.status.as_u16(),
+            &resp.headers,
+            &resp.body,
+            ctx,
+        )
+        .await
+    }
+
+    fn priority_for_discovered(&self, from: &Url, to: &Url, depth: u32) -> i32 {
+        if !self.config.crawl_scoring.enabled {
+            return -(depth as i32);
+        }
+        let cfg = &self.config.crawl_scoring;
+        let mut score = 0i32.saturating_sub((depth as i32).saturating_mul(cfg.depth_penalty));
+
+        if from.host_str().map(|h| h.to_ascii_lowercase())
+            == to.host_str().map(|h| h.to_ascii_lowercase())
+        {
+            score = score.saturating_add(cfg.same_host_bonus);
+        }
+
+        let haystack = format!(
+            "{} {} {}",
+            to.host_str().unwrap_or_default(),
+            to.path(),
+            to.query().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        for keyword in &cfg.keywords {
+            let needle = keyword.trim().to_ascii_lowercase();
+            if !needle.is_empty() && haystack.contains(&needle) {
+                score = score.saturating_add(cfg.keyword_bonus);
+            }
+        }
+
+        let path_depth = to
+            .path_segments()
+            .map(|segments| segments.filter(|s| !s.is_empty()).count() as i32)
+            .unwrap_or(0);
+        score.saturating_sub(path_depth.saturating_mul(cfg.path_depth_penalty))
+    }
+
+    async fn enqueue_discovered_url(
+        &self,
+        from: &Url,
+        to: Url,
+        depth: u32,
+        method: FetchMethod,
+    ) -> Result<()> {
+        if !self.should_follow(from, &to) {
+            return Ok(());
+        }
+        if !self.dedupe.insert_url_set(&to) {
+            return Ok(());
+        }
+        self.graph.add_edge(from, &to);
+        let _ = self.storage.save_edge(from, &to).await;
+        let priority = self.priority_for_discovered(from, &to, depth);
+        let job = Job {
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            crawl_id: 0,
+            url: to,
+            depth,
+            priority,
+            method,
+            attempts: 0,
+            last_error: None,
+        };
+        self.queue.push(job).await
+    }
+
+    async fn execute_fallback_fetch(
+        &self,
+        job: &Job,
+        ctx: &mut HookContext,
+        reason: Option<String>,
+        previous_status: Option<u16>,
+    ) -> Result<(
+        Option<String>,
+        Url,
+        u16,
+        Vec<Url>,
+        Option<crate::discovery::cert::PeerCert>,
+    )> {
+        let Some(config) = self.config.fallback_fetch.as_ref() else {
+            return Err(Error::Config("fallback fetch is not configured".into()));
+        };
+        let crawl_id = effective_crawl_id(job);
+        self.events.emit(
+            &Event::of(EventKind::DecisionMade)
+                .with_run(self.run_id)
+                .with_url(job.url.as_str())
+                .with_why(
+                    reason
+                        .clone()
+                        .unwrap_or_else(|| "fallback_fetch:requested".to_string()),
+                )
+                .with_data(&serde_json::json!({
+                    "decision": "fallback_fetch",
+                    "previous_status": previous_status,
+                    "attempts": job.attempts,
+                })),
+        );
+        let started = std::time::Instant::now();
+        let request = crate::fallback_fetch::FallbackFetchRequest {
+            crawl_id,
+            url: job.url.clone(),
+            attempt_index: self.next_crawl_attempt_index(crawl_id),
+            reason: reason.clone(),
+            previous_status,
+            proxy: ctx.proxy.clone(),
+        };
+        let result = match crate::fallback_fetch::run(config, &request).await {
+            Ok(result) => result,
+            Err(e) => {
+                let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                self.record_crawl_attempt(CrawlAttemptRecord::new(
+                    crawl_id,
+                    job.url.clone(),
+                    request.attempt_index,
+                    AttemptEngine::FallbackCommand,
+                    ctx.proxy.clone(),
+                    ctx.proxy.clone(),
+                    previous_status,
+                    true,
+                    reason,
+                    None,
+                    None,
+                    latency_ms,
+                    Some(e.to_string()),
+                ))
+                .await;
+                return Err(e);
+            }
+        };
+        let latency_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        self.record_crawl_attempt(CrawlAttemptRecord::new(
+            crawl_id,
+            job.url.clone(),
+            request.attempt_index,
+            AttemptEngine::FallbackCommand,
+            ctx.proxy.clone(),
+            ctx.proxy.clone(),
+            Some(result.status),
+            false,
+            None,
+            None,
+            None,
+            latency_ms,
+            None,
+        ))
+        .await;
+        ctx.response_status = Some(result.status);
+        ctx.response_headers = Some(result.headers.clone());
+        ctx.body = Some(result.body.clone());
+        self.storage
+            .save_raw_response(
+                &job.url,
+                &result.final_url,
+                result.status,
+                &result.headers,
+                &result.body,
+                false,
+            )
+            .await?;
+        self.events.emit(
+            &Event::of(EventKind::FetchCompleted)
+                .with_run(self.run_id)
+                .with_url(job.url.as_str())
+                .with_data(&crate::events::FetchCompletedData {
+                    final_url: result.final_url.to_string(),
+                    status: result.status,
+                    bytes: Some(result.body.len() as u64),
+                    body_truncated: false,
+                    dns_ms: None,
+                    tcp_connect_ms: None,
+                    tls_handshake_ms: None,
+                    ttfb_ms: None,
+                    download_ms: None,
+                    total_ms: Some(latency_ms),
+                    alpn: None,
+                    tls_version: None,
+                    cipher: None,
+                }),
+        );
+        let (html, charset) =
+            crate::impersonate::decode::decode_html_to_string(&result.headers, &result.body);
+        ctx.user_data
+            .insert("charset".into(), serde_json::Value::String(charset));
+        ctx.user_data
+            .insert("fallback_fetch_used".into(), serde_json::Value::Bool(true));
+        Ok((
+            Some(html),
+            result.final_url,
+            result.status,
+            Vec::new(),
+            None,
+        ))
     }
 
     async fn apply_job_disposition(&self, job_id: u64, disposition: JobDisposition) -> Result<()> {
@@ -338,6 +770,7 @@ impl Crawler {
                     .insert("escalated_to_render".into(), serde_json::Value::Bool(true));
                 let escalated = Job {
                     id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                    crawl_id: effective_crawl_id(job),
                     url: job.url.clone(),
                     depth: job.depth,
                     priority: job.priority.saturating_add(10),
@@ -467,6 +900,7 @@ impl Crawler {
             }
             let job = Job {
                 id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                crawl_id: 0,
                 url: parsed,
                 depth: 0,
                 priority: 0,
@@ -918,6 +1352,7 @@ impl Crawler {
             session_depth: self.session_depth.clone(),
             session_registry: self.session_registry.clone(),
             render_scope: self.render_scope.clone(),
+            crawl_attempts: self.crawl_attempts.clone(),
         }
     }
 
@@ -1129,6 +1564,7 @@ impl Crawler {
     }
 
     async fn process_job(&self, job: Job) -> Result<JobDisposition> {
+        let crawl_id = effective_crawl_id(&job);
         // Render-dependent jobs short-circuit with a stable error when
         // the binary was built without the browser backend (crawlex-mini)
         // — the CLI parse lets `--method render` through so the contract
@@ -1207,6 +1643,13 @@ impl Crawler {
             }
         }
 
+        if self
+            .maybe_complete_fresh_cache_by_age(&job, crawl_id, &mut ctx)
+            .await?
+        {
+            return Ok(JobDisposition::Complete);
+        }
+
         let mut effective_method = job.method;
         {
             let proxy_score = ctx
@@ -1268,6 +1711,20 @@ impl Crawler {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let use_render = matches!(effective_method, FetchMethod::Render);
+        if use_render {
+            let cache_probe_proxy = ctx.proxy.clone();
+            if self
+                .maybe_complete_render_from_cache_probe(
+                    &job,
+                    crawl_id,
+                    cache_probe_proxy.as_ref(),
+                    &mut ctx,
+                )
+                .await?
+            {
+                return Ok(JobDisposition::Complete);
+            }
+        }
         if use_render {
             self.counters.inc(&self.counters.requests_render);
         } else {
@@ -1599,6 +2056,38 @@ impl Crawler {
                                     .with_data(&saved),
                             );
                         }
+                        let (blocked, block_reason, vendor, level) =
+                            if let Some(signal) = rp.challenge.as_ref() {
+                                (
+                                    true,
+                                    Some(format!("render challenge: {}", signal.vendor.as_str())),
+                                    Some(signal.vendor),
+                                    Some(signal.level),
+                                )
+                            } else {
+                                (false, None, None, None)
+                            };
+                        let latency_ms = render_started
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64;
+                        self.record_crawl_attempt(CrawlAttemptRecord::new(
+                            crawl_id,
+                            job.url.clone(),
+                            self.next_crawl_attempt_index(crawl_id),
+                            AttemptEngine::Render,
+                            ctx.proxy.clone(),
+                            ctx.proxy.clone(),
+                            Some(rp.status),
+                            blocked,
+                            block_reason,
+                            vendor,
+                            level,
+                            latency_ms,
+                            None,
+                        ))
+                        .await;
                         // Render-path antibot handling. `RenderedPage::challenge`
                         // was populated by the pool after settle+content via
                         // `antibot::detect_from_html`. Persist snapshot with
@@ -1637,15 +2126,36 @@ impl Crawler {
                             };
                             self.proxy_router.record_outcome(p, outcome);
                         }
-                        let _ = self.fire_all(HookEvent::AfterLoad, &mut ctx).await?;
-                        let _ = self.fire_all(HookEvent::AfterIdle, &mut ctx).await?;
-                        (
-                            Some(rp.html_post_js),
-                            rp.final_url,
-                            rp.status,
-                            rp.captured_urls,
-                            None,
-                        )
+                        let fallback_after_render = if let Some(signal) = rp.challenge.as_ref() {
+                            if self.config.fallback_fetch.is_some() {
+                                Some(
+                                    self.execute_fallback_fetch(
+                                        &job,
+                                        &mut ctx,
+                                        Some(format!("render:block:{}", signal.vendor.as_str())),
+                                        Some(rp.status),
+                                    )
+                                    .await?,
+                                )
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(fallback) = fallback_after_render {
+                            fallback
+                        } else {
+                            let _ = self.fire_all(HookEvent::AfterLoad, &mut ctx).await?;
+                            let _ = self.fire_all(HookEvent::AfterIdle, &mut ctx).await?;
+                            (
+                                Some(rp.html_post_js),
+                                rp.final_url,
+                                rp.status,
+                                rp.captured_urls,
+                                None,
+                            )
+                        }
                     }
                     Err(e) => {
                         self.counters.inc(&self.counters.errors);
@@ -1664,6 +2174,27 @@ impl Crawler {
                             };
                             self.proxy_router.record_outcome(p, outcome);
                         }
+                        let latency_ms = render_started
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64;
+                        self.record_crawl_attempt(CrawlAttemptRecord::new(
+                            crawl_id,
+                            job.url.clone(),
+                            self.next_crawl_attempt_index(crawl_id),
+                            AttemptEngine::Render,
+                            ctx.proxy.clone(),
+                            ctx.proxy.clone(),
+                            None,
+                            false,
+                            None,
+                            None,
+                            None,
+                            latency_ms,
+                            Some(e.to_string()),
+                        ))
+                        .await;
                         ctx.error = Some(e.to_string());
                         let _ = self.fire_all(HookEvent::OnError, &mut ctx).await;
                         return Err(e);
@@ -1681,201 +2212,292 @@ impl Crawler {
                 ));
             }
         } else {
-            let cdp_empty: Vec<Url> = Vec::new();
-            let _ = cdp_empty;
-            // Use the URL's classified asset kind so we emit the right
-            // Sec-Fetch-Dest / Accept / mode for JS / CSS / API / etc.
-            let dest = classify_url(&job.url).sec_fetch_dest();
-            let proxy_for_job = ctx.proxy.clone();
-            let fetch_started = std::time::Instant::now();
-            let collect_net_timings = self.config.collect_net_timings || prefetch_observability;
-            let fetch = if proxy_for_job.is_some() && collect_net_timings {
-                self.client
-                    .get_timed_via(&job.url, proxy_for_job.as_ref(), dest)
-                    .await
-            } else if proxy_for_job.is_some() {
-                self.client
-                    .get_via(&job.url, proxy_for_job.as_ref(), dest)
-                    .await
-            } else if collect_net_timings {
-                self.client.get_timed_with_dest(&job.url, dest).await
-            } else if matches!(dest, crate::discovery::assets::SecFetchDest::Document) {
-                self.client.get(&job.url).await
-            } else {
-                self.client.get_with_dest(&job.url, dest).await
-            };
-            let resp = match fetch {
-                Ok(r) => r,
-                Err(e) => {
-                    self.counters.inc(&self.counters.errors);
-                    // Feed the failure back into the router so the proxy's
-                    // score reflects reality. Kind-specific outcome so
-                    // connect failures and timeouts land on different
-                    // counters.
-                    if let Some(p) = proxy_for_job.as_ref() {
-                        let outcome = match e.kind() {
-                            "dns" | "tls" | "io" => ProxyOutcome::ConnectFailed,
-                            "request-timeout" => ProxyOutcome::Timeout,
-                            _ => ProxyOutcome::Reset,
-                        };
-                        self.proxy_router.record_outcome(p, outcome);
-                    }
-                    ctx.error = Some(e.to_string());
-                    let _ = self.fire_all(HookEvent::OnError, &mut ctx).await;
-                    return Err(e);
-                }
-            };
-            // Record success/status outcome so the router learns from real
-            // traffic on the same axis as health probes.
-            if let Some(p) = proxy_for_job.as_ref() {
-                let status = resp.status.as_u16();
-                let outcome = if (200..400).contains(&status) {
-                    ProxyOutcome::Success {
-                        latency_ms: fetch_started.elapsed().as_secs_f64() * 1_000.0,
-                    }
+            'http_fetch: {
+                let cdp_empty: Vec<Url> = Vec::new();
+                let _ = cdp_empty;
+                // Use the URL's classified asset kind so we emit the right
+                // Sec-Fetch-Dest / Accept / mode for JS / CSS / API / etc.
+                let dest = classify_url(&job.url).sec_fetch_dest();
+                let proxy_for_job = ctx.proxy.clone();
+                let fetch_started = std::time::Instant::now();
+                let collect_net_timings = self.config.collect_net_timings || prefetch_observability;
+                let fetch = if proxy_for_job.is_some() && collect_net_timings {
+                    self.client
+                        .get_timed_via(&job.url, proxy_for_job.as_ref(), dest)
+                        .await
+                } else if proxy_for_job.is_some() {
+                    self.client
+                        .get_via(&job.url, proxy_for_job.as_ref(), dest)
+                        .await
+                } else if collect_net_timings {
+                    self.client.get_timed_with_dest(&job.url, dest).await
+                } else if matches!(dest, crate::discovery::assets::SecFetchDest::Document) {
+                    self.client.get(&job.url).await
                 } else {
-                    ProxyOutcome::Status(status)
+                    self.client.get_with_dest(&job.url, dest).await
                 };
-                self.proxy_router.record_outcome(p, outcome);
-            }
-            if collect_net_timings {
-                metrics.net = resp.timings.clone();
-            }
-            ctx.response_status = Some(resp.status.as_u16());
-            ctx.response_headers = Some(resp.headers.clone());
-            ctx.body = Some(resp.body.clone());
+                let resp = match fetch {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.counters.inc(&self.counters.errors);
+                        // Feed the failure back into the router so the proxy's
+                        // score reflects reality. Kind-specific outcome so
+                        // connect failures and timeouts land on different
+                        // counters.
+                        if let Some(p) = proxy_for_job.as_ref() {
+                            let outcome = match e.kind() {
+                                "dns" | "tls" | "io" => ProxyOutcome::ConnectFailed,
+                                "request-timeout" => ProxyOutcome::Timeout,
+                                _ => ProxyOutcome::Reset,
+                            };
+                            self.proxy_router.record_outcome(p, outcome);
+                        }
+                        let latency_ms = fetch_started
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX))
+                            as u64;
+                        self.record_crawl_attempt(CrawlAttemptRecord::new(
+                            crawl_id,
+                            job.url.clone(),
+                            self.next_crawl_attempt_index(crawl_id),
+                            AttemptEngine::HttpSpoof,
+                            proxy_for_job.clone(),
+                            proxy_for_job.clone(),
+                            None,
+                            false,
+                            None,
+                            None,
+                            None,
+                            latency_ms,
+                            Some(e.to_string()),
+                        ))
+                        .await;
+                        ctx.error = Some(e.to_string());
+                        let _ = self.fire_all(HookEvent::OnError, &mut ctx).await;
+                        return Err(e);
+                    }
+                };
+                // Record success/status outcome so the router learns from real
+                // traffic on the same axis as health probes.
+                if let Some(p) = proxy_for_job.as_ref() {
+                    let status = resp.status.as_u16();
+                    let outcome = if (200..400).contains(&status) {
+                        ProxyOutcome::Success {
+                            latency_ms: fetch_started.elapsed().as_secs_f64() * 1_000.0,
+                        }
+                    } else {
+                        ProxyOutcome::Status(status)
+                    };
+                    self.proxy_router.record_outcome(p, outcome);
+                }
+                if collect_net_timings {
+                    metrics.net = resp.timings.clone();
+                }
+                ctx.response_status = Some(resp.status.as_u16());
+                ctx.response_headers = Some(resp.headers.clone());
+                ctx.body = Some(resp.body.clone());
 
-            // FetchMethod::Auto: consult the Policy Engine post-fetch. The
-            // engine returns a structured Decision + DecisionReason; the
-            // execution helper maps it to a JobDisposition when it needs to
-            // stop normal response processing.
-            if matches!(job.method, FetchMethod::Auto) {
-                let proxy_score = proxy_for_job
-                    .as_ref()
-                    .and_then(|p| self.proxy_router.score_for(p));
-                let p_ctx = crate::policy::PolicyContext {
-                    url: &job.url,
-                    host: &host,
-                    initial_method: job.method,
-                    response_status: Some(resp.status.as_u16()),
-                    response_headers: Some(&resp.headers),
-                    response_body: Some(&resp.body),
-                    proxy_score,
-                    attempts: job.attempts,
-                    render_budget_left: None,
-                    host_cooldown_ms_left: 0,
-                    thresholds: &self.policy_thresholds,
-                };
-                let (decision, reason) = crate::policy::PolicyEngine::decide_post_fetch(&p_ctx);
+                let block = crate::antibot::block_detector::classify_http_response(
+                    resp.status.as_u16(),
+                    &resp.body,
+                    &resp.headers,
+                    &job.url,
+                );
+                let latency_ms = fetch_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX)) as u64;
+                self.record_crawl_attempt(CrawlAttemptRecord::new(
+                    crawl_id,
+                    job.url.clone(),
+                    self.next_crawl_attempt_index(crawl_id),
+                    AttemptEngine::HttpSpoof,
+                    proxy_for_job.clone(),
+                    proxy_for_job.clone(),
+                    Some(resp.status.as_u16()),
+                    block.blocked,
+                    if block.blocked {
+                        Some(block.reason.clone())
+                    } else {
+                        None
+                    },
+                    block.vendor,
+                    block.level,
+                    latency_ms,
+                    None,
+                ))
+                .await;
+
+                if self
+                    .maybe_complete_from_cache_response(
+                        &job,
+                        crawl_id,
+                        "http_response",
+                        resp.status.as_u16(),
+                        &resp.headers,
+                        &resp.body,
+                        &mut ctx,
+                    )
+                    .await?
+                {
+                    return Ok(JobDisposition::Complete);
+                }
+
+                // FetchMethod::Auto: consult the Policy Engine post-fetch. The
+                // engine returns a structured Decision + DecisionReason; the
+                // execution helper maps it to a JobDisposition when it needs to
+                // stop normal response processing.
+                if matches!(job.method, FetchMethod::Auto) {
+                    let proxy_score = proxy_for_job
+                        .as_ref()
+                        .and_then(|p| self.proxy_router.score_for(p));
+                    let p_ctx = crate::policy::PolicyContext {
+                        url: &job.url,
+                        host: &host,
+                        initial_method: job.method,
+                        response_status: Some(resp.status.as_u16()),
+                        response_headers: Some(&resp.headers),
+                        response_body: Some(&resp.body),
+                        proxy_score,
+                        attempts: job.attempts,
+                        render_budget_left: None,
+                        host_cooldown_ms_left: 0,
+                        thresholds: &self.policy_thresholds,
+                    };
+                    let (decision, reason) = crate::policy::PolicyEngine::decide_post_fetch(&p_ctx);
+                    self.events.emit(
+                        &Event::of(EventKind::DecisionMade)
+                            .with_run(self.run_id)
+                            .with_url(job.url.as_str())
+                            .with_why(reason.code.clone())
+                            .with_data(&serde_json::json!({
+                                "decision": decision.as_tag(),
+                                "reason": reason.clone(),
+                                "status": resp.status.as_u16(),
+                            })),
+                    );
+                    if matches!(decision, Decision::Drop)
+                        && self.config.fallback_fetch.is_some()
+                        && reason.code.starts_with("render:antibot:")
+                    {
+                        let fallback = self
+                            .execute_fallback_fetch(
+                                &job,
+                                &mut ctx,
+                                Some(reason.code.clone()),
+                                Some(resp.status.as_u16()),
+                            )
+                            .await?;
+                        break 'http_fetch fallback;
+                    }
+                    if let Some(disposition) = self.execute_policy_decision(
+                        &job,
+                        &host,
+                        proxy_for_job.as_ref(),
+                        decision,
+                        reason,
+                        &mut ctx,
+                    )? {
+                        return Ok(disposition);
+                    }
+                }
+
+                let _ = self.fire_all(HookEvent::AfterFirstByte, &mut ctx).await?;
+                let _ = self.fire_all(HookEvent::OnResponseBody, &mut ctx).await?;
+
+                // Antibot detection on the HTTP path. Runs even when the
+                // response already looked fine to `decide_post_fetch` —
+                // `detect_from_http_response` picks up subtler signals
+                // (datadome cookie on a 200, _px3 cookie, etc).
+                if let Some(raw) = block.clone().into_raw_challenge() {
+                    let signal =
+                        raw.into_signal(&resp.final_url, "http".to_string(), proxy_for_job.clone());
+                    let action = self.handle_challenge(&signal).await;
+                    tracing::debug!(
+                        url=%job.url,
+                        vendor=signal.vendor.as_str(),
+                        level=signal.level.as_str(),
+                        action=action.as_str(),
+                        "antibot challenge detected on http path"
+                    );
+                    if self.config.fallback_fetch.is_some() {
+                        let fallback = self
+                            .execute_fallback_fetch(
+                                &job,
+                                &mut ctx,
+                                Some(format!("http:block:{}", block.reason)),
+                                Some(resp.status.as_u16()),
+                            )
+                            .await?;
+                        break 'http_fetch fallback;
+                    }
+                }
+
+                self.storage
+                    .save_raw_response(
+                        &job.url,
+                        &resp.final_url,
+                        resp.status.as_u16(),
+                        &resp.headers,
+                        &resp.body,
+                        resp.body_truncated,
+                    )
+                    .await?;
+
+                // Surface per-request timings on the stream so consumers
+                // don't have to round-trip through the SQLite `page_metrics`
+                // table to inspect a fetch's network breakdown.
                 self.events.emit(
-                    &Event::of(EventKind::DecisionMade)
+                    &Event::of(EventKind::FetchCompleted)
                         .with_run(self.run_id)
                         .with_url(job.url.as_str())
-                        .with_why(reason.code.clone())
-                        .with_data(&serde_json::json!({
-                            "decision": decision.as_tag(),
-                            "reason": reason.clone(),
-                            "status": resp.status.as_u16(),
-                        })),
+                        .with_data(&crate::events::FetchCompletedData {
+                            final_url: resp.final_url.to_string(),
+                            status: resp.status.as_u16(),
+                            bytes: Some(resp.body.len() as u64),
+                            body_truncated: resp.body_truncated,
+                            dns_ms: resp.timings.dns_ms,
+                            tcp_connect_ms: resp.timings.tcp_connect_ms,
+                            tls_handshake_ms: resp.timings.tls_handshake_ms,
+                            ttfb_ms: resp.timings.ttfb_ms,
+                            download_ms: resp.timings.download_ms,
+                            total_ms: resp.timings.total_ms,
+                            alpn: resp.timings.alpn.clone(),
+                            tls_version: resp.timings.tls_version.clone(),
+                            cipher: resp.timings.cipher.clone(),
+                        }),
                 );
-                if let Some(disposition) = self.execute_policy_decision(
-                    &job,
-                    &host,
-                    proxy_for_job.as_ref(),
-                    decision,
-                    reason,
-                    &mut ctx,
-                )? {
-                    return Ok(disposition);
-                }
-            }
 
-            let _ = self.fire_all(HookEvent::AfterFirstByte, &mut ctx).await?;
-            let _ = self.fire_all(HookEvent::OnResponseBody, &mut ctx).await?;
+                let ct_header = resp
+                    .headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let is_html = ct_header
+                    .as_deref()
+                    .map(|s| s.contains("text/html") || s.contains("xhtml"))
+                    .unwrap_or(false);
 
-            // Antibot detection on the HTTP path. Runs even when the
-            // response already looked fine to `decide_post_fetch` —
-            // `detect_from_http_response` picks up subtler signals
-            // (datadome cookie on a 200, _px3 cookie, etc).
-            if let Some(raw) = crate::antibot::detect_from_http_response(
-                resp.status.as_u16(),
-                &resp.body,
-                &resp.headers,
-                &job.url,
-            ) {
-                let signal =
-                    raw.into_signal(&resp.final_url, "http".to_string(), proxy_for_job.clone());
-                let action = self.handle_challenge(&signal).await;
-                tracing::debug!(
-                    url=%job.url,
-                    vendor=signal.vendor.as_str(),
-                    level=signal.level.as_str(),
-                    action=action.as_str(),
-                    "antibot challenge detected on http path"
-                );
-            }
-
-            self.storage
-                .save_raw_response(
-                    &job.url,
-                    &resp.final_url,
+                let html = if is_html {
+                    let (decoded_html, charset) = crate::impersonate::decode::decode_html_to_string(
+                        &resp.headers,
+                        &resp.body,
+                    );
+                    ctx.user_data
+                        .insert("charset".into(), serde_json::Value::String(charset));
+                    Some(decoded_html)
+                } else {
+                    None
+                };
+                (
+                    html,
+                    resp.final_url,
                     resp.status.as_u16(),
-                    &resp.headers,
-                    &resp.body,
-                    resp.body_truncated,
+                    Vec::<Url>::new(),
+                    resp.peer_cert,
                 )
-                .await?;
-
-            // Surface per-request timings on the stream so consumers
-            // don't have to round-trip through the SQLite `page_metrics`
-            // table to inspect a fetch's network breakdown.
-            self.events.emit(
-                &Event::of(EventKind::FetchCompleted)
-                    .with_run(self.run_id)
-                    .with_url(job.url.as_str())
-                    .with_data(&crate::events::FetchCompletedData {
-                        final_url: resp.final_url.to_string(),
-                        status: resp.status.as_u16(),
-                        bytes: Some(resp.body.len() as u64),
-                        body_truncated: resp.body_truncated,
-                        dns_ms: resp.timings.dns_ms,
-                        tcp_connect_ms: resp.timings.tcp_connect_ms,
-                        tls_handshake_ms: resp.timings.tls_handshake_ms,
-                        ttfb_ms: resp.timings.ttfb_ms,
-                        download_ms: resp.timings.download_ms,
-                        total_ms: resp.timings.total_ms,
-                        alpn: resp.timings.alpn.clone(),
-                        tls_version: resp.timings.tls_version.clone(),
-                        cipher: resp.timings.cipher.clone(),
-                    }),
-            );
-
-            let ct_header = resp
-                .headers
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let is_html = ct_header
-                .as_deref()
-                .map(|s| s.contains("text/html") || s.contains("xhtml"))
-                .unwrap_or(false);
-
-            let html = if is_html {
-                let (decoded_html, charset) =
-                    crate::impersonate::decode::decode_html_to_string(&resp.headers, &resp.body);
-                ctx.user_data
-                    .insert("charset".into(), serde_json::Value::String(charset));
-                Some(decoded_html)
-            } else {
-                None
-            };
-            (
-                html,
-                resp.final_url,
-                resp.status.as_u16(),
-                Vec::<Url>::new(),
-                resp.peer_cert,
-            )
+            }
         };
 
         let ct = ctx
@@ -1987,29 +2609,65 @@ impl Crawler {
                 .unwrap_or_default();
                 let next_depth = job.depth + 1;
                 for to in js_urls {
-                    if !self.should_follow(&job.url, &to) {
-                        continue;
-                    }
-                    if !self.dedupe.insert_url_set(&to) {
-                        continue;
-                    }
-                    self.graph.add_edge(&job.url, &to);
-                    let _ = self.storage.save_edge(&job.url, &to).await;
-                    let job2 = Job {
-                        id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                        url: to,
-                        depth: next_depth,
-                        priority: 0,
-                        method: job.method,
-                        attempts: 0,
-                        last_error: None,
-                    };
-                    let _ = self.queue.push(job2).await;
+                    let _ = self
+                        .enqueue_discovered_url(&job.url, to, next_depth, job.method)
+                        .await;
                 }
             }
         }
 
         if let Some(html) = html_opt {
+            if self.config.prefetch {
+                let url_for_parse = job.url.clone();
+                let html_for_parse = html;
+                let mut links = tokio::task::spawn_blocking(move || {
+                    let doc = scraper::Html::parse_document(&html_for_parse);
+                    crate::discovery::links::extract_links_from_document(&url_for_parse, &doc)
+                })
+                .await
+                .map_err(|e| Error::Other(anyhow::anyhow!("prefetch html parse join: {e}")))?;
+                links.extend(cdp_urls);
+                ctx.captured_urls = links;
+                let _ = self.fire_all(HookEvent::OnDiscovery, &mut ctx).await?;
+
+                let next_depth = job.depth + 1;
+                let cap_ok = self
+                    .config
+                    .max_depth
+                    .map(|m| next_depth <= m)
+                    .unwrap_or(true);
+                if cap_ok {
+                    let discovered = std::mem::take(&mut ctx.captured_urls);
+                    for to in discovered {
+                        self.enqueue_discovered_url(&job.url, to, next_depth, job.method)
+                            .await?;
+                    }
+                }
+
+                let _ = self.fire_all(HookEvent::OnJobEnd, &mut ctx).await?;
+                let fallback_fetch_used = ctx
+                    .user_data
+                    .get("fallback_fetch_used")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let resolved_by = if fallback_fetch_used {
+                    AttemptEngine::FallbackCommand
+                } else if use_render {
+                    AttemptEngine::Render
+                } else {
+                    AttemptEngine::HttpSpoof
+                };
+                self.finish_crawl_stats(
+                    crawl_id,
+                    job.url.clone(),
+                    Some(resolved_by),
+                    true,
+                    fallback_fetch_used,
+                )
+                .await;
+                return Ok(JobDisposition::Complete);
+            }
+
             self.counters.inc(&self.counters.pages_saved);
             self.storage.save_rendered(&job.url, &html, &meta).await?;
             if collect_artifacts {
@@ -2100,29 +2758,33 @@ impl Crawler {
             if cap_ok {
                 let discovered = std::mem::take(&mut ctx.captured_urls);
                 for to in discovered {
-                    if !self.should_follow(&job.url, &to) {
-                        continue;
-                    }
-                    if !self.dedupe.insert_url_set(&to) {
-                        continue;
-                    }
-                    self.graph.add_edge(&job.url, &to);
-                    let _ = self.storage.save_edge(&job.url, &to).await;
-                    let job2 = Job {
-                        id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                        url: to,
-                        depth: next_depth,
-                        priority: -(next_depth as i32),
-                        method: job.method,
-                        attempts: 0,
-                        last_error: None,
-                    };
-                    self.queue.push(job2).await?;
+                    self.enqueue_discovered_url(&job.url, to, next_depth, job.method)
+                        .await?;
                 }
             }
         }
 
         let _ = self.fire_all(HookEvent::OnJobEnd, &mut ctx).await?;
+        let fallback_fetch_used = ctx
+            .user_data
+            .get("fallback_fetch_used")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let resolved_by = if fallback_fetch_used {
+            AttemptEngine::FallbackCommand
+        } else if use_render {
+            AttemptEngine::Render
+        } else {
+            AttemptEngine::HttpSpoof
+        };
+        self.finish_crawl_stats(
+            crawl_id,
+            job.url.clone(),
+            Some(resolved_by),
+            true,
+            fallback_fetch_used,
+        )
+        .await;
         Ok(JobDisposition::Complete)
     }
 
@@ -2436,6 +3098,7 @@ impl Crawler {
                         if self.dedupe.insert_url_set(&u) {
                             let job = Job {
                                 id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                                crawl_id: 0,
                                 url: u,
                                 depth: 0,
                                 priority: 2,
@@ -2519,6 +3182,7 @@ impl Crawler {
                                     if self.dedupe.insert_url_set(&u) {
                                         let job = Job {
                                             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                                            crawl_id: 0,
                                             url: u,
                                             depth: 0,
                                             priority: 2,
@@ -2556,6 +3220,7 @@ impl Crawler {
                                 if self.dedupe.insert_url_set(&u) {
                                     let job = Job {
                                         id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                                        crawl_id: 0,
                                         url: u,
                                         depth: 0,
                                         priority: 1,
@@ -2608,6 +3273,7 @@ impl Crawler {
                     if self.dedupe.insert_url_set(&u) {
                         let job = Job {
                             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                            crawl_id: 0,
                             url: u,
                             depth: 1,
                             priority: 3,
@@ -2648,6 +3314,7 @@ impl Crawler {
                     if self.dedupe.insert_url_set(&u) {
                         let job = Job {
                             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                            crawl_id: 0,
                             url: u,
                             depth: 1,
                             priority: 2,
@@ -2673,6 +3340,7 @@ impl Crawler {
                         if self.dedupe.insert_url_set(&u) {
                             let job = Job {
                                 id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                                crawl_id: 0,
                                 url: u,
                                 depth: 1,
                                 priority: -2,
@@ -2703,6 +3371,7 @@ impl Crawler {
             }
             let job = Job {
                 id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                crawl_id: 0,
                 url: u,
                 depth: 1,
                 priority: 5, // Prioritize — these paths are often high-value.
@@ -2737,6 +3406,7 @@ impl Crawler {
             }
             let job = Job {
                 id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                crawl_id: 0,
                 url: u,
                 depth: 0,
                 priority: 3,
@@ -2769,6 +3439,7 @@ impl Crawler {
                 }
                 let job = Job {
                     id: self.next_id.fetch_add(1, Ordering::Relaxed),
+                    crawl_id: 0,
                     url: u,
                     depth: 1,
                     priority: -1,

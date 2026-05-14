@@ -211,6 +211,17 @@ pub struct PageMetadata {
     pub kind: crate::discovery::AssetKind,
 }
 
+#[derive(Debug, Clone)]
+pub struct PageCacheMetadata {
+    pub url: Url,
+    pub final_url: Url,
+    pub status: u16,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub head_fingerprint: Option<String>,
+    pub saved_at_unix: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HostFacts {
     pub favicon_mmh3: Option<i32>,

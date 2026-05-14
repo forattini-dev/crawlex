@@ -217,6 +217,35 @@ pub struct Config {
     /// columns stay opt-in for older direct SQL consumers.
     #[serde(default)]
     pub content_store: ContentStoreConfig,
+    /// Lightweight cache freshness validation. When enabled, Crawlex can skip
+    /// full processing for URLs whose cached page metadata still matches the
+    /// current response validators or `<head>` fingerprint.
+    #[serde(default)]
+    pub cache_validation: CacheValidationConfig,
+    /// Discovery-only mode. Fetches/serializes enough HTML to extract links,
+    /// but skips heavier page processing such as rendered-page persistence,
+    /// tech fingerprinting, artifacts, and post-processing.
+    #[serde(default)]
+    pub prefetch: bool,
+    /// Optional best-first scoring for newly discovered URLs.
+    #[serde(default)]
+    pub crawl_scoring: CrawlScoringConfig,
+    /// Optional last-resort fetch adapter. When set, Crawlex executes the
+    /// configured command with a JSON request on stdin and expects a JSON
+    /// response containing HTML/body data on stdout.
+    #[serde(default)]
+    pub fallback_fetch: Option<FallbackFetchConfig>,
+    /// Connect to an already-running Chrome/Chromium CDP endpoint instead
+    /// of launching a local browser. Example: `http://127.0.0.1:9222`.
+    #[serde(default)]
+    pub external_cdp_url: Option<String>,
+    /// GPU launch posture for managed Chrome instances.
+    #[serde(default)]
+    pub gpu_policy: GpuPolicy,
+    /// Optional DOM cleanup/capture transformations before serializing the
+    /// rendered document.
+    #[serde(default)]
+    pub dom_capture: DomCaptureConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -237,6 +266,105 @@ impl Default for ContentStoreConfig {
             inline_legacy_columns: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CacheValidationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// If set, a cache row younger than this is accepted without a network
+    /// validation probe. Leave unset to always compare validators/fingerprint.
+    #[serde(default)]
+    pub max_age_secs: Option<u64>,
+}
+
+impl Default for CacheValidationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_age_secs: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CrawlScoringConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default = "default_score_same_host_bonus")]
+    pub same_host_bonus: i32,
+    #[serde(default = "default_score_keyword_bonus")]
+    pub keyword_bonus: i32,
+    #[serde(default = "default_score_depth_penalty")]
+    pub depth_penalty: i32,
+    #[serde(default = "default_score_path_depth_penalty")]
+    pub path_depth_penalty: i32,
+}
+
+fn default_score_same_host_bonus() -> i32 {
+    5
+}
+
+fn default_score_keyword_bonus() -> i32 {
+    8
+}
+
+fn default_score_depth_penalty() -> i32 {
+    2
+}
+
+fn default_score_path_depth_penalty() -> i32 {
+    1
+}
+
+impl Default for CrawlScoringConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            keywords: Vec::new(),
+            same_host_bonus: default_score_same_host_bonus(),
+            keyword_bonus: default_score_keyword_bonus(),
+            depth_penalty: default_score_depth_penalty(),
+            path_depth_penalty: default_score_path_depth_penalty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FallbackFetchConfig {
+    pub command: Vec<String>,
+    #[serde(default = "default_fallback_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fallback_max_output_bytes")]
+    pub max_output_bytes: u64,
+}
+
+fn default_fallback_timeout_ms() -> u64 {
+    60_000
+}
+
+fn default_fallback_max_output_bytes() -> u64 {
+    32 * 1024 * 1024
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuPolicy {
+    #[default]
+    Compat,
+    Stealth,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DomCaptureConfig {
+    #[serde(default)]
+    pub flatten_shadow_dom: bool,
+    #[serde(default)]
+    pub remove_overlays: bool,
+    #[serde(default)]
+    pub remove_consent_popups: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -587,6 +715,13 @@ impl Default for Config {
             reading_dwell: None,
             http_limits: HttpLimits::default(),
             content_store: ContentStoreConfig::default(),
+            cache_validation: CacheValidationConfig::default(),
+            prefetch: false,
+            crawl_scoring: CrawlScoringConfig::default(),
+            fallback_fetch: None,
+            external_cdp_url: None,
+            gpu_policy: GpuPolicy::default(),
+            dom_capture: DomCaptureConfig::default(),
         }
     }
 }

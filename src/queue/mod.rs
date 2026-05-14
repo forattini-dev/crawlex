@@ -20,6 +20,8 @@ pub enum FetchMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: u64,
+    #[serde(default)]
+    pub crawl_id: u64,
     pub url: Url,
     pub depth: u32,
     pub priority: i32,

@@ -6,6 +6,7 @@ use url::Url;
 fn job(id: u64, path: &str) -> Job {
     Job {
         id,
+        crawl_id: id,
         url: Url::parse(&format!("https://example.com/{path}")).unwrap(),
         depth: 0,
         priority: 0,

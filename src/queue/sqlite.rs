@@ -70,6 +70,7 @@ impl SqliteQueue {
             r#"
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY,
+                crawl_id INTEGER NOT NULL DEFAULT 0,
                 url TEXT NOT NULL,
                 canonical_url TEXT NOT NULL DEFAULT '',
                 depth INTEGER NOT NULL,
@@ -88,6 +89,11 @@ impl SqliteQueue {
         .map_err(|e| Error::Queue(format!("schema: {e}")))?;
         // Existing databases from older builds may not have canonical_url.
         let _ = conn.execute("ALTER TABLE jobs ADD COLUMN canonical_url TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE jobs ADD COLUMN crawl_id INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute("UPDATE jobs SET crawl_id=id WHERE crawl_id=0", []);
         migrate_canonical_urls(&conn)
             .map_err(|e| Error::Queue(format!("migrate canonical_url: {e}")))?;
         conn.execute(
@@ -253,8 +259,8 @@ fn apply_push_batch(
     {
         let mut stmt = match tx.prepare_cached(
             "INSERT OR IGNORE INTO jobs
-                (url, canonical_url, depth, priority, method, attempts, not_before)
-             VALUES (?,?,?,?,?,?,?)",
+                (crawl_id, url, canonical_url, depth, priority, method, attempts, not_before)
+             VALUES (?,?,?,?,?,?,?,?)",
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -269,6 +275,7 @@ fn apply_push_batch(
             let canonical = crate::url_util::canonicalize(&job.url);
             let r = stmt
                 .execute(params![
+                    effective_crawl_id(&job) as i64,
                     job.url.to_string(),
                     canonical,
                     job.depth as i64,
@@ -294,6 +301,14 @@ fn apply_push_batch(
     }
 }
 
+fn effective_crawl_id(job: &Job) -> u64 {
+    if job.crawl_id == 0 {
+        job.id
+    } else {
+        job.crawl_id
+    }
+}
+
 fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
     match op {
         Op::Push(job, not_before, reply) => {
@@ -301,9 +316,10 @@ fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
             let r = conn
                 .execute(
                     "INSERT OR IGNORE INTO jobs
-                        (url, canonical_url, depth, priority, method, attempts, not_before)
-                     VALUES (?,?,?,?,?,?,?)",
+                        (crawl_id, url, canonical_url, depth, priority, method, attempts, not_before)
+                     VALUES (?,?,?,?,?,?,?,?)",
                     params![
+                        effective_crawl_id(&job) as i64,
                         job.url.to_string(),
                         canonical,
                         job.depth as i64,
@@ -323,19 +339,21 @@ fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
                 .execute(
                     "UPDATE jobs
                      SET url=?2,
-                         canonical_url=?3,
-                         depth=?4,
-                         priority=?5,
-                         method=?6,
-                         attempts=?7,
-                         last_error=?8,
+                         crawl_id=?3,
+                         canonical_url=?4,
+                         depth=?5,
+                         priority=?6,
+                         method=?7,
+                         attempts=?8,
+                         last_error=?9,
                          state='pending',
-                         not_before=?9,
+                         not_before=?10,
                          updated_at=strftime('%s','now')
                      WHERE id=?1",
                     params![
                         original_id as i64,
                         job.url.to_string(),
+                        effective_crawl_id(&job) as i64,
                         canonical,
                         job.depth as i64,
                         job.priority as i64,
@@ -368,17 +386,18 @@ fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
                          ORDER BY priority DESC, id ASC
                          LIMIT 1
                      )
-                     RETURNING id, url, depth, priority, method, attempts, last_error",
+                     RETURNING id, crawl_id, url, depth, priority, method, attempts, last_error",
                     params![now],
                     |r| {
                         Ok((
                             r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, i64>(2)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
                             r.get::<_, i64>(3)?,
-                            r.get::<_, String>(4)?,
-                            r.get::<_, i64>(5)?,
-                            r.get::<_, Option<String>>(6)?,
+                            r.get::<_, i64>(4)?,
+                            r.get::<_, String>(5)?,
+                            r.get::<_, i64>(6)?,
+                            r.get::<_, Option<String>>(7)?,
                         ))
                     },
                 ) {
@@ -386,12 +405,18 @@ fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
                     Err(rusqlite::Error::QueryReturnedNoRows) => None,
                     Err(e) => return Err(Error::Queue(format!("pop: {e}"))),
                 };
-                let Some((id, url, depth, priority, method, attempts, last_error)) = row else {
+                let Some((id, crawl_id, url, depth, priority, method, attempts, last_error)) = row
+                else {
                     return Ok(None);
                 };
                 let url_p = url::Url::parse(&url).map_err(Error::UrlParse)?;
                 Ok(Some(Job {
                     id: id as u64,
+                    crawl_id: if crawl_id == 0 {
+                        id as u64
+                    } else {
+                        crawl_id as u64
+                    },
                     url: url_p,
                     depth: depth as u32,
                     priority: priority as i32,

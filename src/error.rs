@@ -44,6 +44,7 @@ pub enum Engine {
     Render,
     Extract,
     Proxy,
+    FallbackFetch,
 }
 
 impl Engine {
@@ -53,6 +54,7 @@ impl Engine {
             Self::Render => "render",
             Self::Extract => "extract",
             Self::Proxy => "proxy",
+            Self::FallbackFetch => "fallback-fetch",
         }
     }
 }

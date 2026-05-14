@@ -25,6 +25,7 @@ async fn concurrent_pop_returns_unique_ids() {
         queue
             .push(Job {
                 id: 0, // SQLite auto-id
+                crawl_id: 0,
                 url: Url::parse(&format!("https://example.com/p/{i}")).unwrap(),
                 depth: 0,
                 priority: 0,
