@@ -65,6 +65,21 @@ pub enum Command {
     /// extracted domain rules into the override file consulted by the
     /// adblock gate at runtime. Slice 20.
     UpdateBlocklist(UpdateBlocklistArgs),
+    /// Convert a curl invocation (typically copied from Chrome devtools)
+    /// into an equivalent crawlex config (TOML/JSON) or Node SDK snippet.
+    /// Slice 21.
+    FromCurl(FromCurlArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FromCurlArgs {
+    /// The full curl command, quoted. Example:
+    /// `crawlex from-curl "curl 'https://e.com' -H 'x: 1'"`.
+    pub command: String,
+    /// Output shape — `toml` (default), `json`, or `node` (Node SDK
+    /// snippet importing `crawlex`).
+    #[arg(long, default_value = "toml")]
+    pub format: String,
 }
 
 #[derive(Args, Debug, Clone)]

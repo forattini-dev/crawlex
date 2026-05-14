@@ -43,6 +43,7 @@ pub mod escalation;
 pub mod events;
 pub mod extract;
 pub mod fallback_fetch;
+pub mod from_curl;
 pub mod frontier;
 pub mod hooks;
 pub mod http;
