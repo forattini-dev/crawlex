@@ -1220,6 +1220,9 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
         #[cfg_attr(not(feature = "lua-hooks"), allow(unused_variables))]
         let render_enabled = config.max_concurrent_render > 0;
 
+        // Capture render_mode before `config` is moved into `Crawler::new`.
+        let render_mode_captured = config.render_mode;
+
         // Resolve `--policy <fast|balanced|deep|forensics>`.
         let policy_profile = parse_policy_profile(&c.policy)?;
 
@@ -1274,7 +1277,7 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
             _ => crate::queue::FetchMethod::HttpSpoof,
         };
         // Operator-level `--render-mode` wins over the per-job `--method`.
-        let method = match config.render_mode {
+        let method = match render_mode_captured {
             crate::config::RenderMode::Always => crate::queue::FetchMethod::Render,
             crate::config::RenderMode::Never => crate::queue::FetchMethod::HttpSpoof,
             crate::config::RenderMode::Auto => method,
