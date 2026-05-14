@@ -9,7 +9,7 @@
 //!   * return `DenyReason` enum instead of the string tag table so callers
 //!     can emit structured events.
 
-use regex::Regex;
+use crate::extract::pattern::Pattern;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use texting_robots::Robot;
@@ -89,8 +89,8 @@ pub struct FilterLinksInput<'a> {
     pub base_url: &'a Url,
     pub initial_url: &'a Url,
     pub regex_on_full_url: bool,
-    pub excludes: &'a [Regex],
-    pub includes: &'a [Regex],
+    pub excludes: &'a [Pattern],
+    pub includes: &'a [Pattern],
     pub allow_backward_crawling: bool,
     pub ignore_robots_txt: bool,
     pub robots_txt: &'a str,
@@ -269,12 +269,12 @@ pub fn filter_links(data: FilterLinksInput<'_>) -> FilterLinksResult {
                 &path
             };
 
-            if !data.excludes.is_empty() && data.excludes.iter().any(|r| r.is_match(match_target)) {
+            if !data.excludes.is_empty() && data.excludes.iter().any(|p| p.is_match(match_target)) {
                 push_deny(&mut denials, link, DenyReason::ExcludePattern);
                 continue;
             }
 
-            if !data.includes.is_empty() && !data.includes.iter().any(|r| r.is_match(match_target))
+            if !data.includes.is_empty() && !data.includes.iter().any(|p| p.is_match(match_target))
             {
                 push_deny(&mut denials, link, DenyReason::IncludePattern);
                 continue;
@@ -295,7 +295,7 @@ pub fn filter_links(data: FilterLinksInput<'_>) -> FilterLinksResult {
                 continue;
             }
 
-            if !data.excludes.is_empty() && data.excludes.iter().any(|r| r.is_match(&url_str)) {
+            if !data.excludes.is_empty() && data.excludes.iter().any(|p| p.is_match(&url_str)) {
                 push_deny(&mut denials, link, DenyReason::ExcludePattern);
                 continue;
             }
@@ -318,7 +318,7 @@ pub fn filter_links(data: FilterLinksInput<'_>) -> FilterLinksResult {
                     &path
                 };
                 if !data.includes.is_empty()
-                    && !data.includes.iter().any(|r| r.is_match(match_target))
+                    && !data.includes.iter().any(|p| p.is_match(match_target))
                 {
                     push_deny(&mut denials, link, DenyReason::IncludePattern);
                     continue;
