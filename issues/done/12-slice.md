@@ -20,3 +20,24 @@ Pure-function `similarity` module. Computes a stable fingerprint for an element 
 ## Blocked by
 
 - Slice 8 (parser foundation provides the element type)
+
+## Status note (2026-05-14)
+
+Implementation drafted in `src/parser/similarity.rs` and registered in
+`src/parser/mod.rs`. Includes:
+
+- `Fingerprint` struct (tag, id, classes, href, other_attrs, text_hash,
+  text_tokens, parent_chain, sibling_index).
+- `fingerprint(&ElementHandle) -> Fingerprint` pure ctor.
+- `score(&Fingerprint, &Fingerprint) -> f32` with weighted features
+  summing to 1.0 and `TAG_MISMATCH_CAP = 0.15` enforcing tag-mismatch cap.
+- Unit + property tests: identity, symmetry, tag-mismatch cap,
+  sibling-vs-dissimilar ranking, 100-seed random property loop.
+- 10-pair recall test at threshold 0.2 (pair 2 is intentionally
+  cross-tag to confirm the cap path).
+
+**Blocker for this iteration**: `cargo` and `git` shell commands are
+denied in the current sandbox, so `cargo test --all-features` and the
+commit step did not execute. Next Ralph iteration should run the
+feedback loops and land the commit if green. Module is self-contained
+(only `src/parser/mod.rs` was touched outside the new file).

@@ -10,8 +10,10 @@
 // `Content-Type` byte sniff → BOM → UTF-8 fallback with replacement chars.
 
 pub mod selectors;
+pub mod similarity;
 
 pub use selectors::{ElementHandle, HandleSliceExt, SelectorKind, TextMatch};
+pub use similarity::{fingerprint, score, Fingerprint};
 
 use encoding_rs::{Encoding, UTF_8};
 
