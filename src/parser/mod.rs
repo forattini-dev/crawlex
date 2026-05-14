@@ -9,9 +9,11 @@
 // Charset detection priority: explicit `charset` arg → `<meta charset>` /
 // `Content-Type` byte sniff → BOM → UTF-8 fallback with replacement chars.
 
+pub mod adaptive;
 pub mod selectors;
 pub mod similarity;
 
+pub use adaptive::{AdaptiveMatch, AdaptiveOptions, DEFAULT_THRESHOLD};
 pub use selectors::{ElementHandle, HandleSliceExt, SelectorKind, TextMatch};
 pub use similarity::{fingerprint, score, Fingerprint};
 
