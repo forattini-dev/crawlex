@@ -178,6 +178,10 @@ export interface DecisionMadeData {
 export interface FetchCompletedData {
   final_url: string;
   status: number;
+  /** Which path served this URL: `"impersonate"` (HTTP spoof client) or
+   * `"fallback"` (external fallback_fetch command). The render path
+   * emits a separate `render.completed` event with `path: "render"`. */
+  path?: 'impersonate' | 'fallback';
   bytes?: number;
   body_truncated: boolean;
   dns_ms?: number;
@@ -213,6 +217,10 @@ export interface VitalsSummary {
 export interface RenderCompletedData {
   final_url: string;
   status: number;
+  /** Always `"render"` — the literal lets a stream consumer
+   * disambiguate against `fetch.completed.data.path` without
+   * inspecting the envelope's `event` field. */
+  path?: 'render';
   manifest: boolean;
   service_workers: number;
   screenshot: boolean;

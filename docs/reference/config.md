@@ -94,7 +94,8 @@
     "flatten_shadow_dom": false,
     "remove_overlays": false,
     "remove_consent_popups": false
-  }
+  },
+  "render_mode": "auto"
 }
 ```
 
@@ -124,6 +125,7 @@
 | `dom_capture.flatten_shadow_dom` | Serialize open shadow roots into captured HTML | `false` |
 | `dom_capture.remove_overlays` | Remove fixed/sticky overlays before HTML capture | `false` |
 | `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
+| `render_mode` | Operator-level switch: `"auto"` (impersonate first, escalate via policy), `"always"` (force render path, bumps `max_concurrent_render` to ≥1), `"never"` (pin to impersonate, refuse render escalation, never instantiate the render pool). Wins over `--method`. | `"auto"` |
 
 ## When to prefer flags over JSON
 

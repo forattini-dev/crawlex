@@ -26,6 +26,13 @@
 ### Execution mode
 
 - `--method spoof|auto|render`
+- `--render-mode auto|always|never` — operator-level switch that wins
+  over `--method`. `auto` (default) keeps today's behaviour:
+  impersonate first, escalate to render via the policy engine when
+  needed. `always` forces every seeded job onto the render path and
+  bumps `max_concurrent_render` to at least one. `never` pins every
+  job to the impersonate path, refuses any render escalation, and
+  keeps the render pool from being instantiated.
 - `--policy fast|balanced|deep|forensics`
 - `--wait-strategy networkidle|load|domcontentloaded|fixed`
 - `--wait-idle-ms <ms>`

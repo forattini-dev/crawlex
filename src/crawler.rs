@@ -696,6 +696,7 @@ impl Crawler {
                 .with_data(&crate::events::FetchCompletedData {
                     final_url: result.final_url.to_string(),
                     status: result.status,
+                    path: Some("fallback".into()),
                     bytes: Some(result.body.len() as u64),
                     body_truncated: false,
                     dns_ms: None,
@@ -1991,6 +1992,7 @@ impl Crawler {
                                 .with_data(&serde_json::json!({
                                     "final_url": rp.final_url.as_str(),
                                     "status": rp.status,
+                                    "path": "render",
                                     "manifest": rp.manifest_url.is_some(),
                                     "service_workers": rp.service_worker_urls.len(),
                                     "screenshot": rp.screenshot_png.is_some(),
@@ -2455,6 +2457,7 @@ impl Crawler {
                         .with_data(&crate::events::FetchCompletedData {
                             final_url: resp.final_url.to_string(),
                             status: resp.status.as_u16(),
+                            path: Some("impersonate".into()),
                             bytes: Some(resp.body.len() as u64),
                             body_truncated: resp.body_truncated,
                             dns_ms: resp.timings.dns_ms,

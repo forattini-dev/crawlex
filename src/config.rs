@@ -246,6 +246,15 @@ pub struct Config {
     /// rendered document.
     #[serde(default)]
     pub dom_capture: DomCaptureConfig,
+    /// Operator-level render-path switch. `Auto` (default) keeps the
+    /// historical behaviour: impersonate first, escalate to render via
+    /// the policy engine when needed. `Always` forces every seeded job
+    /// onto `FetchMethod::Render` and skips impersonation. `Never`
+    /// pins every job to the impersonate path, refuses policy
+    /// escalation to render, and prevents the render pool from being
+    /// instantiated.
+    #[serde(default)]
+    pub render_mode: RenderMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -574,6 +583,23 @@ pub enum StorageBackend {
     Filesystem { root: String },
 }
 
+/// Operator-level switch that decides whether the render (Chrome/CDP)
+/// path is consulted for a job. Coexists with `FetchMethod` on the
+/// individual job: `RenderMode::Always` upgrades every seeded job to
+/// `FetchMethod::Render` regardless of what the operator passed; `Never`
+/// keeps every job on the impersonate path and short-circuits any
+/// policy escalation to render; `Auto` (default) preserves today's
+/// behaviour where the policy engine may escalate `FetchMethod::Auto`
+/// jobs to render after observing the response.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderSessionScope {
@@ -722,6 +748,7 @@ impl Default for Config {
             external_cdp_url: None,
             gpu_policy: GpuPolicy::default(),
             dom_capture: DomCaptureConfig::default(),
+            render_mode: RenderMode::default(),
         }
     }
 }

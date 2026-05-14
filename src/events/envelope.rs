@@ -155,6 +155,12 @@ impl VitalsSummary {
 pub struct FetchCompletedData {
     pub final_url: String,
     pub status: u16,
+    /// Which path served this URL: `"impersonate"` for the in-process
+    /// HTTP spoof client, `"fallback"` for the external `fallback_fetch`
+    /// command. The render path emits a separate `render.completed`
+    /// event whose `data.path` is `"render"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
     pub body_truncated: bool,
