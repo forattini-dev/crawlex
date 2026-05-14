@@ -20,3 +20,19 @@ Persist element fingerprints with the `reddb-io/reddb` embedded DB, one file per
 ## Blocked by
 
 - Slice 12 (fingerprint type)
+
+## Progress note (2026-05-14)
+
+Public API + storage isolation + concurrency + tests implemented in
+`src/storage/adaptive.rs`. Backend is file-backed JSON (one
+`<spider_id>.adaptive.json` per spider, atomic tmp+rename writes,
+`parking_lot::RwLock` for concurrent reads).
+
+`reddb-io/reddb` dependency NOT added — crate name could not be verified
+in this autonomous run (no network, AFK constraint forbids destructive
+fallbacks). Public surface (`AdaptiveStore::open` /
+`save` / `retrieve`) is stable; swapping the on-disk backend later is a
+self-contained change.
+
+Open AC: confirm crate name with operator → swap JSON backend for
+reddb, keeping tests as-is.

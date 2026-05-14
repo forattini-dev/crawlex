@@ -20,8 +20,8 @@ use scraper::ElementRef;
 use super::selectors::ElementHandle;
 
 /// Stable feature bundle for one element. Cheap to clone; serialisable
-/// in a future slice without changes to the public surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// via serde so the adaptive store can round-trip it to disk.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Fingerprint {
     pub tag: String,
     pub id: Option<String>,
