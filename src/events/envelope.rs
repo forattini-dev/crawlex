@@ -7,9 +7,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Envelope wire version. Bumped to `2` (slice 1) when the canonical
+/// Envelope wire version. Bumped to `3` (slice 18) when `item.scraped`
+/// joined the event taxonomy. Bumped to `2` (slice 1) when the canonical
 /// `status` field was added.
-pub const EVENT_ENVELOPE_VERSION: u32 = 2;
+pub const EVENT_ENVELOPE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -97,6 +98,22 @@ pub enum EventKind {
     VendorTelemetryObserved,
     #[serde(rename = "tech.fingerprint_detected")]
     TechFingerprintDetected,
+    /// Slice 18 — emitted once per item yielded by a `Spider::parse`
+    /// invocation. `data` carries `{ spider_id, identifier?, payload }`.
+    #[serde(rename = "item.scraped")]
+    ItemScraped,
+}
+
+/// Payload shape for `item.scraped` events (slice 18). Carries the
+/// spider that produced the item, an optional stable identifier
+/// (typically a URL or recipe-defined key), and the raw JSON the spider
+/// yielded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemScrapedData {
+    pub spider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<String>,
+    pub payload: Value,
 }
 
 /// Compact subset of `metrics::WebVitals` shipped on `render.completed`
@@ -273,7 +290,7 @@ impl EventEnvelope {
 
     pub fn to_ndjson_line(&self) -> String {
         let mut s = serde_json::to_string(self)
-            .unwrap_or_else(|_| r#"{"v":2,"event":"serialize.failed"}"#.to_string());
+            .unwrap_or_else(|_| r#"{"v":3,"event":"serialize.failed"}"#.to_string());
         s.push('\n');
         s
     }

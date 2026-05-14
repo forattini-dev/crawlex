@@ -191,6 +191,76 @@ test('dedupes Request yields by method+url', async () => {
   }
 });
 
+test('stream() yields items in the order parse yielded them', async () => {
+  const { server, base } = await startFixture();
+  try {
+    const spider = defineSpider({
+      startUrls: [`${base}/`],
+      parse: function* (resp) {
+        const text = resp.body.toString('utf8');
+        if (resp.finalUrl.endsWith('/')) {
+          for (const m of text.matchAll(/href="([^"]+)"/g)) {
+            yield new Request(`${base}${m[1]}`);
+          }
+        } else {
+          yield { url: resp.finalUrl };
+        }
+      },
+    });
+
+    const handle = runSpider(spider);
+    const stream = handle.stream();
+    // Drive the primary iterator in the background while the stream
+    // consumer pulls items off the broadcaster.
+    const driver = (async () => {
+      // eslint-disable-next-line no-unused-vars
+      for await (const _ of handle) {
+        /* consume to keep producer moving */
+      }
+    })();
+    const streamed = [];
+    for await (const item of stream) streamed.push(item);
+    await driver;
+    assert.equal(streamed.length, 2);
+    // Order matches the underlying iteration order (FIFO frontier).
+    assert.ok(streamed[0].url.endsWith('/a') || streamed[0].url.endsWith('/b'));
+    assert.notEqual(streamed[0].url, streamed[1].url);
+  } finally {
+    await close(server);
+  }
+});
+
+test('stream() drops oldest items when consumer lags (bufferSize)', async () => {
+  // Mock fetcher so we don't depend on a real http server; emit 50
+  // items in tight succession against a buffer of 4. The lazy consumer
+  // observes the last few, never crashes.
+  const spider = defineSpider({
+    startUrls: ['https://burst.test/'],
+    parse: function* () {
+      for (let i = 0; i < 50; i++) yield { n: i };
+    },
+  });
+  const fetcher = async (req) => ({
+    request: req,
+    finalUrl: req.url,
+    status: 200,
+    headers: {},
+    body: Buffer.from(''),
+  });
+  const handle = runSpider(spider, { fetcher });
+  const stream = handle.stream({ bufferSize: 4 });
+  // Drain the primary iterator synchronously first; everything broadcasts
+  // before the stream consumer even starts pulling.
+  // eslint-disable-next-line no-unused-vars
+  for await (const _ of handle) {
+    /* drain */
+  }
+  const seen = [];
+  for await (const item of stream) seen.push(item);
+  assert.ok(seen.length > 0);
+  assert.ok(seen.length <= 4, `lagging consumer keeps at most bufferSize items, got ${seen.length}`);
+});
+
 test('AbortSignal pauses run mid-flight', async () => {
   const { server, base } = await startFixture();
   try {

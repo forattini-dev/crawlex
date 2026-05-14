@@ -6,7 +6,7 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 
 ```json
 {
-  "v": 2,
+  "v": 3,
   "ts": "2026-04-22T17:53:19Z",
   "event": "decision.made",
   "run_id": 14538211,
@@ -25,7 +25,7 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Event envelope version (currently `2`; was `1` before slice 1 added `status`) |
+| `v` | Event envelope version (currently `3`; was `2` before slice 18 added `item.scraped`) |
 | `ts` | ISO-8601 UTC timestamp |
 | `event` | Stable event kind name |
 | `run_id` | Run-scoped identifier shared across the crawl |
@@ -58,6 +58,7 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 - `step.completed`
 - `vendor.telemetry_observed`
 - `tech.fingerprint_detected`
+- `item.scraped`
 
 ## High-signal payloads
 
@@ -70,6 +71,8 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 `crawl.attempted` is emitted for each HTTP spoof, render or fallback-fetch attempt. It carries attempt index, engine, status, latency, proxy, block classification and error fields.
 
 `crawl.resolved` summarizes the whole crawl id: attempt count, whether fallback fetch was used, final engine and success boolean.
+
+`item.scraped` (slice 18) carries `{ spider_id, identifier?, payload }`. Emitted once per item yielded by `Spider::parse`. The `payload` is the raw JSON value the recipe returned; `identifier` is an optional stable key (defaults to the item's `id` or `url` field when present). Consumers that just want the items can subscribe via `SpiderRunner::stream()` (Rust) / `runSpider(...).stream()` (Node) — slow consumers lag silently rather than blocking the producer.
 
 `decision.made` also reports non-policy gates such as cache validation:
 

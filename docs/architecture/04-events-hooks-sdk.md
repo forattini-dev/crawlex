@@ -4,7 +4,7 @@
 
 `crawlex crawl --emit ndjson` writes one JSON envelope per line. Each envelope carries:
 
-- protocol version (currently `2` — bumped from `1` in slice 1 when the canonical `status` field was added)
+- protocol version (currently `3` — bumped from `2` in slice 18 when `item.scraped` joined the taxonomy; previously bumped from `1` in slice 1 when the canonical `status` field was added)
 - UTC timestamp
 - event kind
 - optional `run_id`
@@ -73,6 +73,7 @@ Stable names exposed today:
 - `step.completed`
 - `vendor.telemetry_observed`
 - `tech.fingerprint_detected`
+- `item.scraped`
 
 Important payloads:
 
@@ -81,6 +82,7 @@ Important payloads:
 - `crawl.attempted` records one HTTP/render/fallback attempt.
 - `crawl.resolved` records the final attempt ladder summary for a crawl id.
 - `artifact.saved` carries the storage handle/path, MIME, size and sha256.
+- `item.scraped` (slice 18) carries `{ spider_id, identifier?, payload }` — one envelope per item yielded by `Spider::parse`. The companion `SpiderRunner::stream()` (Rust) / `runSpider(...).stream()` (Node) APIs filter these items off the bus for in-process consumers; slow subscribers drop the oldest queued items rather than blocking the producer.
 
 ## Hooks
 
