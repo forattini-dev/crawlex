@@ -61,6 +61,21 @@ pub enum Command {
 pub enum PagesVerb {
     /// Start a new page crawl from the given seeds.
     Run(CrawlArgs),
+    /// List persisted pages, optionally filtered by canonical status.
+    List(PagesListArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PagesListArgs {
+    #[arg(long)]
+    pub storage_path: String,
+    /// Canonical per-URL status filter — one of `queued`, `completed`,
+    /// `disallowed`, `skipped`, `errored`, `cancelled`. Omit for all.
+    #[arg(long)]
+    pub status: Option<String>,
+    /// Row cap. 0 = unlimited.
+    #[arg(long, default_value_t = 0)]
+    pub limit: usize,
 }
 
 #[derive(Subcommand, Debug)]

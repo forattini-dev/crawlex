@@ -177,6 +177,7 @@ pub async fn run() -> anyhow::Result<()> {
     match args.command {
         args::Command::Pages(v) => match v {
             args::PagesVerb::Run(a) => cmd_crawl(a).await?,
+            args::PagesVerb::List(a) => cmd_pages_list(a).await?,
         },
         args::Command::Crawl(v) => match v {
             args::CrawlVerb::Resume(a) => cmd_resume(a).await?,
@@ -1293,6 +1294,29 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
         handle.shutdown().await;
     }
     result
+}
+
+async fn cmd_pages_list(a: args::PagesListArgs) -> Result<()> {
+    use std::str::FromStr;
+    let filter = match a.status.as_deref() {
+        None | Some("") => None,
+        Some(s) => Some(crate::status::Status::from_str(s).map_err(|e| {
+            crate::Error::Config(format!(
+                "invalid --status `{s}`: {e}. Expected one of: queued, completed, \
+                 disallowed, skipped, errored, cancelled."
+            ))
+        })?),
+    };
+    let path = std::path::PathBuf::from(&a.storage_path);
+    let rows = tokio::task::spawn_blocking(move || {
+        crate::storage::sqlite::list_pages_with_status_blocking(&path, filter, a.limit)
+    })
+    .await
+    .map_err(|e| crate::Error::Storage(format!("pages list join: {e}")))??;
+    let json = serde_json::to_string(&rows)
+        .map_err(|e| crate::Error::Config(format!("serialize pages list: {e}")))?;
+    println!("{json}");
+    Ok(())
 }
 
 async fn cmd_resume(_r: args::ResumeArgs) -> Result<()> {

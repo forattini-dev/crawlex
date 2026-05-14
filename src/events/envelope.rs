@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const EVENT_ENVELOPE_VERSION: u32 = 1;
+/// Envelope wire version. Bumped to `2` (slice 1) when the canonical
+/// `status` field was added.
+pub const EVENT_ENVELOPE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -22,6 +24,13 @@ pub struct EventEnvelope {
     /// `decision.made`/`job.failed`; optional elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Canonical per-URL status (slice 1). Present on events that carry
+    /// a per-URL lifecycle transition — `job.started` → `queued`,
+    /// `job.failed` → `errored`/`cancelled`, `extract.completed` →
+    /// `completed`, etc. Optional everywhere; consumers that only read
+    /// the older `event`/`why` discriminators stay compatible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<crate::status::Status>,
     /// Event-specific payload. Free-form so new kinds can evolve without
     /// breaking consumers that only read a stable subset of fields.
     #[serde(default, skip_serializing_if = "Value::is_null")]
@@ -214,6 +223,7 @@ impl Event {
             session_id: None,
             url: None,
             why: None,
+            status: None,
             data: Value::Null,
         }
     }
@@ -246,6 +256,10 @@ impl EventEnvelope {
         self.why = Some(why.into());
         self
     }
+    pub fn with_status(mut self, status: crate::status::Status) -> Self {
+        self.status = Some(status);
+        self
+    }
     pub fn with_data<T: Serialize>(mut self, data: &T) -> Self {
         self.data = serde_json::to_value(data).unwrap_or(Value::Null);
         self
@@ -253,7 +267,7 @@ impl EventEnvelope {
 
     pub fn to_ndjson_line(&self) -> String {
         let mut s = serde_json::to_string(self)
-            .unwrap_or_else(|_| r#"{"v":1,"event":"serialize.failed"}"#.to_string());
+            .unwrap_or_else(|_| r#"{"v":2,"event":"serialize.failed"}"#.to_string());
         s.push('\n');
         s
     }

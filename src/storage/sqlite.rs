@@ -167,6 +167,10 @@ enum Op {
         success: i64,
         observed_at: i64,
     },
+    SetPageCrawlStatus {
+        url: String,
+        status: crate::status::Status,
+    },
     ArchiveSession {
         session_id: String,
         scope: String,
@@ -207,6 +211,61 @@ pub struct AssetRefRow {
     pub to_domain: String,
     pub kind: String,
     pub is_internal: bool,
+}
+
+/// Slice 1 — read-side projection of a `pages` row carrying the
+/// canonical per-URL status. `crawl_status` is `None` on legacy rows
+/// written before the column existed.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageStatusRow {
+    pub url: String,
+    pub final_url: String,
+    pub http_status: u16,
+    pub crawl_status: Option<String>,
+}
+
+/// Slice 1 — read-only listing of `pages` rows by canonical status,
+/// callable without spinning up the full `SqliteStorage` writer. Used
+/// by the `pages list` CLI verb and the SDK results endpoint.
+pub fn list_pages_with_status_blocking(
+    path: &Path,
+    filter: Option<crate::status::Status>,
+    limit: usize,
+) -> Result<Vec<PageStatusRow>> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| Error::Storage(format!("pages list open: {e}")))?;
+    let base = "SELECT url, final_url, status, crawl_status FROM pages".to_string();
+    let (sql, params): (String, Vec<rusqlite::types::Value>) = match filter {
+        Some(s) => (
+            format!("{base} WHERE crawl_status = ?1"),
+            vec![rusqlite::types::Value::Text(s.as_str().to_string())],
+        ),
+        None => (base, Vec::new()),
+    };
+    let sql = if limit > 0 {
+        format!("{sql} LIMIT {limit}")
+    } else {
+        sql
+    };
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| Error::Storage(format!("pages list prepare: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(PageStatusRow {
+                url: r.get::<_, String>(0)?,
+                final_url: r.get::<_, String>(1)?,
+                http_status: r.get::<_, i64>(2)?.clamp(0, u16::MAX as i64) as u16,
+                crawl_status: r.get::<_, Option<String>>(3)?,
+            })
+        })
+        .map_err(|e| Error::Storage(format!("pages list query: {e}")))?;
+    let mut out = Vec::new();
+    for r in rows.flatten() {
+        out.push(r);
+    }
+    Ok(out)
 }
 
 pub struct ProxyScoreRow {
@@ -776,9 +835,18 @@ impl SqliteStorage {
             "ALTER TABLE pages ADD COLUMN etag TEXT",
             "ALTER TABLE pages ADD COLUMN last_modified TEXT",
             "ALTER TABLE pages ADD COLUMN head_fingerprint TEXT",
+            // Slice 1: canonical per-URL status taxonomy. Legacy rows
+            // stay readable with NULL; new writes populate the column.
+            "ALTER TABLE pages ADD COLUMN crawl_status TEXT",
+            // Slice 1: per-job terminal label attached to crawl_stats.
+            "ALTER TABLE crawl_stats ADD COLUMN terminal_reason TEXT",
         ] {
             let _ = conn.execute(sql, []);
         }
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pages_crawl_status ON pages(crawl_status)",
+            [],
+        );
         Ok(conn)
     }
 
@@ -846,6 +914,71 @@ impl SqliteStorage {
             return Ok(());
         }
         self.send(Op::SaveHostAffinity { entries }).await
+    }
+
+    /// Slice 1 — read-only listing of `pages` rows with optional
+    /// canonical-status filtering. Returns `(url, final_url, http_status,
+    /// crawl_status)` tuples. `limit` caps row count (0 = unbounded).
+    pub async fn list_pages_with_status(
+        &self,
+        filter: Option<crate::status::Status>,
+        limit: usize,
+    ) -> Result<Vec<PageStatusRow>> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<PageStatusRow>> {
+            let conn = rusqlite::Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(|e| Error::Storage(format!("pages list open: {e}")))?;
+            let base =
+                "SELECT url, final_url, status, crawl_status FROM pages".to_string();
+            let (sql, params): (String, Vec<rusqlite::types::Value>) = match filter {
+                Some(s) => (
+                    format!("{base} WHERE crawl_status = ?1"),
+                    vec![rusqlite::types::Value::Text(s.as_str().to_string())],
+                ),
+                None => (base, Vec::new()),
+            };
+            let sql = if limit > 0 {
+                format!("{sql} LIMIT {limit}")
+            } else {
+                sql
+            };
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| Error::Storage(format!("pages list prepare: {e}")))?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+                    Ok(PageStatusRow {
+                        url: r.get::<_, String>(0)?,
+                        final_url: r.get::<_, String>(1)?,
+                        http_status: r.get::<_, i64>(2)?.clamp(0, u16::MAX as i64) as u16,
+                        crawl_status: r.get::<_, Option<String>>(3)?,
+                    })
+                })
+                .map_err(|e| Error::Storage(format!("pages list query: {e}")))?;
+            let mut out = Vec::new();
+            for r in rows.flatten() {
+                out.push(r);
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| Error::Storage(format!("pages list join: {e}")))?
+    }
+
+    /// Slice 1 — write the canonical per-URL status onto an existing
+    /// `pages` row. No-op if the row doesn't exist yet (so a `Queued`
+    /// write before the first fetch silently drops — callers that need
+    /// the seed-state row should insert it via the existing save_page
+    /// path first).
+    pub async fn set_page_crawl_status(
+        &self,
+        url: String,
+        status: crate::status::Status,
+    ) -> Result<()> {
+        self.send(Op::SetPageCrawlStatus { url, status }).await
     }
 
     /// Snapshot every persisted proxy score row. Runs on a read-only
@@ -1555,6 +1688,12 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     success,
                     observed_at,
                 ],
+            )?;
+        }
+        Op::SetPageCrawlStatus { url, status } => {
+            tx.execute(
+                "UPDATE pages SET crawl_status = ?1 WHERE url = ?2",
+                params![status.as_str(), url],
             )?;
         }
         Op::ArchiveSession {

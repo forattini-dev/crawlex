@@ -4,16 +4,26 @@
 
 `crawlex crawl --emit ndjson` writes one JSON envelope per line. Each envelope carries:
 
-- protocol version
+- protocol version (currently `2` — bumped from `1` in slice 1 when the canonical `status` field was added)
 - UTC timestamp
 - event kind
 - optional `run_id`
 - optional `session_id`
 - optional `url`
 - optional short `why`
+- optional canonical per-URL `status` (one of `queued`, `completed`, `disallowed`, `skipped`, `errored`, `cancelled`)
 - event-specific `data`
 
 Consumers should ignore unknown event kinds and treat the stream as forward-compatible.
+
+### Canonical status taxonomy (slice 1)
+
+The `status` field on the envelope and the `crawl_status` column on the SQLite `pages` table share one canonical, snake_case taxonomy:
+
+- per-URL: `queued`, `completed`, `disallowed`, `skipped`, `errored`, `cancelled`
+- per-job terminal (`crawl_stats.terminal_reason`): `completed`, `errored`, `cancelled_due_to_timeout`, `cancelled_due_to_limits`, `cancelled_by_user`
+
+Legacy rows (written before the column existed) carry `crawl_status = NULL` and stay readable. New writes populate the column. The SDK results endpoint (`crawlex pages list --status <value>`) filters on this column.
 
 ## Event kinds
 

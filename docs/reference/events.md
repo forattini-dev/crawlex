@@ -6,13 +6,14 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "ts": "2026-04-22T17:53:19Z",
   "event": "decision.made",
   "run_id": 14538211,
   "session_id": "sess-001",
   "url": "https://example.com/login",
   "why": "render:js-challenge",
+  "status": "queued",
   "data": {
     "policy_profile": "deep",
     "selected_method": "render"
@@ -24,13 +25,14 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Event envelope version |
+| `v` | Event envelope version (currently `2`; was `1` before slice 1 added `status`) |
 | `ts` | ISO-8601 UTC timestamp |
 | `event` | Stable event kind name |
 | `run_id` | Run-scoped identifier shared across the crawl |
 | `session_id` | Optional browser or logical session identifier |
 | `url` | Event-associated URL when available |
 | `why` | Short structured reason, mostly for decisions and failures |
+| `status` | Optional canonical per-URL status: `queued`, `completed`, `disallowed`, `skipped`, `errored`, `cancelled` |
 | `data` | Event-specific JSON payload |
 
 ## Event kinds
