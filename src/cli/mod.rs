@@ -251,6 +251,7 @@ pub async fn run() -> anyhow::Result<()> {
         },
         args::Command::UpdateBlocklist(a) => cmd_update_blocklist(a).await?,
         args::Command::FromCurl(a) => cmd_from_curl(a)?,
+        args::Command::Shell(a) => cmd_shell(a).await?,
     }
     Ok(())
 }
@@ -383,6 +384,17 @@ async fn fetch_blocklist_source(_url: &str) -> anyhow::Result<String> {
 /// Parse the supplied curl command line and emit the converted request
 /// to stdout in the requested shape. Unknown curl flags are echoed to
 /// stderr as warnings rather than failing the conversion.
+async fn cmd_shell(args: args::ShellArgs) -> anyhow::Result<()> {
+    let opts = crate::shell::ShellOptions {
+        stealth: args.stealth,
+        history_file: args.history_file.map(std::path::PathBuf::from),
+        adaptive_dir: std::path::PathBuf::from(args.adaptive_dir),
+        spider_id: args.spider_id,
+    };
+    crate::shell::run_interactive(opts).await?;
+    Ok(())
+}
+
 fn cmd_from_curl(args: args::FromCurlArgs) -> anyhow::Result<()> {
     use crate::from_curl::{parse, render, Format};
 
