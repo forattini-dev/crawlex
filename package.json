@@ -18,6 +18,7 @@
   },
   "files": [
     "sdk/crawlex-sdk.js",
+    "sdk/shell.js",
     "sdk/postinstall.js",
     "sdk/index.d.ts",
     "sdk/version.js"
