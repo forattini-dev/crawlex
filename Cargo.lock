@@ -525,6 +525,7 @@ dependencies = [
  "hickory-resolver",
  "http",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "indexmap 2.14.0",

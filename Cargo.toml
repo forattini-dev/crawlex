@@ -100,6 +100,7 @@ sha2 = "0.11"
 hex = "0.4"
 regex = "1"
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+httpdate = "1"
 
 # HTTP / TLS impersonation
 cookie = "0.18"

@@ -65,6 +65,46 @@ pub fn is_fresh_by_age(meta: &PageCacheMetadata, max_age_secs: Option<u64>) -> b
     now_unix().saturating_sub(meta.saved_at_unix) <= max_age_secs
 }
 
+/// Pre-network freshness decision driven by stored metadata only.
+///
+/// Honors `cache_max_age_secs` (skip if cache row is younger than N seconds)
+/// and `modified_since` (skip if stored `Last-Modified` is at-or-before the
+/// given Unix timestamp). Returns `Fresh` with a stable, machine-readable
+/// reason (`fresh-by-max-age` | `unmodified-since`) when the page can be
+/// skipped without touching the network; `Unknown` otherwise.
+pub fn evaluate_freshness(
+    meta: &PageCacheMetadata,
+    max_age_secs: Option<u64>,
+    modified_since: Option<u64>,
+) -> CacheValidationOutcome {
+    if let Some(max_age) = max_age_secs {
+        if now_unix().saturating_sub(meta.saved_at_unix) <= max_age {
+            return CacheValidationOutcome::fresh("fresh-by-max-age");
+        }
+    }
+    if let Some(threshold) = modified_since {
+        if let Some(lm) = meta.last_modified.as_deref() {
+            if let Some(lm_unix) = parse_http_date(lm) {
+                if lm_unix <= threshold {
+                    return CacheValidationOutcome::fresh("unmodified-since");
+                }
+            }
+        }
+    }
+    CacheValidationOutcome {
+        status: CacheValidationStatus::Unknown,
+        reason: "no-freshness-decision".to_string(),
+        new_etag: None,
+        new_last_modified: None,
+        new_head_fingerprint: None,
+    }
+}
+
+fn parse_http_date(s: &str) -> Option<u64> {
+    let t = httpdate::parse_http_date(s.trim()).ok()?;
+    t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
 pub fn validate_response(
     meta: &PageCacheMetadata,
     status: u16,
@@ -283,6 +323,121 @@ mod tests {
         let a = r#"<html><head><title>A</title><meta name="description" content="x"></head><body>one</body></html>"#;
         let b = r#"<html><head><meta name="description" content="x"><title>A</title></head><body>two</body></html>"#;
         assert_eq!(compute_head_fingerprint(a), compute_head_fingerprint(b));
+    }
+
+    fn meta(saved_at_unix: u64, last_modified: Option<&str>) -> PageCacheMetadata {
+        PageCacheMetadata {
+            url: url::Url::parse("https://example.com/").unwrap(),
+            final_url: url::Url::parse("https://example.com/").unwrap(),
+            status: 200,
+            etag: None,
+            last_modified: last_modified.map(str::to_string),
+            head_fingerprint: None,
+            saved_at_unix,
+        }
+    }
+
+    #[test]
+    fn evaluate_freshness_table() {
+        let now = now_unix();
+        // (label, saved_at, last_modified, max_age, modified_since, expected_status, expected_reason)
+        let cases: Vec<(
+            &str,
+            u64,
+            Option<&str>,
+            Option<u64>,
+            Option<u64>,
+            CacheValidationStatus,
+            &str,
+        )> = vec![
+            (
+                "no knobs set",
+                now,
+                None,
+                None,
+                None,
+                CacheValidationStatus::Unknown,
+                "no-freshness-decision",
+            ),
+            (
+                "fresh under max_age",
+                now.saturating_sub(10),
+                None,
+                Some(60),
+                None,
+                CacheValidationStatus::Fresh,
+                "fresh-by-max-age",
+            ),
+            (
+                "expired max_age",
+                now.saturating_sub(120),
+                None,
+                Some(60),
+                None,
+                CacheValidationStatus::Unknown,
+                "no-freshness-decision",
+            ),
+            (
+                "missing last-modified for modified_since",
+                now.saturating_sub(10),
+                None,
+                None,
+                Some(1_700_000_000),
+                CacheValidationStatus::Unknown,
+                "no-freshness-decision",
+            ),
+            (
+                "unmodified-since (stored older than threshold)",
+                now.saturating_sub(10),
+                Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                None,
+                Some(1_700_000_000),
+                CacheValidationStatus::Fresh,
+                "unmodified-since",
+            ),
+            (
+                "modified after threshold",
+                now.saturating_sub(10),
+                Some("Wed, 21 Oct 2099 07:28:00 GMT"),
+                None,
+                Some(1_700_000_000),
+                CacheValidationStatus::Unknown,
+                "no-freshness-decision",
+            ),
+            (
+                "both knobs: max_age wins on fresh row",
+                now.saturating_sub(10),
+                Some("Wed, 21 Oct 2099 07:28:00 GMT"),
+                Some(60),
+                Some(1_700_000_000),
+                CacheValidationStatus::Fresh,
+                "fresh-by-max-age",
+            ),
+            (
+                "both knobs: max_age expired, falls through to modified_since",
+                now.saturating_sub(3600),
+                Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                Some(60),
+                Some(1_700_000_000),
+                CacheValidationStatus::Fresh,
+                "unmodified-since",
+            ),
+            (
+                "unparseable last-modified",
+                now.saturating_sub(3600),
+                Some("not-a-date"),
+                None,
+                Some(1_700_000_000),
+                CacheValidationStatus::Unknown,
+                "no-freshness-decision",
+            ),
+        ];
+        for (label, saved_at, lm, max_age, modified_since, want_status, want_reason) in cases {
+            let m = meta(saved_at, lm);
+            let out = evaluate_freshness(&m, max_age, modified_since);
+            assert_eq!(out.status, want_status, "case `{label}` status");
+            assert_eq!(out.reason, want_reason, "case `{label}` reason");
+        }
     }
 
     #[test]

@@ -2008,6 +2008,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         cache_validation: CacheValidationConfig {
             enabled: c.cache_validate,
             max_age_secs: c.cache_max_age_secs,
+            modified_since: c.modified_since,
         },
         prefetch: c.prefetch,
         crawl_scoring: CrawlScoringConfig {
@@ -2080,6 +2081,9 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
     }
     if let Some(max_age) = c.cache_max_age_secs {
         config.cache_validation.max_age_secs = Some(max_age);
+    }
+    if let Some(ts) = c.modified_since {
+        config.cache_validation.modified_since = Some(ts);
     }
     if c.prefetch {
         config.prefetch = true;

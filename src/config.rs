@@ -276,6 +276,11 @@ pub struct CacheValidationConfig {
     /// validation probe. Leave unset to always compare validators/fingerprint.
     #[serde(default)]
     pub max_age_secs: Option<u64>,
+    /// Unix-timestamp threshold: a stored `Last-Modified` at-or-before this
+    /// value is treated as fresh and the page is skipped without a network
+    /// probe. Leave unset to disable.
+    #[serde(default)]
+    pub modified_since: Option<u64>,
 }
 
 impl Default for CacheValidationConfig {
@@ -283,6 +288,7 @@ impl Default for CacheValidationConfig {
         Self {
             enabled: false,
             max_age_secs: None,
+            modified_since: None,
         }
     }
 }
