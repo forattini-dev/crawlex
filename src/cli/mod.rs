@@ -252,6 +252,7 @@ pub async fn run() -> anyhow::Result<()> {
         args::Command::UpdateBlocklist(a) => cmd_update_blocklist(a).await?,
         args::Command::FromCurl(a) => cmd_from_curl(a)?,
         args::Command::Shell(a) => cmd_shell(a).await?,
+        args::Command::Mcp(a) => cmd_mcp(a).await?,
     }
     Ok(())
 }
@@ -392,6 +393,12 @@ async fn cmd_shell(args: args::ShellArgs) -> anyhow::Result<()> {
         spider_id: args.spider_id,
     };
     crate::shell::run_interactive(opts).await?;
+    Ok(())
+}
+
+async fn cmd_mcp(args: args::McpArgs) -> anyhow::Result<()> {
+    let opts = crate::mcp::McpOptions { name: args.name };
+    crate::mcp::run_stdio(opts).await?;
     Ok(())
 }
 

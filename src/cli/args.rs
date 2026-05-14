@@ -75,6 +75,19 @@ pub enum Command {
     /// drive the session. State persists across commands within the
     /// session; readline history persists across sessions. Slice 22.
     Shell(ShellArgs),
+    /// JSON-RPC 2.0 MCP server over stdio. Exposes tools for HTTP fetch
+    /// (`get`, `bulk_get`), dynamic/stealth fetch (`fetch`, `stealth_fetch`),
+    /// session lifecycle (`open_session`, `close_session`, `list_sessions`)
+    /// and DOM extraction (`css_query`, `xpath_query`). Slice 24.
+    Mcp(McpArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct McpArgs {
+    /// Greeting/handshake server name advertised in the MCP `initialize`
+    /// response. Default `crawlex`.
+    #[arg(long, default_value = "crawlex")]
+    pub name: String,
 }
 
 #[derive(Args, Debug, Clone)]
