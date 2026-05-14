@@ -20,3 +20,25 @@ A record-on-first-hit, replay-on-subsequent cache for spider development. Two ba
 ## Blocked by
 
 - Slice 17 (replay sits in the request path of the spider runtime)
+
+## Status (2026-05-14)
+
+Implemented:
+- `src/scraping/replay.rs` — `Replay` trait, `DirReplay`, `ReddbReplay`,
+  `ReplayingFetcher`. SHA-256(method, url, body) cache key. Atomic
+  writes for both backends. Per-spider isolation in reddb backend by
+  filename (`<spider>.replay.json`).
+- `src/scraping/mod.rs` — re-exports.
+- `src/cli/args.rs` — new `Spider` resource + `Run` verb with
+  `--replay-dir` / `--replay-db` / `--replay-data-dir` flags (mutually
+  exclusive via clap).
+- `src/cli/mod.rs` — dispatch (`cmd_spider_run`) instantiates the
+  requested backend so a misconfigured cache fails loudly at startup.
+- Unit + integration tests in `replay.rs`: cache-key determinism,
+  dir/reddb round-trip, reopen-persists, spider-isolation, and the
+  required "first run records, second run replays without hitting the
+  inner fetcher" test using an `ExplodingFetcher` on the second run.
+
+Not run locally: `cargo check` / `cargo test` (sandbox denied cargo +
+git invocations during this iteration). Changes are uncommitted on
+`ralph/slice-19`; next iteration must run feedback loops and commit.
