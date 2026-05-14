@@ -1924,6 +1924,27 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
             .as_deref()
             .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
             .unwrap_or_default(),
+        crawl_purposes: {
+            use std::str::FromStr;
+            if c.crawl_purpose.is_empty() {
+                crate::robots::Purpose::all().to_vec()
+            } else {
+                let mut out = Vec::new();
+                for raw in &c.crawl_purpose {
+                    for piece in raw.split(',') {
+                        let piece = piece.trim();
+                        if piece.is_empty() {
+                            continue;
+                        }
+                        out.push(
+                            crate::robots::Purpose::from_str(piece)
+                                .map_err(|e| crate::Error::Config(format!("--crawl-purpose: {e}")))?,
+                        );
+                    }
+                }
+                out
+            }
+        },
         reject_resource_types: {
             use std::str::FromStr;
             let mut out = Vec::with_capacity(c.reject_resource_type.len());

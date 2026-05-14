@@ -961,6 +961,8 @@ impl Crawler {
                     "policy_profile": self.policy_profile,
                     "max_concurrent_http": self.config.max_concurrent_http,
                     "max_concurrent_render": self.config.max_concurrent_render,
+                    "crawl_purposes": self.config.crawl_purposes
+                        .iter().map(|p| p.as_str()).collect::<Vec<_>>(),
                 })),
         );
         let _run_guard = RunCompletedGuard {
@@ -1614,6 +1616,43 @@ impl Crawler {
         if self.config.respect_robots_txt {
             if let Err(e) = self.ensure_robots(&job.url).await {
                 debug!(?e, "robots fetch failed; allowing by default");
+            }
+            // Content-Signal (Cloudflare extension) — abort the per-host
+            // crawl when every declared purpose is denied. Runs *before*
+            // the texting_robots Allow/Disallow gate so a fully-denied
+            // host bails out with a structured error, not a quiet skip.
+            if !self.config.crawl_purposes.is_empty() {
+                if let Some(host) = job.url.host_str() {
+                    if let Some(sig) = self.robots.content_signal(host) {
+                        if sig.fully_denies(&self.config.crawl_purposes) {
+                            let declared: Vec<String> = self
+                                .config
+                                .crawl_purposes
+                                .iter()
+                                .map(|p| p.as_str().to_string())
+                                .collect();
+                            info!(url=%job.url, ?declared, "content-signal fully denies; aborting host");
+                            self.events.emit(
+                                &Event::of(EventKind::DecisionMade)
+                                    .with_run(self.run_id)
+                                    .with_url(job.url.as_str())
+                                    .with_why("content-signal:fully-denied".to_string())
+                                    .with_data(&serde_json::json!({
+                                        "decision": "drop",
+                                        "reason": {
+                                            "code": "content-signal:fully-denied",
+                                            "detail": "content_signal",
+                                            "declared": declared,
+                                        },
+                                    })),
+                            );
+                            return Err(crate::Error::ContentSignalDenied {
+                                host: host.to_string(),
+                                declared,
+                            });
+                        }
+                    }
+                }
             }
             let ua = self.client.identity_bundle().ua.as_str();
             if let Some(false) = self.robots.check(&job.url, ua) {

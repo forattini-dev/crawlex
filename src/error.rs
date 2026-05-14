@@ -137,6 +137,9 @@ pub enum Error {
     #[error("robots disallow: {0}")]
     RobotsDisallow(String),
 
+    #[error("content-signal denies all declared purposes for host {host}: declared={declared:?}")]
+    ContentSignalDenied { host: String, declared: Vec<String> },
+
     #[error("hook abort: {0}")]
     HookAbort(String),
 
@@ -177,6 +180,7 @@ impl Error {
             Self::ProxySelection(_) => "proxy-selection",
             Self::Config(_) => "config",
             Self::RobotsDisallow(_) => "robots-disallow",
+            Self::ContentSignalDenied { .. } => "content-signal-denied",
             Self::HookAbort(_) => "hook-abort",
             Self::Hook(_) => "hook",
             Self::JobDeferred(_) => "job-deferred",
