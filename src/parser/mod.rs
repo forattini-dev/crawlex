@@ -9,6 +9,10 @@
 // Charset detection priority: explicit `charset` arg → `<meta charset>` /
 // `Content-Type` byte sniff → BOM → UTF-8 fallback with replacement chars.
 
+pub mod selectors;
+
+pub use selectors::ElementHandle;
+
 use encoding_rs::{Encoding, UTF_8};
 
 #[derive(Debug, thiserror::Error)]
