@@ -16,10 +16,12 @@
 //! locked down here is: "same backend kind, different session id =>
 //! cookies do not leak."
 
+pub mod replay;
 pub mod request;
 pub mod session;
 pub mod spider;
 
+pub use replay::{DirReplay, RecordedResponse, ReddbReplay, Replay, ReplayingFetcher};
 pub use request::Request;
 pub use session::{BackendKind, CookieJar, SessionEntry, SessionManager};
 pub use spider::{

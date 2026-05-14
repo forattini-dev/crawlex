@@ -55,6 +55,41 @@ pub enum Command {
     Telemetry(TelemetryVerb),
     #[command(subcommand)]
     Stealth(StealthVerb),
+    /// v2 scraping framework — `Spider` runtime entry point. Slice 19
+    /// wires the `--replay-dir` / `--replay-db` cache flags. The
+    /// `spider run` command is a thin stub until the engine bindings
+    /// land (slice 25); flag parsing is the contract under test.
+    #[command(subcommand)]
+    Spider(SpiderVerb),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SpiderVerb {
+    /// Run a spider end-to-end. Optional replay flags short-circuit the
+    /// network for development iteration — first run records, subsequent
+    /// runs replay from cache.
+    Run(SpiderRunArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SpiderRunArgs {
+    /// Recipe identifier — looked up in the registry built by
+    /// `defineSpider` / the Rust trait `Spider`. Slice 19 only parses
+    /// the value; resolution lands in slice 25.
+    pub spider: String,
+    /// Record-on-first-hit, replay-on-subsequent cache rooted at this
+    /// directory. Mutually exclusive with `--replay-db`.
+    #[arg(long, conflicts_with = "replay_db")]
+    pub replay_dir: Option<String>,
+    /// Use the reddb-style per-spider store under `--replay-data-dir`
+    /// (default `./.crawlex`) as the replay cache. Mutually exclusive
+    /// with `--replay-dir`.
+    #[arg(long, default_value_t = false)]
+    pub replay_db: bool,
+    /// Directory holding the reddb-style per-spider replay file. Only
+    /// consulted when `--replay-db` is set.
+    #[arg(long, default_value = "./.crawlex")]
+    pub replay_data_dir: String,
 }
 
 #[derive(Subcommand, Debug)]

@@ -246,7 +246,44 @@ pub async fn run() -> anyhow::Result<()> {
                 args::CatalogVerb::Show(a) => cmd_catalog_show(a)?,
             },
         },
+        args::Command::Spider(v) => match v {
+            args::SpiderVerb::Run(a) => cmd_spider_run(a)?,
+        },
     }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// `crawlex spider run`
+// ─────────────────────────────────────────────────────────────────────
+
+/// Slice 19: parse and validate the replay flags; instantiate the
+/// requested backend so a misconfigured cache fails loudly at startup
+/// instead of silently on first request. The actual spider dispatcher
+/// lands in slice 25; until then this command is a wiring check.
+fn cmd_spider_run(args: args::SpiderRunArgs) -> anyhow::Result<()> {
+    use crate::scraping::replay::{DirReplay, ReddbReplay, Replay};
+    use std::sync::Arc;
+
+    let _replay: Option<Arc<dyn Replay>> = match (&args.replay_dir, args.replay_db) {
+        (Some(p), false) => Some(Arc::new(DirReplay::open(p)?)),
+        (None, true) => Some(Arc::new(ReddbReplay::open(
+            &args.replay_data_dir,
+            &args.spider,
+        )?)),
+        (None, false) => None,
+        (Some(_), true) => {
+            // clap's `conflicts_with` should have caught this already,
+            // but keep a defensive guard for programmatic callers.
+            return Err(anyhow::anyhow!(
+                "--replay-dir and --replay-db are mutually exclusive"
+            ));
+        }
+    };
+    eprintln!(
+        "spider run: spider={} replay_dir={:?} replay_db={} (engine binding lands in slice 25)",
+        args.spider, args.replay_dir, args.replay_db
+    );
     Ok(())
 }
 
