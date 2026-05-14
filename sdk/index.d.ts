@@ -697,3 +697,29 @@ export interface ElementHandle {
    */
   findSimilar(opts?: { threshold?: number }): ElementHandle[];
 }
+
+/** Engine backend a session is bound to. */
+export type BackendKind = 'http' | 'render' | 'stealth';
+
+/** Options accepted by the [`Request`] constructor. */
+export interface RequestOptions {
+  /** HTTP method. Defaults to `GET`. */
+  method?: string;
+  /**
+   * Optional session id. When supplied, the request runs against the
+   * backend + cookie jar registered for that id via `SessionManager`.
+   * Unknown ids log a warning and fall back to the default backend.
+   */
+  sessionId?: string;
+}
+
+/**
+ * Recipe-facing request descriptor. Slice 16 plumbs `sessionId` so a
+ * recipe can pin successive fetches to an isolated engine state.
+ */
+export declare class Request {
+  constructor(url: string, opts?: RequestOptions);
+  readonly url: string;
+  readonly method: string;
+  readonly sessionId?: string;
+}

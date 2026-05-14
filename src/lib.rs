@@ -63,6 +63,7 @@ pub mod queue;
 pub mod render;
 pub mod robots;
 pub mod scheduler;
+pub mod scraping;
 pub mod script;
 pub mod status;
 pub mod storage;
