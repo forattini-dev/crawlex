@@ -34,10 +34,39 @@ export type EventKind =
   | 'vendor.telemetry_observed'
   | 'tech.fingerprint_detected';
 
+/**
+ * Canonical per-URL lifecycle status (slice 1). Mirrors
+ * `crawlex::Status` on the Rust side. Written to the SQLite
+ * `pages.crawl_status` column and shipped on `BaseEnvelope.status`.
+ */
+export type UrlStatus =
+  | 'queued'
+  | 'completed'
+  | 'disallowed'
+  | 'skipped'
+  | 'errored'
+  | 'cancelled';
+
+/**
+ * Canonical per-job terminal label (slice 1). Mirrors
+ * `crawlex::TerminalReason`. Written to the SQLite
+ * `crawl_stats.terminal_reason` column.
+ */
+export type TerminalReason =
+  | 'completed'
+  | 'errored'
+  | 'cancelled_due_to_timeout'
+  | 'cancelled_due_to_limits'
+  | 'cancelled_by_user';
+
 /** Outer envelope — every NDJSON line decodes into this shape. */
 export interface BaseEnvelope<E extends EventKind = EventKind, D = unknown> {
-  /** Wire schema version. Currently `1`. */
-  v: 1;
+  /**
+   * Wire schema version. Currently `2` — bumped from `1` in slice 1
+   * when the canonical `status` field was added. Older consumers that
+   * only read `event`/`why`/`data` stay compatible.
+   */
+  v: 2;
   /** ISO-8601 UTC timestamp with millisecond precision. */
   ts: string;
   /** Discriminator. */
@@ -54,8 +83,32 @@ export interface BaseEnvelope<E extends EventKind = EventKind, D = unknown> {
    * `decision.made` / `job.failed`; optional elsewhere.
    */
   why?: string;
+  /**
+   * Canonical per-URL status (slice 1). Present on events that carry a
+   * per-URL lifecycle transition; optional everywhere else.
+   */
+  status?: UrlStatus;
   /** Event-specific payload. Shape varies per `event`. */
   data: D;
+}
+
+// ─── pages list (SDK results endpoint) ─────────────────────────────────
+
+/**
+ * Row returned by `crawlex pages list --json` (slice 1). The SDK
+ * results endpoint — call via [`runJson`] with `['pages', 'list',
+ * '--storage-path', path, '--status', 'completed']` to pull persisted
+ * rows filtered by canonical status.
+ *
+ * `crawl_status` is `null` on legacy rows written before the column
+ * existed; new writes populate it.
+ */
+export interface PageStatusRow {
+  url: string;
+  final_url: string;
+  /** Upstream HTTP status code (or `0` if the fetch never produced one). */
+  http_status: number;
+  crawl_status: UrlStatus | null;
 }
 
 // ─── Typed payloads ────────────────────────────────────────────────────
