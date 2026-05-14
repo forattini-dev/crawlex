@@ -268,6 +268,121 @@ pub fn list_pages_with_status_blocking(
     Ok(out)
 }
 
+/// Slice 8 — paged read response for the SDK results endpoint.
+/// `next_cursor` is `None` when the last batch was returned (no more
+/// rows match the filter).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageList {
+    pub rows: Vec<PageStatusRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Slice 8 — paged read of `pages` rows by canonical status using an
+/// opaque cursor. Ordering is by SQLite `rowid` ascending (stable,
+/// monotone-on-insert, survives restarts). The cursor wraps the last
+/// rowid the caller saw plus the status filter it was minted under;
+/// callers cannot mix filters mid-iteration.
+///
+/// `limit == 0` is treated as "single unbounded batch" — caller gets
+/// every matching row and `next_cursor = None`.
+pub fn list_pages_with_status_paged_blocking(
+    path: &Path,
+    filter: Option<crate::status::Status>,
+    limit: usize,
+    cursor: Option<&str>,
+) -> Result<PageList> {
+    use crate::storage::cursor::PageCursor;
+
+    let decoded = match cursor {
+        Some(tok) if !tok.is_empty() => Some(PageCursor::decode(tok)?),
+        _ => None,
+    };
+    let after_rowid: i64 = decoded.as_ref().map(|c| c.after_rowid).unwrap_or(0);
+    // A cursor minted under one status filter must not be replayed
+    // under a different one — the rowid ordering is the same but the
+    // caller's mental model would silently drop or duplicate rows.
+    if let Some(c) = decoded.as_ref() {
+        let want = filter.map(|s| s.as_str().to_string());
+        if c.status != want {
+            return Err(Error::Config(format!(
+                "cursor minted with status={:?} replayed under status={:?}",
+                c.status, want
+            )));
+        }
+    }
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| Error::Storage(format!("pages list open: {e}")))?;
+    let mut sql = String::from(
+        "SELECT rowid, url, final_url, status, crawl_status FROM pages WHERE rowid > ?1",
+    );
+    let mut params: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::Integer(after_rowid)];
+    if let Some(s) = filter {
+        sql.push_str(" AND crawl_status = ?2");
+        params.push(rusqlite::types::Value::Text(s.as_str().to_string()));
+    }
+    sql.push_str(" ORDER BY rowid ASC");
+    // Fetch `limit + 1` to detect whether more rows exist without a
+    // separate COUNT round-trip.
+    let fetch_limit = if limit == 0 { 0 } else { limit + 1 };
+    if fetch_limit > 0 {
+        sql.push_str(&format!(" LIMIT {fetch_limit}"));
+    }
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| Error::Storage(format!("pages list prepare: {e}")))?;
+    let mut rows_iter = stmt
+        .query(rusqlite::params_from_iter(params.iter()))
+        .map_err(|e| Error::Storage(format!("pages list query: {e}")))?;
+
+    let mut out = Vec::new();
+    let mut last_rowid: i64 = after_rowid;
+    let mut overflow = false;
+    while let Some(r) = rows_iter
+        .next()
+        .map_err(|e| Error::Storage(format!("pages list next: {e}")))?
+    {
+        if limit > 0 && out.len() == limit {
+            overflow = true;
+            break;
+        }
+        let rowid: i64 = r.get(0).map_err(|e| Error::Storage(format!("rowid: {e}")))?;
+        let url: String = r.get(1).map_err(|e| Error::Storage(format!("url: {e}")))?;
+        let final_url: String = r
+            .get(2)
+            .map_err(|e| Error::Storage(format!("final_url: {e}")))?;
+        let http_status: i64 = r
+            .get(3)
+            .map_err(|e| Error::Storage(format!("status: {e}")))?;
+        let crawl_status: Option<String> = r
+            .get(4)
+            .map_err(|e| Error::Storage(format!("crawl_status: {e}")))?;
+        out.push(PageStatusRow {
+            url,
+            final_url,
+            http_status: http_status.clamp(0, u16::MAX as i64) as u16,
+            crawl_status,
+        });
+        last_rowid = rowid;
+    }
+
+    let next_cursor = if overflow {
+        Some(
+            PageCursor::new(last_rowid, filter.map(|s| s.as_str().to_string()))
+                .encode(),
+        )
+    } else {
+        None
+    };
+
+    Ok(PageList {
+        rows: out,
+        next_cursor,
+    })
+}
+
 pub struct ProxyScoreRow {
     pub url: String,
     pub success: i64,
