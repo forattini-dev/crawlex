@@ -693,6 +693,24 @@ pub struct CrawlArgs {
     #[arg(long)]
     pub max_pages_per_context: Option<usize>,
 
+    /// Slice 7 — overall wall-clock budget for this crawl, in seconds.
+    /// When the watchdog fires the run is cancelled with terminal
+    /// reason `cancelled_due_to_timeout`. Default unset = no watchdog.
+    #[arg(long)]
+    pub job_max_runtime_secs: Option<u64>,
+
+    /// Slice 7 — TTL (seconds) applied to written pages + the run's
+    /// `crawl_stats` row. Rows past the deadline are GC'd by the
+    /// reaper. Default unset = no retention/reaper.
+    #[arg(long)]
+    pub result_retention_secs: Option<u64>,
+
+    /// Slice 7 — hard cap on successfully crawled pages per run.
+    /// Hitting the cap terminates the run with reason
+    /// `cancelled_due_to_limits`. Default unset = unbounded.
+    #[arg(long)]
+    pub max_pages: Option<u64>,
+
     /// Max concurrent render jobs targeting a single host.
     #[arg(long)]
     pub max_per_host_inflight: Option<usize>,

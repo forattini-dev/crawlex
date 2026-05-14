@@ -268,6 +268,91 @@ pub fn list_pages_with_status_blocking(
     Ok(out)
 }
 
+/// Slice 7 — counters returned by [`reap_expired_blocking`] so callers
+/// can log / surface what the GC sweep removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReapStats {
+    pub pages_deleted: usize,
+    pub crawl_stats_deleted: usize,
+}
+
+/// Slice 7 — write the per-job terminal label + (optional) result TTL.
+///
+/// `crawl_id` is the SQLite primary key on `crawl_stats` (the run's
+/// `CrawlStats::crawl_id`); a parallel UPDATE stamps the TTL on every
+/// `pages` row carrying that `url` so a single sweep can GC both
+/// sides. When `retention_secs` is `None` we only touch
+/// `terminal_reason` — runs without retention should still be labelled
+/// so operators see why the run ended.
+///
+/// `now_unix` is the current epoch seconds; callers pass
+/// `crate::crawl_stats::now_unix()` in production. Tests inject a
+/// frozen value so assertions are stable.
+pub fn record_job_terminal_blocking(
+    path: &Path,
+    crawl_id: i64,
+    reason: crate::status::TerminalReason,
+    retention_secs: Option<u64>,
+    now_unix: i64,
+) -> Result<()> {
+    let conn = rusqlite::Connection::open(path)
+        .map_err(|e| Error::Storage(format!("record terminal: open: {e}")))?;
+    let expires_at: Option<i64> = retention_secs.map(|n| now_unix + n as i64);
+    let url: Option<String> = conn
+        .query_row(
+            "SELECT url FROM crawl_stats WHERE crawl_id = ?1",
+            params![crawl_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| Error::Storage(format!("record terminal: lookup url: {e}")))?;
+    conn.execute(
+        "UPDATE crawl_stats
+            SET terminal_reason = ?1,
+                result_expires_at = COALESCE(?2, result_expires_at)
+          WHERE crawl_id = ?3",
+        params![reason.as_str(), expires_at, crawl_id],
+    )
+    .map_err(|e| Error::Storage(format!("record terminal: update stats: {e}")))?;
+    if let (Some(url), Some(exp)) = (url, expires_at) {
+        conn.execute(
+            "UPDATE pages SET result_expires_at = ?1 WHERE url = ?2",
+            params![exp, url],
+        )
+        .map_err(|e| Error::Storage(format!("record terminal: update pages: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Slice 7 — delete `pages` and `crawl_stats` rows whose
+/// `result_expires_at` is past `now_unix`. Rows with NULL TTL are
+/// left alone — that's the "no retention configured" path. Returns
+/// per-table counters so the caller can log the sweep result.
+pub fn reap_expired_blocking(path: &Path, now_unix: i64) -> Result<ReapStats> {
+    let conn = rusqlite::Connection::open(path)
+        .map_err(|e| Error::Storage(format!("reaper: open: {e}")))?;
+    let pages_deleted = conn
+        .execute(
+            "DELETE FROM pages
+              WHERE result_expires_at IS NOT NULL
+                AND result_expires_at <= ?1",
+            params![now_unix],
+        )
+        .map_err(|e| Error::Storage(format!("reaper: pages: {e}")))?;
+    let crawl_stats_deleted = conn
+        .execute(
+            "DELETE FROM crawl_stats
+              WHERE result_expires_at IS NOT NULL
+                AND result_expires_at <= ?1",
+            params![now_unix],
+        )
+        .map_err(|e| Error::Storage(format!("reaper: crawl_stats: {e}")))?;
+    Ok(ReapStats {
+        pages_deleted,
+        crawl_stats_deleted,
+    })
+}
+
 pub struct ProxyScoreRow {
     pub url: String,
     pub success: i64,
@@ -840,11 +925,27 @@ impl SqliteStorage {
             "ALTER TABLE pages ADD COLUMN crawl_status TEXT",
             // Slice 1: per-job terminal label attached to crawl_stats.
             "ALTER TABLE crawl_stats ADD COLUMN terminal_reason TEXT",
+            // Slice 7: TTL on per-URL artifacts. NULL = no retention,
+            // matching the legacy "rows live forever" behaviour.
+            "ALTER TABLE pages ADD COLUMN result_expires_at INTEGER",
+            // Slice 7: same TTL applied to the per-job summary row so
+            // the reaper can drop the crawl-level metadata in lockstep.
+            "ALTER TABLE crawl_stats ADD COLUMN result_expires_at INTEGER",
         ] {
             let _ = conn.execute(sql, []);
         }
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pages_crawl_status ON pages(crawl_status)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pages_result_expires_at \
+             ON pages(result_expires_at)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crawl_stats_result_expires_at \
+             ON crawl_stats(result_expires_at)",
             [],
         );
         Ok(conn)

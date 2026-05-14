@@ -2127,6 +2127,9 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
             remove_consent_popups: c.remove_consent_popups,
         },
         render_mode: parse_render_mode(c.render_mode.as_deref())?,
+        job_max_runtime_secs: c.job_max_runtime_secs,
+        result_retention_secs: c.result_retention_secs,
+        max_pages: c.max_pages,
     })
 }
 
@@ -2199,6 +2202,15 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
     }
     if c.render_mode.is_some() {
         config.render_mode = parse_render_mode(c.render_mode.as_deref())?;
+    }
+    if c.job_max_runtime_secs.is_some() {
+        config.job_max_runtime_secs = c.job_max_runtime_secs;
+    }
+    if c.result_retention_secs.is_some() {
+        config.result_retention_secs = c.result_retention_secs;
+    }
+    if c.max_pages.is_some() {
+        config.max_pages = c.max_pages;
     }
     Ok(())
 }
