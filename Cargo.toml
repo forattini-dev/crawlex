@@ -124,6 +124,7 @@ hickory-resolver = "0.26"
 # HTML parsing & link extraction
 # (`html5ever` is pulled transitively by `scraper`; no direct dep needed.)
 scraper = "0.26"
+ego-tree = "0.11"
 lol_html = "2"
 kuchikiki = "0.8"
 psl = "2"

@@ -514,6 +514,7 @@ dependencies = [
  "dashmap",
  "directories",
  "dunce",
+ "ego-tree",
  "encoding_rs",
  "flate2",
  "fnv",
