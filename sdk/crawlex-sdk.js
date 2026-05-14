@@ -577,6 +577,26 @@ async function* paginatePages(opts) {
   }
 }
 
+// --- v2 scraping framework: Request (slice 16) ------------------------
+// Pure JS placeholder. Runtime dispatch against the Rust SessionManager
+// lands once the engine bindings ship; the class exists today so recipes
+// can already author against the documented shape.
+class Request {
+  constructor(url, opts = {}) {
+    if (typeof url !== 'string' || url.length === 0) {
+      throw new TypeError('Request: url must be a non-empty string');
+    }
+    this.url = url;
+    this.method = typeof opts.method === 'string' ? opts.method : 'GET';
+    if (opts.sessionId !== undefined) {
+      if (typeof opts.sessionId !== 'string' || opts.sessionId.length === 0) {
+        throw new TypeError('Request: sessionId must be a non-empty string');
+      }
+      this.sessionId = opts.sessionId;
+    }
+  }
+}
+
 module.exports = {
   crawl,
   crawlAll,
@@ -588,6 +608,7 @@ module.exports = {
   serializeArgs,
   defineHooks,
   HOOK_EVENTS,
+  Request,
   version: SDK_VERSION,
 };
 
