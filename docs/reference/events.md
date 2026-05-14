@@ -59,9 +59,9 @@ Every event emitted by `--emit ndjson` uses the same outer shape:
 
 ## High-signal payloads
 
-`fetch.completed` includes final URL, status, byte count, truncation flag and optional DNS/TCP/TLS/TTFB/download timings.
+`fetch.completed` includes final URL, status, byte count, truncation flag and optional DNS/TCP/TLS/TTFB/download timings. The `path` field is `"impersonate"` for the in-process HTTP spoof client and `"fallback"` for the external `fallback_fetch` command.
 
-`render.completed` includes final URL, status, SPA/PWA flags and a compact Web Vitals summary when collection is enabled.
+`render.completed` includes final URL, status, SPA/PWA flags and a compact Web Vitals summary when collection is enabled. The `path` field is the literal `"render"` so a stream consumer can disambiguate against `fetch.completed.data.path` without inspecting the envelope's `event` field.
 
 `artifact.saved` includes kind, MIME, size, sha256 and a backend path/handle when available.
 

@@ -70,7 +70,7 @@ pub mod wait_strategy;
 #[cfg(feature = "cli")]
 pub mod cli;
 
-pub use config::{Config, ConfigBuilder};
+pub use config::{Config, ConfigBuilder, RenderMode};
 pub use crawler::Crawler;
 pub use error::{Error, Result};
 pub use hooks::{HookDecision, HookEvent};

@@ -273,6 +273,16 @@ pub struct CrawlArgs {
     #[arg(long, default_value = "spoof")]
     pub method: String,
 
+    /// Operator-level render-path switch:
+    /// `auto` (default) keeps today's behaviour — impersonate first,
+    /// escalate to render via the policy engine when needed.
+    /// `always` skips impersonation and forces every seeded job onto
+    /// the render path. `never` pins every job to the impersonate path
+    /// and refuses any render escalation, so the render pool is never
+    /// instantiated. Wins over `--method` when both are set.
+    #[arg(long = "render-mode")]
+    pub render_mode: Option<String>,
+
     #[arg(long)]
     pub max_concurrent_render: Option<usize>,
     #[arg(long)]

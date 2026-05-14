@@ -1194,6 +1194,22 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
         if c.method != "spoof" && c.max_concurrent_render.is_none() {
             config.max_concurrent_render = 1;
         }
+        // `render_mode` is the operator-level switch and wins over both
+        // `--method` and any pool sizing that crept in through the
+        // config file. `Always` needs at least one Chrome to talk to;
+        // `Never` slams the pool to zero so nothing in the policy
+        // engine can wake it up later.
+        match config.render_mode {
+            crate::config::RenderMode::Always => {
+                if config.max_concurrent_render == 0 {
+                    config.max_concurrent_render = 1;
+                }
+            }
+            crate::config::RenderMode::Never => {
+                config.max_concurrent_render = 0;
+            }
+            crate::config::RenderMode::Auto => {}
+        }
         // Install the motion engine preset into the process-wide ambient
         // slot read by `interact::*`. Doing it here rather than in the
         // render pool ctor keeps the hook in front of every render path
@@ -1255,6 +1271,12 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
             "render" => crate::queue::FetchMethod::Render,
             "auto" => crate::queue::FetchMethod::Auto,
             _ => crate::queue::FetchMethod::HttpSpoof,
+        };
+        // Operator-level `--render-mode` wins over the per-job `--method`.
+        let method = match config.render_mode {
+            crate::config::RenderMode::Always => crate::queue::FetchMethod::Render,
+            crate::config::RenderMode::Never => crate::queue::FetchMethod::HttpSpoof,
+            crate::config::RenderMode::Auto => method,
         };
         #[cfg(feature = "lua-hooks")]
         {
@@ -2037,7 +2059,22 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
             remove_overlays: c.remove_overlays,
             remove_consent_popups: c.remove_consent_popups,
         },
+        render_mode: parse_render_mode(c.render_mode.as_deref())?,
     })
+}
+
+fn parse_render_mode(raw: Option<&str>) -> Result<crate::config::RenderMode> {
+    match raw {
+        None => Ok(crate::config::RenderMode::default()),
+        Some(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(crate::config::RenderMode::Auto),
+            "always" => Ok(crate::config::RenderMode::Always),
+            "never" => Ok(crate::config::RenderMode::Never),
+            other => Err(crate::Error::Config(format!(
+                "--render-mode: expected one of auto|always|never, got `{other}`"
+            ))),
+        },
+    }
 }
 
 fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result<()> {
@@ -2089,6 +2126,9 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
     }
     if !c.score_keyword.is_empty() {
         config.crawl_scoring.keywords = c.score_keyword.clone();
+    }
+    if c.render_mode.is_some() {
+        config.render_mode = parse_render_mode(c.render_mode.as_deref())?;
     }
     Ok(())
 }
