@@ -51,6 +51,7 @@ pub mod impersonate;
 pub mod intel;
 pub mod metrics;
 pub mod metrics_server;
+pub mod parser;
 pub mod policy;
 pub mod proxy;
 pub mod queue;
