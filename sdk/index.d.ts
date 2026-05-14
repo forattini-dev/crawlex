@@ -653,3 +653,39 @@ export function assetBaseName(): string;
 
 /** npm package version (matches the native binary version). */
 export const version: string;
+
+// ─── Selector engine (slices 9 & 11) ──────────────────────────────────
+//
+// Forward-declared types for the parser/selector surface. The runtime
+// binding lands in a future SDK release (same deferral pattern as the
+// streaming `paginate` helper above). Until then the type names are
+// exported so application code can be written against the planned API.
+
+/** CSS / XPath flavour for [`ElementHandle.generateSelector`]. */
+export type SelectorKind = 'css' | 'xpath';
+
+/**
+ * Handle to an element inside a parsed tree. Mirrors the rust
+ * `ElementHandle` surface — `css` / `xpath` queries scoped to this
+ * subtree, attribute / text access, navigation, and auto-selector
+ * generation (slice 11).
+ */
+export interface ElementHandle {
+  readonly tag: string;
+  attr(name: string): string | undefined;
+  text(): string;
+  html(): string;
+  innerHtml(): string;
+  parent(): ElementHandle | undefined;
+  children(): ElementHandle[];
+  siblings(): ElementHandle[];
+  css(selector: string): ElementHandle[];
+  xpath(expr: string): ElementHandle[];
+  /**
+   * Produce a selector string that uniquely identifies this element in
+   * its source tree. Prefers stable anchors (`id`, `data-testid`,
+   * ARIA attributes, semantic tags) over positional fallbacks
+   * (`:nth-of-type` for CSS, `[N]` for XPath).
+   */
+  generateSelector(opts: { kind: SelectorKind }): string;
+}

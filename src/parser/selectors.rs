@@ -26,6 +26,13 @@ use scraper::{node::Node, ElementRef, Selector};
 
 use super::TreeHandle;
 
+/// Selector flavour for [`ElementHandle::generate_selector`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectorKind {
+    Css,
+    Xpath,
+}
+
 /// Options for [`ElementHandle::find_by_text`] / [`TreeHandle::find_by_text`].
 ///
 /// Defaults are: substring match, case-sensitive, no trim.
@@ -180,6 +187,19 @@ impl<'a> ElementHandle<'a> {
             }
         }
         out
+    }
+
+    /// Generate a selector string that uniquely identifies this element
+    /// in its tree. Prefers stable anchors (id, data-testid, aria-label,
+    /// role) over positional fallbacks (`:nth-of-type` / `[N]`). The
+    /// returned selector, when re-queried on the same tree via
+    /// [`TreeHandle::css`] / [`TreeHandle::xpath`], yields the original
+    /// element.
+    pub fn generate_selector(&self, kind: SelectorKind) -> String {
+        match kind {
+            SelectorKind::Css => generate_css(self.node),
+            SelectorKind::Xpath => generate_xpath(self.node),
+        }
     }
 
     /// Walk descendants and return elements whose concatenated text
@@ -670,6 +690,241 @@ impl TreeHandle {
     }
 }
 
+// ---------- Selector generation ----------
+
+const STABLE_DATA_ATTRS: &[&str] = &[
+    "data-testid",
+    "data-test-id",
+    "data-test",
+    "data-qa",
+    "data-cy",
+];
+
+fn top_element<'a>(el: ElementRef<'a>) -> ElementRef<'a> {
+    let mut cur = el;
+    while let Some(p) = cur.parent().and_then(ElementRef::wrap) {
+        cur = p;
+    }
+    cur
+}
+
+fn is_simple_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn escape_attr_value(v: &str) -> String {
+    v.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn css_chain_matches_target<'a>(
+    root: ElementRef<'a>,
+    sel: &str,
+    target: ElementRef<'a>,
+) -> bool {
+    let parsed = match Selector::parse(sel) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let target_id = target.id();
+    let mut count = 0usize;
+    let mut hit = false;
+    for n in root.select(&parsed) {
+        if n.id() == target_id {
+            hit = true;
+        }
+        count += 1;
+        if count > 1 {
+            return false;
+        }
+    }
+    hit && count == 1
+}
+
+fn nth_of_type_index(el: ElementRef<'_>) -> usize {
+    let parent = match el.parent() {
+        Some(p) => p,
+        None => return 1,
+    };
+    let name = el.value().name();
+    let target_id = el.id();
+    let mut idx = 0usize;
+    for sib in parent.children() {
+        if let Some(s_el) = ElementRef::wrap(sib) {
+            if s_el.value().name() == name {
+                idx += 1;
+                if sib.id() == target_id {
+                    return idx;
+                }
+            }
+        }
+    }
+    1
+}
+
+fn css_segment(el: ElementRef<'_>) -> String {
+    let tag = el.value().name();
+    if let Some(id) = el.value().attr("id") {
+        if !id.is_empty() {
+            if is_simple_ident(id) {
+                return format!("{}#{}", tag, id);
+            }
+            return format!("{}[id=\"{}\"]", tag, escape_attr_value(id));
+        }
+    }
+    for attr in STABLE_DATA_ATTRS {
+        if let Some(v) = el.value().attr(attr) {
+            return format!("{}[{}=\"{}\"]", tag, attr, escape_attr_value(v));
+        }
+    }
+    if let Some(v) = el.value().attr("aria-label") {
+        return format!("{}[aria-label=\"{}\"]", tag, escape_attr_value(v));
+    }
+    if let Some(v) = el.value().attr("role") {
+        return format!("{}[role=\"{}\"]", tag, escape_attr_value(v));
+    }
+    let idx = nth_of_type_index(el);
+    if idx > 1 {
+        format!("{}:nth-of-type({})", tag, idx)
+    } else {
+        // First-of-type still gets the index so the selector is robust
+        // against later siblings of the same tag being inserted.
+        format!("{}:nth-of-type(1)", tag)
+    }
+}
+
+fn generate_css<'a>(target: ElementRef<'a>) -> String {
+    let root = top_element(target);
+
+    // Fast path: unique id.
+    if let Some(id) = target.value().attr("id") {
+        if !id.is_empty() {
+            let sel = if is_simple_ident(id) {
+                format!("#{}", id)
+            } else {
+                format!("[id=\"{}\"]", escape_attr_value(id))
+            };
+            if css_chain_matches_target(root, &sel, target) {
+                return sel;
+            }
+        }
+    }
+    // Fast path: unique stable data attr.
+    for attr in STABLE_DATA_ATTRS {
+        if let Some(v) = target.value().attr(attr) {
+            let sel = format!("[{}=\"{}\"]", attr, escape_attr_value(v));
+            if css_chain_matches_target(root, &sel, target) {
+                return sel;
+            }
+        }
+    }
+
+    // Build path bottom-up, stop early once the chain is unique.
+    let mut segments: Vec<String> = Vec::new();
+    let mut cur = target;
+    loop {
+        let seg = css_segment(cur);
+        segments.insert(0, seg);
+        let chain = segments.join(" > ");
+        if css_chain_matches_target(root, &chain, target) {
+            return chain;
+        }
+        match cur.parent().and_then(ElementRef::wrap) {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    segments.join(" > ")
+}
+
+fn xpath_chain_matches_target<'a>(
+    root: ElementRef<'a>,
+    expr: &str,
+    target: ElementRef<'a>,
+) -> bool {
+    let hits = xpath_select(root, expr);
+    let target_id = target.id();
+    let mut count = 0usize;
+    let mut hit = false;
+    for h in hits {
+        if h.inner().id() == target_id {
+            hit = true;
+        }
+        count += 1;
+        if count > 1 {
+            return false;
+        }
+    }
+    hit && count == 1
+}
+
+fn xpath_segment(el: ElementRef<'_>) -> String {
+    let tag = el.value().name();
+    if let Some(id) = el.value().attr("id") {
+        if !id.is_empty() {
+            return format!("{}[@id='{}']", tag, id.replace('\'', "&apos;"));
+        }
+    }
+    for attr in STABLE_DATA_ATTRS {
+        if let Some(v) = el.value().attr(attr) {
+            return format!("{}[@{}='{}']", tag, attr, v.replace('\'', "&apos;"));
+        }
+    }
+    if let Some(v) = el.value().attr("aria-label") {
+        return format!("{}[@aria-label='{}']", tag, v.replace('\'', "&apos;"));
+    }
+    if let Some(v) = el.value().attr("role") {
+        return format!("{}[@role='{}']", tag, v.replace('\'', "&apos;"));
+    }
+    let idx = nth_of_type_index(el);
+    format!("{}[{}]", tag, idx)
+}
+
+fn generate_xpath<'a>(target: ElementRef<'a>) -> String {
+    let root = top_element(target);
+
+    if let Some(id) = target.value().attr("id") {
+        if !id.is_empty() {
+            let expr = format!("//*[@id='{}']", id.replace('\'', "&apos;"));
+            if xpath_chain_matches_target(root, &expr, target) {
+                return expr;
+            }
+        }
+    }
+    for attr in STABLE_DATA_ATTRS {
+        if let Some(v) = target.value().attr(attr) {
+            let expr = format!("//*[@{}='{}']", attr, v.replace('\'', "&apos;"));
+            if xpath_chain_matches_target(root, &expr, target) {
+                return expr;
+            }
+        }
+    }
+
+    // Bottom-up walk emits an absolute path `/seg1/seg2/...` so that
+    // `[N]` position predicates evaluate against a single-context result
+    // list at each step (the relative `//tag[N]` form would flatten
+    // across all matches and pick the wrong sibling).
+    let mut segments: Vec<String> = Vec::new();
+    let mut cur = target;
+    loop {
+        let seg = xpath_segment(cur);
+        segments.insert(0, seg);
+        let chain = format!("/{}", segments.join("/"));
+        if xpath_chain_matches_target(root, &chain, target) {
+            return chain;
+        }
+        match cur.parent().and_then(ElementRef::wrap) {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    format!("/{}", segments.join("/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::parse_tree;
@@ -913,5 +1168,159 @@ mod tests {
         let t = parse_tree(PAGE, None);
         let v = t.css("[[invalid");
         assert!(v.is_empty());
+    }
+
+    // ---------- Auto-selector generation (slice 11) ----------
+
+    use super::SelectorKind;
+
+    fn round_trip_css(html: &[u8], pick: &str) {
+        let t = parse_tree(html, None);
+        let target = t.css(pick).into_iter().next().expect("target");
+        let sel = target.generate_selector(SelectorKind::Css);
+        let hits = t.css(&sel);
+        assert_eq!(
+            hits.len(),
+            1,
+            "generated CSS `{}` matched {} elements (expected 1) for pick `{}`",
+            sel,
+            hits.len(),
+            pick
+        );
+        assert_eq!(hits[0].inner().id(), target.inner().id());
+    }
+
+    fn round_trip_xpath(html: &[u8], pick: &str) {
+        let t = parse_tree(html, None);
+        let target = t.css(pick).into_iter().next().expect("target");
+        let expr = target.generate_selector(SelectorKind::Xpath);
+        let hits = t.xpath(&expr);
+        assert_eq!(
+            hits.len(),
+            1,
+            "generated XPath `{}` matched {} elements (expected 1) for pick `{}`",
+            expr,
+            hits.len(),
+            pick
+        );
+        assert_eq!(hits[0].inner().id(), target.inner().id());
+    }
+
+    #[test]
+    fn generate_css_prefers_id() {
+        let html = br#"<html><body><div><span id="hero" class="x">hi</span></div></body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("#hero").into_iter().next().unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        assert_eq!(sel, "#hero");
+        round_trip_css(html, "#hero");
+    }
+
+    #[test]
+    fn generate_css_prefers_data_testid() {
+        let html = br#"<html><body><div><button data-testid="submit-btn">go</button>
+            <button>nope</button></div></body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("[data-testid=\"submit-btn\"]").into_iter().next().unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        assert_eq!(sel, "[data-testid=\"submit-btn\"]");
+        round_trip_css(html, "[data-testid=\"submit-btn\"]");
+    }
+
+    #[test]
+    fn generate_css_aria_label_anchor() {
+        let html = r#"<html><body><nav><a aria-label="Open menu">≡</a><a>x</a></nav></body></html>"#.as_bytes();
+        let t = parse_tree(html, None);
+        let target = t.css("a[aria-label]").into_iter().next().unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        assert!(sel.contains("aria-label=\"Open menu\""), "got: {}", sel);
+        round_trip_css(html, "a[aria-label]");
+    }
+
+    #[test]
+    fn generate_css_deeply_nested_anonymous_divs() {
+        // No stable anchors anywhere along the path — must fall back to
+        // :nth-of-type but still round-trip.
+        let html = br#"<html><body>
+            <div><div><div>a</div></div></div>
+            <div><div><div>b</div><div>c</div></div></div>
+        </body></html>"#;
+        let t = parse_tree(html, None);
+        // Pick the 'c' div: it's the 2nd inner div of the 2nd outer chain.
+        let target = t
+            .find_by_text("c", super::super::TextMatch::exact().with_trim(true))
+            .into_iter()
+            .filter(|h| h.name() == "div" && h.children().is_empty())
+            .next()
+            .unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        let hits = t.css(&sel);
+        assert_eq!(hits.len(), 1, "selector `{}` was ambiguous", sel);
+        assert_eq!(hits[0].text(), "c");
+        assert!(sel.contains(":nth-of-type"), "expected nth-of-type fallback, got: {}", sel);
+    }
+
+    #[test]
+    fn generate_css_round_trips_unique_class_via_path() {
+        // Two siblings share class — generator falls back to positional path.
+        let html = br#"<html><body>
+            <ul><li class="item">a</li><li class="item">b</li><li class="item">c</li></ul>
+        </body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("li.item").into_iter().nth(1).unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        let hits = t.css(&sel);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text(), "b");
+    }
+
+    #[test]
+    fn generate_css_id_with_special_chars_uses_attr_selector() {
+        let html = br#"<html><body><div id="weird:id.1">x</div></body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("[id]").into_iter().next().unwrap();
+        let sel = target.generate_selector(SelectorKind::Css);
+        assert!(sel.starts_with("[id="), "got: {}", sel);
+        let hits = t.css(&sel);
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn generate_xpath_prefers_id() {
+        let html = br#"<html><body><div><span id="hero">hi</span></div></body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("#hero").into_iter().next().unwrap();
+        let expr = target.generate_selector(SelectorKind::Xpath);
+        assert_eq!(expr, "//*[@id='hero']");
+        round_trip_xpath(html, "#hero");
+    }
+
+    #[test]
+    fn generate_xpath_data_testid() {
+        let html = br#"<html><body><button data-testid="submit-btn">go</button></body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t.css("[data-testid=\"submit-btn\"]").into_iter().next().unwrap();
+        let expr = target.generate_selector(SelectorKind::Xpath);
+        assert_eq!(expr, "//*[@data-testid='submit-btn']");
+        round_trip_xpath(html, "[data-testid=\"submit-btn\"]");
+    }
+
+    #[test]
+    fn generate_xpath_deeply_nested_anonymous_divs() {
+        let html = br#"<html><body>
+            <div><div><div>a</div></div></div>
+            <div><div><div>b</div><div>c</div></div></div>
+        </body></html>"#;
+        let t = parse_tree(html, None);
+        let target = t
+            .find_by_text("c", super::super::TextMatch::exact().with_trim(true))
+            .into_iter()
+            .filter(|h| h.name() == "div" && h.children().is_empty())
+            .next()
+            .unwrap();
+        let expr = target.generate_selector(SelectorKind::Xpath);
+        let hits = t.xpath(&expr);
+        assert_eq!(hits.len(), 1, "expr `{}` was ambiguous", expr);
+        assert_eq!(hits[0].text(), "c");
     }
 }
