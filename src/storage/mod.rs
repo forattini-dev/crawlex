@@ -1,3 +1,4 @@
+pub mod adaptive;
 pub mod artifact;
 pub mod challenge;
 pub mod filesystem;
@@ -10,6 +11,7 @@ pub mod sqlite;
 pub mod state;
 pub mod telemetry;
 
+pub use adaptive::AdaptiveStore;
 pub use artifact::ArtifactStorage;
 pub use challenge::ChallengeStorage;
 pub use intel::IntelStorage;
