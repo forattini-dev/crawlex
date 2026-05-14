@@ -16,6 +16,7 @@
   "chrome_path": null,
   "chrome_flags": ["--disable-gpu"],
   "block_resources": ["image", "media"],
+  "reject_resource_types": ["image", "font"],
   "wait_strategy": {
     "NetworkIdle": {
       "idle_ms": 750
@@ -126,6 +127,25 @@
 | `dom_capture.remove_overlays` | Remove fixed/sticky overlays before HTML capture | `false` |
 | `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
 | `render_mode` | Operator-level switch: `"auto"` (impersonate first, escalate via policy), `"always"` (force render path, bumps `max_concurrent_render` to ≥1), `"never"` (pin to impersonate, refuse render escalation, never instantiate the render pool). Wins over `--method`. | `"auto"` |
+| `reject_resource_types` | Typed CDP reject list: `image`, `media`, `font`, `stylesheet`. Auto-disabled (with a warn-level log) when the job requests a screenshot. | `[]` |
+
+## Resource-type blocking
+
+Two knobs feed Chrome's `Network.setBlockedURLs` so heavy assets never hit the wire:
+
+- `block_resources: ["image", "font", "media", "stylesheet", "script", "analytics"]` —
+  legacy untyped list. Accepts a broader set including `script` and `analytics`
+  (vendor-domain wildcards). Kept for back-compat.
+- `reject_resource_types: ["image", "media", "font", "stylesheet"]` — typed
+  successor; mirrors Cloudflare's canonical set and is the recommended field for
+  new configs. Auto-disabled (with a warn-level log) when the job requests a
+  screenshot, so visual fidelity is preserved.
+
+Both code paths emit identical URL patterns for the four overlapping categories,
+so you can swap from one to the other without changing observable bandwidth.
+
+CLI: `--reject-resource-type image --reject-resource-type media` (repeatable, or
+comma-separated: `--reject-resource-type image,media`).
 
 ## Include / exclude patterns
 

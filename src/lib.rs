@@ -52,6 +52,7 @@ pub mod intel;
 pub mod metrics;
 pub mod metrics_server;
 pub mod parser;
+pub mod pattern;
 pub mod policy;
 pub mod proxy;
 pub mod queue;

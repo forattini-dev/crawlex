@@ -1924,6 +1924,24 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
             .as_deref()
             .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
             .unwrap_or_default(),
+        reject_resource_types: {
+            use std::str::FromStr;
+            let mut out = Vec::with_capacity(c.reject_resource_type.len());
+            for raw in &c.reject_resource_type {
+                // Allow `--reject-resource-type image,media` as a one-shot
+                // shorthand on top of the repeatable flag.
+                for piece in raw.split(',') {
+                    let piece = piece.trim();
+                    if piece.is_empty() {
+                        continue;
+                    }
+                    out.push(crate::config::RejectResourceType::from_str(piece).map_err(
+                        |e| crate::Error::Config(format!("--reject-resource-type: {e}")),
+                    )?);
+                }
+            }
+            out
+        },
         wait_strategy,
         rate_per_host_rps: c.rate_per_host_rps,
         retry_max: c.retry_max.unwrap_or(3),
@@ -2201,6 +2219,7 @@ fn reject_browser_only_flags(c: &args::CrawlArgs) -> Result<()> {
         || c.remove_consent_popups
         || !c.chrome_flag.is_empty()
         || c.block_resource.is_some()
+        || !c.reject_resource_type.is_empty()
         || c.wait_strategy.is_some()
         || c.wait_idle_ms.is_some()
         || c.metrics
@@ -2230,7 +2249,8 @@ fn reject_browser_only_config(config: &Config) -> Result<()> {
         || config.dom_capture.remove_overlays
         || config.dom_capture.remove_consent_popups
         || !config.chrome_flags.is_empty()
-        || !config.block_resources.is_empty();
+        || !config.block_resources.is_empty()
+        || !config.reject_resource_types.is_empty();
     if render_requested {
         return Err(crate::Error::RenderDisabled(
             "render-disabled: this build has no browser backend. \

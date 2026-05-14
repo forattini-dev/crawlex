@@ -389,6 +389,11 @@ pub struct CrawlArgs {
     pub score_keyword: Vec<String>,
     #[arg(long)]
     pub block_resource: Option<String>,
+    /// Typed CDP-level reject category. Repeatable. Accepted values:
+    /// `image`, `media`, `font`, `stylesheet`. Auto-disabled when
+    /// `--screenshot` is set so visual fidelity is preserved.
+    #[arg(long = "reject-resource-type", action = clap::ArgAction::Append)]
+    pub reject_resource_type: Vec<String>,
 
     #[arg(long)]
     pub queue: Option<String>,
