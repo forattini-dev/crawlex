@@ -250,6 +250,7 @@ pub async fn run() -> anyhow::Result<()> {
             args::SpiderVerb::Run(a) => cmd_spider_run(a)?,
         },
         args::Command::UpdateBlocklist(a) => cmd_update_blocklist(a).await?,
+        args::Command::FromCurl(a) => cmd_from_curl(a)?,
     }
     Ok(())
 }
@@ -373,6 +374,25 @@ async fn fetch_blocklist_source(_url: &str) -> anyhow::Result<String> {
     Err(anyhow::anyhow!(
         "remote fetch requires the `cdp-backend` feature; use --from-file with a local copy of the EasyList feed"
     ))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// `crawlex from-curl`
+// ─────────────────────────────────────────────────────────────────────
+
+/// Parse the supplied curl command line and emit the converted request
+/// to stdout in the requested shape. Unknown curl flags are echoed to
+/// stderr as warnings rather than failing the conversion.
+fn cmd_from_curl(args: args::FromCurlArgs) -> anyhow::Result<()> {
+    use crate::from_curl::{parse, render, Format};
+
+    let fmt = Format::parse(&args.format).map_err(|e| anyhow::anyhow!(e))?;
+    let parsed = parse(&args.command).map_err(|e| anyhow::anyhow!(e))?;
+    for w in &parsed.warnings {
+        eprintln!("from-curl: warning: {}", w);
+    }
+    println!("{}", render(&parsed.request, fmt));
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
