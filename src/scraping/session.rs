@@ -136,6 +136,19 @@ impl SessionManager {
         self.entries.lock().len()
     }
 
+    /// Evict a session. Returns the dropped entry, or `None` when the id
+    /// wasn't registered. Used by the MCP `close_session` tool (slice 24).
+    pub fn remove(&self, id: &str) -> Option<SessionEntry> {
+        self.entries.lock().remove(id)
+    }
+
+    /// Snapshot of registered sessions. Used by the MCP `list_sessions`
+    /// tool (slice 24); order is unspecified — callers should sort if a
+    /// stable view is required.
+    pub fn list(&self) -> Vec<SessionEntry> {
+        self.entries.lock().values().cloned().collect()
+    }
+
     /// Resolve a request to the backend + jar it should run against.
     /// Unknown session ids fall back to the default backend with a
     /// `warn!` log. `None` session id silently uses the default.
