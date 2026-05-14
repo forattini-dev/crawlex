@@ -73,9 +73,18 @@ pub struct PagesListArgs {
     /// `disallowed`, `skipped`, `errored`, `cancelled`. Omit for all.
     #[arg(long)]
     pub status: Option<String>,
-    /// Row cap. 0 = unlimited.
+    /// Row cap. 0 = unlimited (single batch, no `next_cursor`).
     #[arg(long, default_value_t = 0)]
     pub limit: usize,
+    /// Opaque cursor token from a prior `pages list` response's
+    /// `next_cursor`. Mutually consistent with `--status` — replaying
+    /// a cursor under a different filter is rejected.
+    #[arg(long)]
+    pub cursor: Option<String>,
+    /// Output JSON (always JSON today; accepted for SDK `runJson`
+    /// compatibility — the flag is a no-op).
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Subcommand, Debug)]

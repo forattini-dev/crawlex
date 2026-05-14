@@ -1333,12 +1333,18 @@ async fn cmd_pages_list(a: args::PagesListArgs) -> Result<()> {
         })?),
     };
     let path = std::path::PathBuf::from(&a.storage_path);
-    let rows = tokio::task::spawn_blocking(move || {
-        crate::storage::sqlite::list_pages_with_status_blocking(&path, filter, a.limit)
+    let cursor = a.cursor.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        crate::storage::sqlite::list_pages_with_status_paged_blocking(
+            &path,
+            filter,
+            a.limit,
+            cursor.as_deref(),
+        )
     })
     .await
     .map_err(|e| crate::Error::Storage(format!("pages list join: {e}")))??;
-    let json = serde_json::to_string(&rows)
+    let json = serde_json::to_string(&page)
         .map_err(|e| crate::Error::Config(format!("serialize pages list: {e}")))?;
     println!("{json}");
     Ok(())

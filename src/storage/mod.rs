@@ -4,6 +4,8 @@ pub mod filesystem;
 pub mod intel;
 pub mod memory;
 #[cfg(feature = "sqlite")]
+pub mod cursor;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod state;
 pub mod telemetry;

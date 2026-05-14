@@ -544,10 +544,44 @@ function camelToSnakePatch(p) {
   return out;
 }
 
+/**
+ * Async iterator over `crawlex pages list` results (slice 8). Hides
+ * the cursor token from the caller — internally re-invokes the binary
+ * once per page using the prior response's `next_cursor` and
+ * terminates when the server stops returning one.
+ */
+async function* paginatePages(opts) {
+  if (!opts || typeof opts.storagePath !== 'string' || !opts.storagePath) {
+    throw new TypeError('paginatePages: opts.storagePath is required');
+  }
+  const pageSize = opts.pageSize == null ? 100 : Number(opts.pageSize);
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new RangeError(`paginatePages: pageSize must be a positive integer (got ${opts.pageSize})`);
+  }
+  const runOpts = {};
+  if (opts.bin) runOpts.bin = opts.bin;
+  if (opts.env) runOpts.env = opts.env;
+
+  let cursor = null;
+  while (true) {
+    const argv = ['pages', 'list', '--storage-path', opts.storagePath, '--limit', String(pageSize)];
+    if (opts.status) argv.push('--status', opts.status);
+    if (cursor) argv.push('--cursor', cursor);
+    const resp = runJson(argv, runOpts);
+    if (!resp || !Array.isArray(resp.rows)) {
+      throw new Error('paginatePages: unexpected response shape from `pages list`');
+    }
+    for (const row of resp.rows) yield row;
+    if (!resp.next_cursor) return;
+    cursor = resp.next_cursor;
+  }
+}
+
 module.exports = {
   crawl,
   crawlAll,
   runJson,
+  paginatePages,
   ensureInstalled,
   binaryPath,
   assetBaseName,

@@ -111,6 +111,47 @@ export interface PageStatusRow {
   crawl_status: UrlStatus | null;
 }
 
+/**
+ * Opaque pagination token from the SDK results read path (slice 8).
+ * Treated as an unstructured string by consumers — the encoding is a
+ * URL-safe base64 of a versioned struct and may change across crawlex
+ * releases. Pass it back verbatim on the next `pages list` call.
+ */
+export type PageCursor = string;
+
+/**
+ * Wire shape of `crawlex pages list --json` (slice 8). When `limit > 0`,
+ * `next_cursor` is present iff additional rows match the filter. With
+ * `limit = 0` the entire result set ships in `rows` and `next_cursor`
+ * is absent.
+ */
+export interface PageListResponse {
+  rows: PageStatusRow[];
+  next_cursor?: PageCursor;
+}
+
+/** Options for [`paginatePages`]. */
+export interface PaginatePagesOptions {
+  storagePath: string;
+  /** Optional canonical status filter (mirrors `--status`). */
+  status?: UrlStatus;
+  /** Rows per page. Defaults to `100`. Must be `> 0`. */
+  pageSize?: number;
+  /** Override the resolved binary path. */
+  bin?: string;
+  /** Extra env vars for the child process. */
+  env?: Record<string, string>;
+}
+
+/**
+ * Stream every persisted `pages` row matching `status`. Wraps
+ * `crawlex pages list` with cursor pagination so callers iterate
+ * without seeing the cursor token. Yields `PageStatusRow` values.
+ */
+export function paginatePages(
+  opts: PaginatePagesOptions
+): AsyncIterableIterator<PageStatusRow>;
+
 // ─── Typed payloads ────────────────────────────────────────────────────
 
 export interface RunStartedData {

@@ -25,6 +25,29 @@ The `status` field on the envelope and the `crawl_status` column on the SQLite `
 
 Legacy rows (written before the column existed) carry `crawl_status = NULL` and stay readable. New writes populate the column. The SDK results endpoint (`crawlex pages list --status <value>`) filters on this column.
 
+### Cursor pagination (slice 8)
+
+`crawlex pages list` accepts `--limit <N>` and `--cursor <token>`. The response shape is:
+
+```json
+{ "rows": [ /* PageStatusRow[] */ ], "next_cursor": "<opaque base64 token>" }
+```
+
+`next_cursor` is omitted on the final batch. Tokens are URL-safe base64 of a small versioned struct — opaque to consumers, never carrying the raw `rowid`. A decoder that doesn't understand the encoded `v` returns a focused `cursor version N not supported` error rather than silently returning wrong rows. Tokens survive process restarts: the read path opens a fresh read-only SQLite connection each call and never depends on in-memory server state.
+
+Filter composition: a cursor is bound to the `--status` filter it was minted under. Replaying the same token under a different filter is rejected — the rowid ordering would still match, but the consumer's mental model would silently drop or duplicate rows. Iterate to completion under one filter at a time.
+
+TS SDK:
+
+```ts
+import { paginatePages } from 'crawlex';
+for await (const row of paginatePages({ storagePath: 'crawlex.db', status: 'errored', pageSize: 100 })) {
+  // row: PageStatusRow
+}
+```
+
+The iterator hides the cursor token from the caller and re-invokes the binary once per page until `next_cursor` is absent.
+
 ## Event kinds
 
 Stable names exposed today:
