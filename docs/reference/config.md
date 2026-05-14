@@ -16,6 +16,7 @@
   "chrome_path": null,
   "chrome_flags": ["--disable-gpu"],
   "block_resources": ["image", "media"],
+  "reject_resource_types": ["image", "font"],
   "wait_strategy": {
     "NetworkIdle": {
       "idle_ms": 750
@@ -124,6 +125,57 @@
 | `dom_capture.flatten_shadow_dom` | Serialize open shadow roots into captured HTML | `false` |
 | `dom_capture.remove_overlays` | Remove fixed/sticky overlays before HTML capture | `false` |
 | `dom_capture.remove_consent_popups` | Remove common consent/cookie banners before HTML capture | `false` |
+| `reject_resource_types` | Typed CDP reject list: `image`, `media`, `font`, `stylesheet`. Auto-disabled (with a warn-level log) when the job requests a screenshot. | `[]` |
+
+## Resource-type blocking
+
+Two knobs feed Chrome's `Network.setBlockedURLs` so heavy assets never hit the wire:
+
+- `block_resources: ["image", "font", "media", "stylesheet", "script", "analytics"]` —
+  legacy untyped list. Accepts a broader set including `script` and `analytics`
+  (vendor-domain wildcards). Kept for back-compat.
+- `reject_resource_types: ["image", "media", "font", "stylesheet"]` — typed
+  successor; mirrors Cloudflare's canonical set and is the recommended field for
+  new configs. Auto-disabled (with a warn-level log) when the job requests a
+  screenshot, so visual fidelity is preserved.
+
+Both code paths emit identical URL patterns for the four overlapping categories,
+so you can swap from one to the other without changing observable bandwidth.
+
+CLI: `--reject-resource-type image --reject-resource-type media` (repeatable, or
+comma-separated: `--reject-resource-type image,media`).
+
+## URL match patterns (glob ↔ regex)
+
+`crawlex::pattern` exposes a single entry point, `compile_pattern(&str) -> Regex`,
+that auto-detects which dialect a string is written in and compiles it to an
+anchored `regex::Regex`. Hot-path matching is identical regardless of the
+input dialect.
+
+Grammar (glob):
+
+- `*` — matches any chars except `/`
+- `**` — matches any chars including `/`; a trailing `/` after `**/` is optional
+- `?` — matches exactly one char except `/`
+- every other char is literal (regex metachars are escaped at compile time)
+
+Auto-detect: a pattern is treated as a **regex** when it contains any of
+`^ $ ( ) [ ] { } | + \`. Otherwise it is treated as a **glob**. `*` and `?`
+are ambiguous and always resolve to the glob meaning.
+
+When include and exclude patterns both match a URL, **exclude wins**. This
+precedence is implemented by the caller (e.g. `extract::link_filter`).
+
+Migration examples — old regex → equivalent glob:
+
+| Regex | Glob |
+| --- | --- |
+| `^/blog/[^/]+$` | `/blog/*` |
+| `^/docs/.*$` | `/docs/**` |
+| `^/api/v[0-9]+/users$` | (keep as regex — character class) |
+
+If you need full regex power (alternation, classes, anchors), just write a
+regex; the engine will detect it and skip glob translation.
 
 ## When to prefer flags over JSON
 

@@ -38,6 +38,15 @@ pub struct Config {
     pub chrome_path: Option<String>,
     pub chrome_flags: Vec<String>,
     pub block_resources: Vec<String>,
+    /// Typed counterpart to `block_resources`: each variant expands to a
+    /// canonical wildcard set fed into Chrome's `Network.setBlockedURLs`
+    /// before navigation, so blocked types never hit the wire. Mirrors
+    /// Cloudflare's accepted set (`image`, `media`, `font`, `stylesheet`).
+    /// Auto-disabled (with a warn-level log) when the job requests a
+    /// screenshot, so visual fidelity is preserved. Empty default preserves
+    /// today's bandwidth behavior.
+    #[serde(default)]
+    pub reject_resource_types: Vec<RejectResourceType>,
     pub wait_strategy: WaitStrategy,
     pub rate_per_host_rps: Option<f64>,
     pub retry_max: u32,
@@ -659,6 +668,7 @@ impl Default for Config {
             chrome_path: None,
             chrome_flags: Vec::new(),
             block_resources: Vec::new(),
+            reject_resource_types: Vec::new(),
             wait_strategy: WaitStrategy::NetworkIdle { idle_ms: 500 },
             rate_per_host_rps: None,
             retry_max: 3,
@@ -729,6 +739,65 @@ impl Default for Config {
 impl Config {
     pub fn builder() -> ConfigBuilder {
         ConfigBuilder::default()
+    }
+}
+
+/// CDP-level reject categories. Mirrors the canonical Cloudflare set so
+/// operators can copy-paste a single value across edge config and crawler
+/// config. Each variant expands to a wildcard pattern list via
+/// [`RejectResourceType::url_patterns`]; pool wiring feeds those patterns
+/// into `Network.setBlockedURLs` before the first navigation so blocked
+/// types never reach the network stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RejectResourceType {
+    Image,
+    Media,
+    Font,
+    Stylesheet,
+}
+
+impl RejectResourceType {
+    /// Wildcard URL patterns matched by Chrome's `Network.setBlockedURLs`.
+    /// The list is intentionally extension-based — `setBlockedURLs` does
+    /// not understand MIME types — so it covers the file suffixes the
+    /// edge would normally block for the same category.
+    pub fn url_patterns(self) -> &'static [&'static str] {
+        match self {
+            RejectResourceType::Image => &[
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.ico",
+            ],
+            RejectResourceType::Media => {
+                &["*.mp3", "*.mp4", "*.webm", "*.ogg", "*.m3u8", "*.mpd"]
+            }
+            RejectResourceType::Font => &["*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot"],
+            RejectResourceType::Stylesheet => &["*.css"],
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RejectResourceType::Image => "image",
+            RejectResourceType::Media => "media",
+            RejectResourceType::Font => "font",
+            RejectResourceType::Stylesheet => "stylesheet",
+        }
+    }
+}
+
+impl std::str::FromStr for RejectResourceType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "image" => Ok(RejectResourceType::Image),
+            "media" => Ok(RejectResourceType::Media),
+            "font" => Ok(RejectResourceType::Font),
+            "stylesheet" => Ok(RejectResourceType::Stylesheet),
+            other => Err(format!(
+                "unknown reject_resource_type `{other}`; expected one of \
+                 image, media, font, stylesheet"
+            )),
+        }
     }
 }
 
@@ -881,5 +950,60 @@ mod tests {
             p.render_template(&url("https://example.com/foo")),
             "https://www.google.com/"
         );
+    }
+
+    #[test]
+    fn reject_resource_type_default_is_empty() {
+        // Empty default is load-bearing: any non-empty list visibly changes
+        // bandwidth for existing users, so the migration has to be opt-in.
+        let c = Config::default();
+        assert!(c.reject_resource_types.is_empty());
+    }
+
+    #[test]
+    fn reject_resource_type_from_str_covers_canonical_set() {
+        use std::str::FromStr;
+        assert_eq!(
+            RejectResourceType::from_str("image").unwrap(),
+            RejectResourceType::Image
+        );
+        assert_eq!(
+            RejectResourceType::from_str("MEDIA").unwrap(),
+            RejectResourceType::Media
+        );
+        assert_eq!(
+            RejectResourceType::from_str(" font ").unwrap(),
+            RejectResourceType::Font
+        );
+        assert_eq!(
+            RejectResourceType::from_str("stylesheet").unwrap(),
+            RejectResourceType::Stylesheet
+        );
+        assert!(RejectResourceType::from_str("script").is_err());
+    }
+
+    #[test]
+    fn reject_resource_type_url_patterns_are_nonempty_for_each_variant() {
+        // The whole field is dead weight unless every variant expands to
+        // at least one pattern. Guard against accidentally shipping a
+        // variant with an empty pattern list.
+        for rt in [
+            RejectResourceType::Image,
+            RejectResourceType::Media,
+            RejectResourceType::Font,
+            RejectResourceType::Stylesheet,
+        ] {
+            assert!(!rt.url_patterns().is_empty(), "{:?}", rt);
+        }
+    }
+
+    #[test]
+    fn reject_resource_type_serde_roundtrip_lowercase() {
+        // serde uses `rename_all = "lowercase"`, so YAML configs read
+        // `image`/`media`/`font`/`stylesheet` rather than `Image` etc.
+        let json = serde_json::to_string(&RejectResourceType::Stylesheet).unwrap();
+        assert_eq!(json, "\"stylesheet\"");
+        let back: RejectResourceType = serde_json::from_str("\"image\"").unwrap();
+        assert_eq!(back, RejectResourceType::Image);
     }
 }

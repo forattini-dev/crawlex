@@ -91,6 +91,40 @@ pub fn parse_screenshot_mode_or_default(opt: Option<&str>) -> ScreenshotCaptureM
     }
 }
 
+/// Expand the legacy untyped `block_resources` string list into the
+/// wildcard URL patterns fed to Chrome's `Network.setBlockedURLs`.
+/// Kept in sync with [`crate::config::RejectResourceType::url_patterns`]
+/// for the four overlapping categories so both paths produce identical
+/// rules. Unknown kinds are logged and dropped — operators see the
+/// debug line rather than a silent miss.
+fn collect_block_resource_patterns(kinds: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for kind in kinds {
+        let patterns: &[&str] = match kind.as_str() {
+            "image" => &[
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.ico",
+            ],
+            "font" => &["*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot"],
+            "media" => &["*.mp3", "*.mp4", "*.webm", "*.ogg", "*.m3u8", "*.mpd"],
+            "stylesheet" => &["*.css"],
+            "script" => &["*.js", "*.mjs"],
+            "analytics" => &[
+                "*://*.google-analytics.com/*",
+                "*://*.googletagmanager.com/*",
+                "*://*.segment.com/*",
+                "*://*.hotjar.com/*",
+                "*://*.mixpanel.com/*",
+            ],
+            other => {
+                tracing::debug!(kind = other, "unknown block-resource kind — ignoring");
+                continue;
+            }
+        };
+        out.extend(patterns.iter().map(|s| s.to_string()));
+    }
+    out
+}
+
 fn diff(start: f64, end: f64) -> Option<f64> {
     if start >= 0.0 && end >= start {
         Some(end - start)
@@ -2873,47 +2907,43 @@ impl RenderPool {
         // Chrome to refuse those URLs. Patterns are cheap wildcards; for
         // stronger control, users can write a Lua hook with network
         // interception.
-        if !self.config.block_resources.is_empty() {
-            let mut urls: Vec<String> = Vec::new();
-            for kind in &self.config.block_resources {
-                let patterns: &[&str] = match kind.as_str() {
-                    "image" => &[
-                        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.ico",
-                    ],
-                    "font" => &["*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot"],
-                    "media" => &["*.mp3", "*.mp4", "*.webm", "*.ogg", "*.m3u8", "*.mpd"],
-                    "stylesheet" => &["*.css"],
-                    "script" => &["*.js", "*.mjs"],
-                    "analytics" => &[
-                        "*://*.google-analytics.com/*",
-                        "*://*.googletagmanager.com/*",
-                        "*://*.segment.com/*",
-                        "*://*.hotjar.com/*",
-                        "*://*.mixpanel.com/*",
-                    ],
-                    other => {
-                        tracing::debug!(kind = other, "unknown block-resource kind — ignoring");
-                        continue;
-                    }
-                };
-                urls.extend(patterns.iter().map(|s| s.to_string()));
-            }
-            if !urls.is_empty() {
-                let patterns: Vec<BlockPattern> = urls
-                    .into_iter()
-                    .map(|url_pattern| BlockPattern {
-                        url_pattern,
-                        block: true,
-                    })
-                    .collect();
-                if let Err(e) = page
-                    .execute(SetBlockedUrLsParams {
-                        url_patterns: Some(patterns),
-                    })
-                    .await
-                {
-                    tracing::debug!(?e, "SetBlockedURLs failed (continuing)");
+        //
+        // The typed `reject_resource_types` field is the slice-6 successor:
+        // same CDP plumbing, but a closed enum (image/media/font/stylesheet)
+        // and an explicit override-on-screenshot rule so a job that asks for
+        // a screenshot never silently ships a broken-looking image.
+        let mut all_block_urls: Vec<String> =
+            collect_block_resource_patterns(&self.config.block_resources);
+        if !self.config.reject_resource_types.is_empty() {
+            if screenshot {
+                tracing::warn!(
+                    requested = ?self.config.reject_resource_types
+                        .iter()
+                        .map(|r| r.as_str())
+                        .collect::<Vec<_>>(),
+                    "screenshot requested — disabling reject_resource_types to preserve visual fidelity"
+                );
+            } else {
+                for rt in &self.config.reject_resource_types {
+                    all_block_urls.extend(rt.url_patterns().iter().map(|s| s.to_string()));
                 }
+            }
+        }
+        if !all_block_urls.is_empty() {
+            let patterns: Vec<BlockPattern> = all_block_urls
+                .into_iter()
+                .map(|url_pattern| BlockPattern {
+                    url_pattern,
+                    block: true,
+                })
+                .collect();
+            if let Err(e) = page
+                .execute(SetBlockedUrLsParams {
+                    url_patterns: Some(patterns),
+                })
+                .await
+            {
+                tracing::debug!(?e, "SetBlockedURLs failed (continuing)");
             }
         }
         if collect_vitals {
@@ -3447,5 +3477,47 @@ mod storage_clear_audit {
         // can't intercept fetches mid-clear.
         let params = SetBypassServiceWorkerParams::new(true);
         assert!(params.bypass);
+    }
+}
+
+#[cfg(test)]
+mod reject_resource_type_wiring {
+    use super::*;
+    use crate::config::RejectResourceType;
+
+    #[test]
+    fn block_resource_patterns_match_typed_variants() {
+        // Both code paths (`block_resources: Vec<String>` and the typed
+        // `reject_resource_types: Vec<RejectResourceType>`) feed Chrome's
+        // `Network.setBlockedURLs`, so they must produce byte-identical
+        // pattern lists for the four overlapping categories. If they
+        // drift, operators migrating from the string list to the enum
+        // would silently start blocking different URLs.
+        let string_form = collect_block_resource_patterns(&[
+            "image".into(),
+            "media".into(),
+            "font".into(),
+            "stylesheet".into(),
+        ]);
+        let mut typed_form: Vec<String> = Vec::new();
+        for rt in [
+            RejectResourceType::Image,
+            RejectResourceType::Media,
+            RejectResourceType::Font,
+            RejectResourceType::Stylesheet,
+        ] {
+            typed_form.extend(rt.url_patterns().iter().map(|s| s.to_string()));
+        }
+        assert_eq!(string_form, typed_form);
+    }
+
+    #[test]
+    fn typed_image_patterns_cover_canonical_extensions() {
+        let pats: Vec<&str> = RejectResourceType::Image.url_patterns().to_vec();
+        for required in [
+            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.ico",
+        ] {
+            assert!(pats.contains(&required), "missing pattern: {required}");
+        }
     }
 }
