@@ -289,6 +289,15 @@ pub struct Config {
     /// the proxy, mismatched browser engine, storage backing).
     #[serde(default)]
     pub mismatch_policy: MismatchPolicy,
+    /// Slice 35 — how an external CDP session uses backend browser state.
+    /// `Isolated` (default) creates a crawlex-owned `BrowserContext` per
+    /// session so cookies/localStorage/cache/profile state are
+    /// segregated. `Persistent` reuses the endpoint's default browser
+    /// context, inheriting whatever cookies, localStorage, cache, and
+    /// signed-in profile the backend already has. Ignored when
+    /// `external_cdp_url` is unset.
+    #[serde(default)]
+    pub external_cdp_session_mode: ExternalCdpSessionMode,
     /// Slice 7 — wall-clock budget for the whole crawl. When `Some(n)`
     /// a watchdog auto-cancels the run after `n` seconds, writes
     /// `TerminalReason::CancelledDueToTimeout` to the `crawl_stats` row,
@@ -694,6 +703,40 @@ pub enum MismatchPolicy {
     Strict,
 }
 
+/// Slice 35 — external CDP session state mode. Defaults to `Isolated`:
+/// crawlex creates and disposes its own `BrowserContext` so backend
+/// browser state never leaks across sessions. `Persistent` opts in to
+/// reusing the endpoint's default context (cookies, localStorage,
+/// cache, signed-in profile) — explicit operator choice only.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalCdpSessionMode {
+    #[default]
+    Isolated,
+    Persistent,
+}
+
+impl ExternalCdpSessionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExternalCdpSessionMode::Isolated => "isolated",
+            ExternalCdpSessionMode::Persistent => "persistent",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "isolated" => Some(ExternalCdpSessionMode::Isolated),
+            "persistent" => Some(ExternalCdpSessionMode::Persistent),
+            _ => None,
+        }
+    }
+
+    pub fn is_persistent(self) -> bool {
+        matches!(self, ExternalCdpSessionMode::Persistent)
+    }
+}
+
 impl MismatchPolicy {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -887,6 +930,7 @@ impl Default for Config {
             render_mode: RenderMode::default(),
             browser_provider: BrowserProvider::default(),
             mismatch_policy: MismatchPolicy::default(),
+            external_cdp_session_mode: ExternalCdpSessionMode::default(),
             job_max_runtime_secs: None,
             result_retention_secs: None,
             max_pages: None,
@@ -1185,6 +1229,56 @@ mod tests {
         assert_eq!(json, "\"cdp\"");
         let back: BrowserProvider = serde_json::from_str("\"auto\"").unwrap();
         assert_eq!(back, BrowserProvider::Auto);
+    }
+
+    #[test]
+    fn external_cdp_session_mode_default_is_isolated() {
+        // Slice 35 acceptance: external CDP sessions default to
+        // crawlex-owned isolated behavior. Persistent must be an
+        // explicit operator opt-in.
+        let c = Config::default();
+        assert_eq!(
+            c.external_cdp_session_mode,
+            ExternalCdpSessionMode::Isolated
+        );
+        assert!(!c.external_cdp_session_mode.is_persistent());
+    }
+
+    #[test]
+    fn external_cdp_session_mode_parse_accepts_canonical_names() {
+        assert_eq!(
+            ExternalCdpSessionMode::parse("isolated"),
+            Some(ExternalCdpSessionMode::Isolated)
+        );
+        assert_eq!(
+            ExternalCdpSessionMode::parse("PERSISTENT"),
+            Some(ExternalCdpSessionMode::Persistent)
+        );
+        assert_eq!(
+            ExternalCdpSessionMode::parse(" persistent "),
+            Some(ExternalCdpSessionMode::Persistent)
+        );
+        assert_eq!(ExternalCdpSessionMode::parse("ephemeral"), None);
+        assert_eq!(ExternalCdpSessionMode::parse(""), None);
+    }
+
+    #[test]
+    fn external_cdp_session_mode_serde_roundtrip_snake_case() {
+        let json = serde_json::to_string(&ExternalCdpSessionMode::Persistent).unwrap();
+        assert_eq!(json, "\"persistent\"");
+        let back: ExternalCdpSessionMode = serde_json::from_str("\"isolated\"").unwrap();
+        assert_eq!(back, ExternalCdpSessionMode::Isolated);
+    }
+
+    #[test]
+    fn external_cdp_session_mode_as_str_round_trips_via_parse() {
+        for mode in [
+            ExternalCdpSessionMode::Isolated,
+            ExternalCdpSessionMode::Persistent,
+        ] {
+            let s = mode.as_str();
+            assert_eq!(ExternalCdpSessionMode::parse(s), Some(mode));
+        }
     }
 
     #[test]

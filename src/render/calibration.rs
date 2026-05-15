@@ -37,6 +37,11 @@ pub struct CalibrationKey {
     pub timezone: String,
     pub profile: String,
     pub context: String,
+    /// Slice 35 — `"isolated"` vs `"persistent"`. Folded into the key
+    /// so the isolated and persistent variants of the same identity
+    /// never share a cached fingerprint (different cookie/storage
+    /// surfaces produce different observable identity).
+    pub session_mode: String,
 }
 
 impl CalibrationKey {
@@ -52,6 +57,7 @@ impl CalibrationKey {
             &self.timezone,
             &self.profile,
             &self.context,
+            &self.session_mode,
         ] {
             h.update(f.as_bytes());
             // Field separator that cannot appear in any of the inputs
@@ -777,6 +783,7 @@ mod tests {
             timezone: "Europe/Lisbon".to_string(),
             profile: "default".to_string(),
             context: "session-A".to_string(),
+            session_mode: "isolated".to_string(),
         };
         match field {
             "endpoint" => k.endpoint = value.to_string(),
@@ -786,6 +793,7 @@ mod tests {
             "timezone" => k.timezone = value.to_string(),
             "profile" => k.profile = value.to_string(),
             "context" => k.context = value.to_string(),
+            "session_mode" => k.session_mode = value.to_string(),
             "" => {}
             other => panic!("unknown field {other}"),
         }
@@ -811,11 +819,18 @@ mod tests {
         let fp = parse_probe(sample_probe_json()).unwrap();
         let cache = CalibrationCache::new();
         cache.insert(base.clone(), fp.clone());
-        // Each of the seven identity fields must produce a distinct
-        // cache slot — otherwise we'd serve a fingerprint that no
-        // longer matches the live identity.
+        // Each identity field must produce a distinct cache slot —
+        // otherwise we'd serve a fingerprint that no longer matches
+        // the live identity.
         for field in [
-            "endpoint", "seed", "proxy", "locale", "timezone", "profile", "context",
+            "endpoint",
+            "seed",
+            "proxy",
+            "locale",
+            "timezone",
+            "profile",
+            "context",
+            "session_mode",
         ] {
             let mutated = key(field, "MUTATED-VALUE");
             assert_ne!(
@@ -835,7 +850,14 @@ mod tests {
         let b = key("", ""); // identical
         assert_eq!(a.fingerprint_id(), b.fingerprint_id());
         for field in [
-            "endpoint", "seed", "proxy", "locale", "timezone", "profile", "context",
+            "endpoint",
+            "seed",
+            "proxy",
+            "locale",
+            "timezone",
+            "profile",
+            "context",
+            "session_mode",
         ] {
             let mutated = key(field, "X");
             assert_ne!(
@@ -844,6 +866,33 @@ mod tests {
                 "fingerprint_id collision on `{field}` mutation"
             );
         }
+    }
+
+    #[test]
+    fn cache_key_session_mode_isolated_and_persistent_are_distinct() {
+        // Slice 35 acceptance: the calibration cache must not serve an
+        // isolated-session fingerprint for a persistent-mode render
+        // (or vice versa) — the underlying storage surface is
+        // observably different.
+        let mut iso = key("", "");
+        iso.session_mode = "isolated".to_string();
+        let mut pers = iso.clone();
+        pers.session_mode = "persistent".to_string();
+        assert_ne!(iso, pers, "session_mode must not collapse cache slots");
+        assert_ne!(
+            iso.fingerprint_id(),
+            pers.fingerprint_id(),
+            "fingerprint_id must change with session_mode"
+        );
+
+        let cache = CalibrationCache::new();
+        let fp = parse_probe(sample_probe_json()).unwrap();
+        cache.insert(iso.clone(), fp.clone());
+        assert!(cache.get(&iso).is_some(), "isolated lookup must hit");
+        assert!(
+            cache.get(&pers).is_none(),
+            "persistent lookup must miss the isolated slot"
+        );
     }
 
     #[test]
