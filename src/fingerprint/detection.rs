@@ -130,7 +130,7 @@ impl Confidence {
 /// `runner::ChallengeSignal` (collapse completes in B7). Non-exhaustive
 /// so new vendors land without breaking downstream.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Vendor {
     // CDN / Edge
