@@ -992,14 +992,26 @@ impl RenderPool {
     /// is planned — in that case `Err` is typically ignored by the caller.
     pub async fn preflight(&self) -> Result<String> {
         if let Some(endpoint) = self.config.external_cdp_url.as_deref() {
+            // Slice 29 — structured provider-selected log entry. Keeps
+            // the historical free-form message and adds a stable
+            // `event="provider.selected"` field so downstream log
+            // consumers can filter without parsing the free text.
             tracing::info!(
+                event = "provider.selected",
+                provider = crate::config::BrowserProvider::Cdp.as_str(),
+                endpoint = endpoint,
                 external_cdp_url = endpoint,
                 "render pool: using external CDP endpoint"
             );
             return Ok(endpoint.to_string());
         }
         let path = self.resolve_chrome_path_async().await?;
-        tracing::info!(chrome = %path, "render pool: using Chrome binary");
+        tracing::info!(
+            event = "provider.selected",
+            provider = crate::config::BrowserProvider::Stock.as_str(),
+            chrome = %path,
+            "render pool: using Chrome binary"
+        );
         Ok(path)
     }
 

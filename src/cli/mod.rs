@@ -2073,7 +2073,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         }
     }
 
-    Ok(Config {
+    let mut config = Config {
         max_concurrent_render: c.max_concurrent_render.unwrap_or(0),
         max_concurrent_http: c.max_concurrent_http.unwrap_or(500),
         max_depth: c.max_depth,
@@ -2284,7 +2284,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
                 max_output_bytes: c.fallback_fetch_max_bytes.unwrap_or(32 * 1024 * 1024),
             }
         }),
-        external_cdp_url: c.external_cdp_url.clone(),
+        external_cdp_url: resolve_external_cdp_url(c.external_cdp_url.as_deref()),
         gpu_policy: c
             .gpu_policy
             .as_deref()
@@ -2297,10 +2297,95 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
             remove_consent_popups: c.remove_consent_popups,
         },
         render_mode: parse_render_mode(c.render_mode.as_deref())?,
+        browser_provider: resolve_browser_provider(c.browser_provider.as_deref())?,
         job_max_runtime_secs: c.job_max_runtime_secs,
         result_retention_secs: c.result_retention_secs,
         max_pages: c.max_pages,
-    })
+    };
+    validate_browser_provider(&mut config)?;
+    Ok(config)
+}
+
+/// Slice 29 — read `CRAWLEX_EXTERNAL_CDP_URL` after the CLI flag.
+/// Flag wins; env is the next layer; otherwise `None` and any
+/// downstream check (e.g. `BrowserProvider::Cdp` requiring an endpoint)
+/// will reject the configuration.
+fn resolve_external_cdp_url(flag: Option<&str>) -> Option<String> {
+    if let Some(v) = flag {
+        return Some(v.to_string());
+    }
+    read_external_cdp_env()
+}
+
+fn read_external_cdp_env() -> Option<String> {
+    std::env::var("CRAWLEX_EXTERNAL_CDP_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Slice 29 — accept `stock`/`cdp`/`auto`, falling back to the
+/// `CRAWLEX_BROWSER_PROVIDER` env var when no CLI flag is set. Default
+/// remains `Stock`.
+fn resolve_browser_provider(flag: Option<&str>) -> Result<crate::config::BrowserProvider> {
+    use crate::config::BrowserProvider;
+    let raw_owned;
+    let raw = match flag {
+        Some(s) => Some(s),
+        None => match std::env::var("CRAWLEX_BROWSER_PROVIDER") {
+            Ok(v) => {
+                raw_owned = v;
+                Some(raw_owned.as_str())
+            }
+            Err(_) => None,
+        },
+    };
+    match raw {
+        None => Ok(BrowserProvider::default()),
+        Some(s) => BrowserProvider::parse(s).ok_or_else(|| {
+            crate::Error::Config(format!(
+                "--browser-provider: expected one of stock|cdp|auto, got `{s}`"
+            ))
+        }),
+    }
+}
+
+/// Slice 29 — enforce the provider/endpoint contract. `Cdp` requires
+/// an explicit endpoint; we refuse silent fallback. `Stock` ignores
+/// `external_cdp_url` so a stale config field never sends jobs to an
+/// unintended endpoint — we clear it and log. `Auto` accepts either
+/// state but never goes looking for a local CDP endpoint.
+fn validate_browser_provider(config: &mut Config) -> Result<()> {
+    use crate::config::BrowserProvider;
+    match config.browser_provider {
+        BrowserProvider::Cdp => {
+            if config
+                .external_cdp_url
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err(crate::Error::Config(
+                    "--browser-provider cdp requires --external-cdp-url or \
+                     CRAWLEX_EXTERNAL_CDP_URL".into(),
+                ));
+            }
+        }
+        BrowserProvider::Stock => {
+            if config.external_cdp_url.is_some() {
+                tracing::warn!(
+                    "browser_provider=stock ignores external_cdp_url; clearing endpoint"
+                );
+                config.external_cdp_url = None;
+            }
+        }
+        BrowserProvider::Auto => {
+            // Auto is happy with or without an endpoint — but never
+            // probes for one on its own.
+        }
+    }
+    Ok(())
 }
 
 fn parse_render_mode(raw: Option<&str>) -> Result<crate::config::RenderMode> {
@@ -2339,7 +2424,17 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
     }
     if let Some(url) = c.external_cdp_url.as_ref() {
         config.external_cdp_url = Some(url.clone());
+    } else if config.external_cdp_url.is_none() {
+        if let Some(env_url) = read_external_cdp_env() {
+            config.external_cdp_url = Some(env_url);
+        }
     }
+    if c.browser_provider.is_some() {
+        config.browser_provider = resolve_browser_provider(c.browser_provider.as_deref())?;
+    } else if std::env::var("CRAWLEX_BROWSER_PROVIDER").is_ok() {
+        config.browser_provider = resolve_browser_provider(None)?;
+    }
+    validate_browser_provider(config)?;
     if let Some(raw) = c.gpu_policy.as_deref() {
         config.gpu_policy = parse_gpu_policy(raw)?;
     }
@@ -2630,5 +2725,122 @@ mod telemetry_format_tests {
         for line in s.lines() {
             assert!(line.len() <= 120, "line over 120 cols: {line:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_provider_tests {
+    use super::{resolve_browser_provider, validate_browser_provider};
+    use crate::config::{BrowserProvider, Config};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Tests in this module mutate `CRAWLEX_BROWSER_PROVIDER` /
+    /// `CRAWLEX_EXTERNAL_CDP_URL`. Cargo runs unit tests in parallel,
+    /// and env vars are process-global, so a shared mutex serializes
+    /// the env accesses across the module.
+    fn env_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn clear_env() {
+        std::env::remove_var("CRAWLEX_BROWSER_PROVIDER");
+        std::env::remove_var("CRAWLEX_EXTERNAL_CDP_URL");
+    }
+
+    #[test]
+    fn resolve_defaults_to_stock_when_unset() {
+        let _g = env_guard();
+        clear_env();
+        let p = resolve_browser_provider(None).unwrap();
+        assert_eq!(p, BrowserProvider::Stock);
+    }
+
+    #[test]
+    fn resolve_env_picks_up_provider() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_BROWSER_PROVIDER", "cdp");
+        let p = resolve_browser_provider(None).unwrap();
+        std::env::remove_var("CRAWLEX_BROWSER_PROVIDER");
+        assert_eq!(p, BrowserProvider::Cdp);
+    }
+
+    #[test]
+    fn resolve_flag_wins_over_env() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_BROWSER_PROVIDER", "cdp");
+        let p = resolve_browser_provider(Some("auto")).unwrap();
+        std::env::remove_var("CRAWLEX_BROWSER_PROVIDER");
+        assert_eq!(p, BrowserProvider::Auto);
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_value() {
+        let _g = env_guard();
+        clear_env();
+        let err = resolve_browser_provider(Some("camoufox")).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("stock|cdp|auto"), "{msg}");
+    }
+
+    #[test]
+    fn validate_cdp_requires_endpoint() {
+        let _g = env_guard();
+        clear_env();
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Cdp;
+        cfg.external_cdp_url = None;
+        let err = validate_browser_provider(&mut cfg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("external"), "expected endpoint hint: {msg}");
+    }
+
+    #[test]
+    fn validate_cdp_accepts_endpoint() {
+        let _g = env_guard();
+        clear_env();
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Cdp;
+        cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
+        validate_browser_provider(&mut cfg).unwrap();
+        assert_eq!(
+            cfg.external_cdp_url.as_deref(),
+            Some("http://127.0.0.1:9222")
+        );
+    }
+
+    #[test]
+    fn validate_stock_strips_stale_endpoint() {
+        // Slice 29: a leftover `external_cdp_url` in a config file must
+        // not silently route traffic to that endpoint when the operator
+        // selected the stock provider.
+        let _g = env_guard();
+        clear_env();
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Stock;
+        cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
+        validate_browser_provider(&mut cfg).unwrap();
+        assert!(cfg.external_cdp_url.is_none());
+    }
+
+    #[test]
+    fn validate_auto_keeps_endpoint_optional() {
+        let _g = env_guard();
+        clear_env();
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Auto;
+        validate_browser_provider(&mut cfg).unwrap();
+        assert!(cfg.external_cdp_url.is_none());
+
+        cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
+        validate_browser_provider(&mut cfg).unwrap();
+        assert_eq!(
+            cfg.external_cdp_url.as_deref(),
+            Some("http://127.0.0.1:9222")
+        );
     }
 }
