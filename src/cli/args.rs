@@ -459,9 +459,16 @@ pub struct CrawlArgs {
     #[arg(long = "chrome-flag", action = clap::ArgAction::Append)]
     pub chrome_flag: Vec<String>,
     /// Connect to an existing Chrome/Chromium CDP endpoint instead of
-    /// launching a local browser, e.g. `http://127.0.0.1:9222`.
+    /// launching a local browser, e.g. `http://127.0.0.1:9222`. Also
+    /// settable via `CRAWLEX_EXTERNAL_CDP_URL` (flag wins when both set).
     #[arg(long)]
     pub external_cdp_url: Option<String>,
+    /// Slice 29 — vendor-neutral browser provider selector:
+    /// `stock` (default, local Chromium), `cdp` (external endpoint
+    /// required), or `auto` (prefer configured external endpoint, fall
+    /// back to stock).
+    #[arg(long = "browser-provider")]
+    pub browser_provider: Option<String>,
     /// GPU posture for managed Chrome: `compat` keeps `--disable-gpu`,
     /// `stealth` keeps GPU surfaces enabled where Chrome can support them.
     #[arg(long)]

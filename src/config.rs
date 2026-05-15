@@ -271,6 +271,15 @@ pub struct Config {
     /// instantiated.
     #[serde(default)]
     pub render_mode: RenderMode,
+    /// Slice 29 — vendor-neutral browser provider selector. `Stock`
+    /// (default) preserves the historical local-launch Chromium flow.
+    /// `Cdp` connects to an explicitly configured external CDP endpoint
+    /// (`external_cdp_url` or the `CRAWLEX_EXTERNAL_CDP_URL` env var).
+    /// `Auto` prefers the configured external endpoint when present and
+    /// falls back to the stock local Chromium; it does NOT probe for
+    /// local CDP endpoints.
+    #[serde(default)]
+    pub browser_provider: BrowserProvider,
     /// Slice 7 — wall-clock budget for the whole crawl. When `Some(n)`
     /// a watchdog auto-cancels the run after `n` seconds, writes
     /// `TerminalReason::CancelledDueToTimeout` to the `crawl_stats` row,
@@ -645,6 +654,44 @@ pub enum RenderMode {
     Never,
 }
 
+/// Slice 29 — vendor-neutral selector for which browser implementation
+/// the render path drives. Kept independent of `RenderMode` (which
+/// decides *whether* to render): `BrowserProvider` decides *which*
+/// browser. The default is `Stock` — Crawlex launches its bundled /
+/// configured Chromium locally and preserves the historical behaviour.
+/// `Cdp` requires an explicit external endpoint; the render pool will
+/// refuse to fall back to a local browser. `Auto` prefers the
+/// configured external endpoint when one is present and otherwise
+/// behaves like `Stock`. Critically, `Auto` does NOT auto-discover
+/// local CDP endpoints — operators must opt-in explicitly.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserProvider {
+    #[default]
+    Stock,
+    Cdp,
+    Auto,
+}
+
+impl BrowserProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BrowserProvider::Stock => "stock",
+            BrowserProvider::Cdp => "cdp",
+            BrowserProvider::Auto => "auto",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "stock" => Some(BrowserProvider::Stock),
+            "cdp" => Some(BrowserProvider::Cdp),
+            "auto" => Some(BrowserProvider::Auto),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderSessionScope {
@@ -800,6 +847,7 @@ impl Default for Config {
             gpu_policy: GpuPolicy::default(),
             dom_capture: DomCaptureConfig::default(),
             render_mode: RenderMode::default(),
+            browser_provider: BrowserProvider::default(),
             job_max_runtime_secs: None,
             result_retention_secs: None,
             max_pages: None,
@@ -1070,6 +1118,34 @@ mod tests {
         ] {
             assert!(!rt.url_patterns().is_empty(), "{:?}", rt);
         }
+    }
+
+    #[test]
+    fn browser_provider_default_is_stock() {
+        // Slice 29: existing operators must see no behavioural change
+        // until they opt into a different provider.
+        let c = Config::default();
+        assert_eq!(c.browser_provider, BrowserProvider::Stock);
+    }
+
+    #[test]
+    fn browser_provider_parse_accepts_canonical_names() {
+        assert_eq!(
+            BrowserProvider::parse("stock"),
+            Some(BrowserProvider::Stock)
+        );
+        assert_eq!(BrowserProvider::parse("CDP"), Some(BrowserProvider::Cdp));
+        assert_eq!(BrowserProvider::parse(" auto "), Some(BrowserProvider::Auto));
+        assert_eq!(BrowserProvider::parse("camoufox"), None);
+        assert_eq!(BrowserProvider::parse(""), None);
+    }
+
+    #[test]
+    fn browser_provider_serde_roundtrip_snake_case() {
+        let json = serde_json::to_string(&BrowserProvider::Cdp).unwrap();
+        assert_eq!(json, "\"cdp\"");
+        let back: BrowserProvider = serde_json::from_str("\"auto\"").unwrap();
+        assert_eq!(back, BrowserProvider::Auto);
     }
 
     #[test]
