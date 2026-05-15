@@ -1408,6 +1408,15 @@ impl Crawler {
         })
     }
 
+    /// Wrap the lazily-initialised render pool in a `RenderFetcher` so
+    /// callers consume the render path through the same seam that
+    /// `SpoofFetcher` provides for the HTTP path. Cheap (Arc clone)
+    /// and matches the spoof field convention.
+    #[cfg(feature = "cdp-backend")]
+    fn render_fetcher(&self) -> crate::runner::RenderFetcher {
+        crate::runner::RenderFetcher::new(self.render_pool().clone())
+    }
+
     async fn fire_all(&self, event: HookEvent, ctx: &mut HookContext) -> Result<HookDecision> {
         let rust_decision = self.hooks.fire(event, ctx).await?;
         #[cfg(feature = "lua-hooks")]
@@ -1934,7 +1943,7 @@ impl Crawler {
                 // stay in lockstep.
                 let render_result = if let Some(spec) = self.config.script_spec.as_ref() {
                     match self
-                        .render_pool()
+                        .render_fetcher()
                         .render_with_script(
                             &job.url,
                             &self.config.wait_strategy,
