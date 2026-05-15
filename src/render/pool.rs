@@ -701,6 +701,11 @@ pub struct RenderPool {
     /// Live render-session scope shared by `Crawler` when
     /// `session_scope_auto` demotes scope after challenge/login signals.
     render_scope: Arc<parking_lot::RwLock<crate::config::RenderSessionScope>>,
+    /// Slice 31 — capabilities discovered by the external CDP preflight.
+    /// `None` until preflight runs (or when no external endpoint is
+    /// configured). Read by `ensure_browser` to decide whether to
+    /// attach identity hints to the connection URL.
+    cdp_capabilities: parking_lot::RwLock<Option<crate::render::cdp_capabilities::EndpointCapabilities>>,
 }
 
 impl RenderPool {
@@ -749,6 +754,7 @@ impl RenderPool {
                 crate::antibot::telemetry::TelemetryTracker::new(),
             )),
             render_scope,
+            cdp_capabilities: parking_lot::RwLock::new(None),
         }
     }
 
@@ -1002,6 +1008,11 @@ impl RenderPool {
             let probe = crate::render::cdp_probe::probe(endpoint)
                 .await
                 .map_err(|msg| Error::Render(format!("external CDP preflight failed: {msg}")))?;
+            // Slice 31 — capability detection. Stays vendor-neutral:
+            // we record what the endpoint *supports*, not which vendor
+            // it is. `ensure_browser` reads this to decide whether to
+            // append identity query params.
+            let caps = crate::render::cdp_capabilities::EndpointCapabilities::detect(&probe);
             tracing::info!(
                 event = "provider.selected",
                 provider = crate::config::BrowserProvider::Cdp.as_str(),
@@ -1009,8 +1020,12 @@ impl RenderPool {
                 external_cdp_url = endpoint,
                 ws_debugger_url = probe.web_socket_debugger_url.as_str(),
                 browser = probe.browser.as_str(),
+                endpoint_kind = caps.kind.as_str(),
+                identity_params = caps.identity_params,
+                vendor = caps.vendor.as_deref().unwrap_or(""),
                 "render pool: using external CDP endpoint"
             );
+            *self.cdp_capabilities.write() = Some(caps);
             return Ok(endpoint.to_string());
         }
         let path = self.resolve_chrome_path_async().await?;
@@ -1151,9 +1166,32 @@ impl RenderPool {
                 stealth,
                 ..Default::default()
             };
-            let (browser, mut handler) = Browser::connect_with_config(endpoint, handler_config)
-                .await
-                .map_err(|e| Error::Render(format!("external cdp connect: {e}")))?;
+            // Slice 31 — if the endpoint advertised identity-param
+            // support during preflight, attach high-level identity
+            // hints to the connection URL. Generic CDP endpoints fall
+            // through with `endpoint` unchanged. Capability snapshot
+            // on miss (no preflight ran yet) is treated as generic —
+            // safer default than guessing.
+            let proxy_str = proxy.map(|u| u.to_string());
+            let connect_url = {
+                let caps_guard = self.cdp_capabilities.read();
+                let caps = caps_guard
+                    .clone()
+                    .unwrap_or_else(crate::render::cdp_capabilities::EndpointCapabilities::generic);
+                let hints = crate::render::cdp_capabilities::IdentityHints {
+                    seed: None,
+                    timezone: self.config.timezone.as_deref(),
+                    locale: self.config.locale.as_deref(),
+                    proxy: proxy_str.as_deref(),
+                    geoip: None,
+                };
+                caps.build_connect_url(endpoint, &hints)
+                    .map_err(|e| Error::Render(format!("external cdp connect url: {e}")))?
+            };
+            let (browser, mut handler) =
+                Browser::connect_with_config(connect_url.as_str(), handler_config)
+                    .await
+                    .map_err(|e| Error::Render(format!("external cdp connect: {e}")))?;
             tokio::spawn(async move {
                 while let Some(ev) = handler.next().await {
                     if let Err(e) = ev {
