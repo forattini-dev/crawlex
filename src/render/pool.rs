@@ -706,6 +706,17 @@ pub struct RenderPool {
     /// configured). Read by `ensure_browser` to decide whether to
     /// attach identity hints to the connection URL.
     cdp_capabilities: parking_lot::RwLock<Option<crate::render::cdp_capabilities::EndpointCapabilities>>,
+    /// Slice 32 — per-session calibrated browser fingerprints for the
+    /// external CDP provider. Cache key (`CalibrationKey`) folds in
+    /// every input that legitimately changes the live identity, so a
+    /// change to endpoint / seed / proxy / locale / timezone / profile
+    /// / context produces a fresh slot rather than a stale hit.
+    calibration_cache: Arc<crate::render::calibration::CalibrationCache>,
+    /// Slice 32 — local `__crawlex_calibrate` HTTP origin. Lazily
+    /// bound on first calibration so stock-Chrome runs don't pay the
+    /// listener cost.
+    calibration_origin:
+        tokio::sync::OnceCell<crate::render::calibration::CalibrationOrigin>,
 }
 
 impl RenderPool {
@@ -755,6 +766,142 @@ impl RenderPool {
             )),
             render_scope,
             cdp_capabilities: parking_lot::RwLock::new(None),
+            calibration_cache: Arc::new(crate::render::calibration::CalibrationCache::new()),
+            calibration_origin: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Slice 32 — read-only handle to the calibration cache. Exposed so
+    /// telemetry/tests can introspect it without needing to re-run the
+    /// probe.
+    pub fn calibration_cache(
+        &self,
+    ) -> &Arc<crate::render::calibration::CalibrationCache> {
+        &self.calibration_cache
+    }
+
+    /// Slice 32 — measure (or fetch from cache) the effective browser
+    /// fingerprint for the current external-CDP session. Navigates the
+    /// supplied page to the local `__crawlex_calibrate` origin, runs
+    /// the probe, parses the JSON payload, caches the result keyed on
+    /// `key`, and emits a concise `event="calibration.summary"` log
+    /// line. Cache hits skip the navigation entirely.
+    ///
+    /// The full fingerprint is *only* logged when the env var
+    /// `CRAWLEX_CALIBRATION_REPORT=full` is set, satisfying the "full
+    /// fingerprint report output is available only when explicitly
+    /// requested" criterion.
+    pub async fn ensure_calibrated(
+        &self,
+        page: &Page,
+        key: crate::render::calibration::CalibrationKey,
+    ) -> Result<Arc<crate::render::calibration::EffectiveFingerprint>> {
+        if let Some(hit) = self.calibration_cache.get(&key) {
+            return Ok(hit);
+        }
+        let origin = self
+            .calibration_origin
+            .get_or_try_init(|| async {
+                crate::render::calibration::serve_calibration_origin()
+                    .await
+                    .map_err(|e| {
+                        Error::Render(format!("calibration origin: {e}"))
+                    })
+            })
+            .await?;
+        let calibrate_url = origin.calibrate_url();
+        let nav = NavigateParams::builder()
+            .url(calibrate_url.clone())
+            .build()
+            .map_err(|e| Error::Render(format!("calibration NavigateParams: {e}")))?;
+        page.execute(nav)
+            .await
+            .map_err(|e| Error::Render(format!("calibration navigate: {e}")))?;
+        let params = EvaluateParams::builder()
+            .expression(crate::render::calibration::CALIBRATION_PROBE_JS.to_string())
+            .return_by_value(true)
+            .await_promise(true)
+            .build()
+            .map_err(|e| Error::Render(format!("calibration EvaluateParams: {e}")))?;
+        let res = page
+            .evaluate_expression(params)
+            .await
+            .map_err(|e| Error::Render(format!("calibration evaluate: {e}")))?;
+        let json = match res.value() {
+            Some(v) => v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string()),
+            None => return Err(Error::Render("calibration probe returned no value".into())),
+        };
+        let mut fp = crate::render::calibration::parse_probe(&json)
+            .map_err(Error::Render)?;
+        fp.mismatch_count = crate::render::calibration::count_mismatches(
+            &fp,
+            self.config.locale.as_deref(),
+            self.config.timezone.as_deref(),
+        );
+        if fp.policy.is_empty() {
+            fp.policy = "report-only".to_string();
+        }
+        let summary = crate::render::calibration::CalibrationSummary {
+            browser_product: &fp.browser_product,
+            platform: &fp.platform,
+            locale: &fp.locale,
+            timezone: &fp.timezone,
+            webgl_renderer: if fp.webgl.unmasked_renderer.is_empty() {
+                fp.webgl.renderer.as_str()
+            } else {
+                fp.webgl.unmasked_renderer.as_str()
+            },
+            mismatch_count: fp.mismatch_count,
+            policy: &fp.policy,
+        };
+        let fingerprint_id = key.fingerprint_id();
+        tracing::info!(
+            event = "calibration.summary",
+            fingerprint_id = fingerprint_id.as_str(),
+            browser_product = summary.browser_product,
+            platform = summary.platform,
+            locale = summary.locale,
+            timezone = summary.timezone,
+            webgl_renderer = summary.webgl_renderer,
+            mismatch_count = summary.mismatch_count,
+            policy = summary.policy,
+            "external CDP session calibration"
+        );
+        // Optional full report — opt-in only, never on by default.
+        if std::env::var("CRAWLEX_CALIBRATION_REPORT").as_deref() == Ok("full") {
+            let report =
+                crate::render::calibration::CalibrationCache::format_full_report(&fp);
+            tracing::info!(
+                event = "calibration.report",
+                fingerprint_id = fingerprint_id.as_str(),
+                report = report.as_str(),
+                "external CDP session calibration (full report)"
+            );
+        }
+        Ok(self.calibration_cache.insert(key, fp))
+    }
+
+    /// Slice 32 — assemble the calibration key for the current render.
+    /// Folds in every identity input that should bust the cache.
+    fn calibration_key_for(
+        &self,
+        proxy: Option<&Url>,
+        session_id: &str,
+        ctx_id: &BrowserContextId,
+    ) -> crate::render::calibration::CalibrationKey {
+        let bundle = self.bundle();
+        crate::render::calibration::CalibrationKey {
+            endpoint: self
+                .config
+                .external_cdp_url
+                .clone()
+                .unwrap_or_default(),
+            seed: bundle.canvas_audio_seed.to_string(),
+            proxy: proxy.map(|u| u.to_string()).unwrap_or_default(),
+            locale: self.config.locale.clone().unwrap_or_default(),
+            timezone: self.config.timezone.clone().unwrap_or_default(),
+            profile: bundle.id.clone(),
+            context: format!("{session_id}|{}", ctx_id.inner()),
         }
     }
 
@@ -2919,6 +3066,18 @@ impl RenderPool {
             );
         }
         let page: Page = lease.page().clone();
+        // Slice 32 — external CDP sessions must navigate to the local
+        // `__crawlex_calibrate` origin and capture the effective
+        // browser fingerprint *before* the target. Cached per-session
+        // so warm tabs skip the navigation. Calibration failures are
+        // logged but don't kill the render — the cache simply stays
+        // empty and the next render will retry.
+        if self.config.external_cdp_url.is_some() {
+            let cal_key = self.calibration_key_for(proxy, &session_id, &ctx_id);
+            if let Err(e) = self.ensure_calibrated(&page, cal_key).await {
+                tracing::warn!(?e, "calibration failed; continuing to target without cached fingerprint");
+            }
+        }
         self.restore_session_state(&page, url, &session_id).await?;
 
         // Force the outgoing User-Agent + UA-CH metadata from our active

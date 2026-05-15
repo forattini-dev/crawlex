@@ -2,6 +2,8 @@ pub mod actions;
 pub mod android_profile;
 pub mod ax_snapshot;
 #[cfg(feature = "cdp-backend")]
+pub mod calibration;
+#[cfg(feature = "cdp-backend")]
 pub mod cdp_capabilities;
 #[cfg(feature = "cdp-backend")]
 pub mod cdp_probe;
