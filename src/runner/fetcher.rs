@@ -14,6 +14,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use url::Url;
 
+#[cfg(feature = "cdp-backend")]
+pub mod render;
+#[cfg(feature = "cdp-backend")]
+pub use render::RenderFetcher;
+
 use crate::discovery::assets::SecFetchDest;
 use crate::impersonate::{ImpersonateClient, Response};
 use crate::queue::Job;

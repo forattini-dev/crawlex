@@ -22,6 +22,8 @@ pub mod fetcher;
 pub use challenge::{ChallengeDetector, ChallengeSignal};
 pub use extract::Extractor;
 pub use fetcher::{Fetcher, SpoofFetcher};
+#[cfg(feature = "cdp-backend")]
+pub use fetcher::RenderFetcher;
 
 /// Outcome of running one Job. Returned by value; the `Crawler`
 /// post-processes storage, frontier feed, retry decision, and session
