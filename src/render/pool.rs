@@ -992,15 +992,23 @@ impl RenderPool {
     /// is planned — in that case `Err` is typically ignored by the caller.
     pub async fn preflight(&self) -> Result<String> {
         if let Some(endpoint) = self.config.external_cdp_url.as_deref() {
-            // Slice 29 — structured provider-selected log entry. Keeps
-            // the historical free-form message and adds a stable
-            // `event="provider.selected"` field so downstream log
-            // consumers can filter without parsing the free text.
+            // Slice 30 — probe `/json/version` so an unreachable or
+            // incompatible CDP host fails preflight with an actionable
+            // message instead of surfacing as a generic transport error
+            // on the first render job. Slice 29 added the structured
+            // `event="provider.selected"` log entry; we keep emitting it
+            // once the probe succeeds and enrich it with the resolved
+            // WebSocket URL and browser identity for traceability.
+            let probe = crate::render::cdp_probe::probe(endpoint)
+                .await
+                .map_err(|msg| Error::Render(format!("external CDP preflight failed: {msg}")))?;
             tracing::info!(
                 event = "provider.selected",
                 provider = crate::config::BrowserProvider::Cdp.as_str(),
                 endpoint = endpoint,
                 external_cdp_url = endpoint,
+                ws_debugger_url = probe.web_socket_debugger_url.as_str(),
+                browser = probe.browser.as_str(),
                 "render pool: using external CDP endpoint"
             );
             return Ok(endpoint.to_string());
