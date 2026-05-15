@@ -21,7 +21,7 @@ pub mod extract;
 pub mod fetcher;
 pub use challenge::{ChallengeDetector, ChallengeSignal};
 pub use extract::Extractor;
-pub use fetcher::{AutoFetcher, AutoOutcome, Fetcher, SpoofFetcher};
+pub use fetcher::{AutoFetcher, AutoOutcome, FetchOutput, Fetcher, SpoofFetcher};
 #[cfg(feature = "cdp-backend")]
 pub use fetcher::RenderFetcher;
 
@@ -186,30 +186,32 @@ impl JobRunner {
         let fetch_ms = Some(fetch_started.elapsed());
 
         match fetch_result {
-            Ok(resp) => {
-                let status = resp.status.as_u16();
-                let body_bytes = resp.body.len();
-                self.emit(crate::events::EventKind::FetchCompleted, Some(&resp.final_url));
-                let signal = self.detector.detect(status, &resp.headers, &resp.body);
+            Ok(output) => {
+                let status = output.status();
+                let body_bytes = output.body().len();
+                let final_url_owned = output.final_url().clone();
+                self.emit(crate::events::EventKind::FetchCompleted, Some(&final_url_owned));
+                let headers_cow = output.headers();
+                let signal = self.detector.detect(status, headers_cow.as_ref(), output.body());
                 if signal.is_some() {
                     self.emit(
                         crate::events::EventKind::ChallengeDetected,
-                        Some(&resp.final_url),
+                        Some(&final_url_owned),
                     );
                 }
                 let extract_started = std::time::Instant::now();
                 // Body decoded once; extract reuses the same slice.
-                let body_str = String::from_utf8_lossy(&resp.body).into_owned();
+                let body_str = String::from_utf8_lossy(output.body()).into_owned();
                 let links = self
                     .extractor
-                    .extract_links(&resp.final_url, &body_str)
+                    .extract_links(&final_url_owned, &body_str)
                     .into_iter()
                     .map(|u| u.to_string())
                     .collect::<Vec<_>>();
                 let extract_ms = Some(extract_started.elapsed());
                 self.emit(
                     crate::events::EventKind::ExtractCompleted,
-                    Some(&resp.final_url),
+                    Some(&final_url_owned),
                 );
 
                 let retry = match signal {
@@ -323,23 +325,24 @@ mod tests {
     /// to drive `JobRunner::run` without touching the network or
     /// Chrome.
     struct FakeFetcher {
-        response: parking_lot::Mutex<Option<crate::Result<crate::impersonate::Response>>>,
+        response: parking_lot::Mutex<Option<crate::Result<FetchOutput>>>,
     }
     impl FakeFetcher {
         fn ok(status: u16, headers: HeaderMap, body: &[u8], final_url: Url) -> Arc<Self> {
+            let resp = crate::impersonate::Response {
+                status: StatusCode::from_u16(status).unwrap(),
+                headers,
+                body: Bytes::copy_from_slice(body),
+                final_url,
+                alpn: None,
+                tls_version: None,
+                cipher: None,
+                timings: crate::metrics::NetworkTimings::default(),
+                peer_cert: None,
+                body_truncated: false,
+            };
             Arc::new(Self {
-                response: parking_lot::Mutex::new(Some(Ok(crate::impersonate::Response {
-                    status: StatusCode::from_u16(status).unwrap(),
-                    headers,
-                    body: Bytes::copy_from_slice(body),
-                    final_url,
-                    alpn: None,
-                    tls_version: None,
-                    cipher: None,
-                    timings: crate::metrics::NetworkTimings::default(),
-                    peer_cert: None,
-                    body_truncated: false,
-                }))),
+                response: parking_lot::Mutex::new(Some(Ok(FetchOutput::Http(resp)))),
             })
         }
         fn err(err: crate::Error) -> Arc<Self> {
@@ -354,7 +357,7 @@ mod tests {
             &self,
             _job: &crate::queue::Job,
             _ctx: &SessionContext,
-        ) -> crate::Result<crate::impersonate::Response> {
+        ) -> crate::Result<FetchOutput> {
             self.response.lock().take().expect("fake response set")
         }
     }

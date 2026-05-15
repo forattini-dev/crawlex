@@ -1,19 +1,14 @@
-//! Render fetch adapter (slice 4 of the JobRunner extraction, GH #20).
+//! Render fetch adapter (slice 4 of the JobRunner extraction, GH #20;
+//! widened to honest `FetchOutput::Rendered` in A1, GH #26).
 //!
-//! Thin wrapper over `render::RenderPool` that pins the render path
-//! behind a `Fetcher`-shaped seam. The trait impl returns a synthetic
-//! `impersonate::Response` built from the rendered page, so the same
-//! `dyn Fetcher` surface that `SpoofFetcher` satisfies works for render
-//! callers too. Slice #21 (`AutoFetcher`) and #22 (`JobRunner::run`)
-//! consume this seam; slice #20 only routes the existing
-//! `render_with_script` call site through `RenderFetcher`.
+//! Thin wrapper over `render::RenderPool`. The trait impl now returns
+//! `FetchOutput::Rendered(Box<RenderedPage>)` honestly — no more
+//! "intentionally unimplemented" guard. The basic render path uses a
+//! default `ScriptSpec` (no steps); callers that need scripted render
+//! continue to use `render_with_script` directly for the full
+//! `(RenderedPage, RunOutcome)` tuple.
 //!
-//! Render-specific outputs (Web Vitals, screenshots, ScriptSpec
-//! outcomes) bypass the trait surface — callers that need them use
-//! `RenderFetcher::render_with_script` directly.
-//!
-//! Render pool ownership and laziness stay with `Crawler`. The
-//! `RenderFetcher` is a cheap newtype around `Arc<RenderPool>`.
+//! Render pool ownership and laziness stay with `Crawler`.
 
 #![cfg(feature = "cdp-backend")]
 
@@ -22,10 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use url::Url;
 
-use crate::impersonate::Response;
 use crate::queue::Job;
 use crate::render::{RenderPool, RenderedPage};
-use crate::runner::{Fetcher, SessionContext};
+use crate::runner::{FetchOutput, Fetcher, SessionContext};
 use crate::Result;
 
 pub struct RenderFetcher {
@@ -65,23 +59,33 @@ impl RenderFetcher {
 
 #[async_trait]
 impl Fetcher for RenderFetcher {
-    /// Trait-level render: a minimal navigation that returns a
-    /// synthetic `impersonate::Response` (status 200, rendered HTML
-    /// body, final URL). Suitable for callers that only need the page
-    /// content — anything that depends on Web Vitals, screenshots, or
-    /// ScriptSpec outcomes must call `render_with_script` directly.
-    async fn fetch(&self, _job: &Job, _ctx: &SessionContext) -> Result<Response> {
-        // Slice #20 does not provide a behaviour-only trait fetch:
-        // every real call site goes through `render_with_script`, and
-        // synthesising a `Response` without a ScriptSpec would either
-        // change render semantics or duplicate the render dispatch.
-        // Returning an explicit error keeps the trait surface honest
-        // until slice #22 widens `FetchSuccess` to carry rendered pages.
-        Err(crate::Error::Render(
-            "RenderFetcher::fetch (trait) is intentionally unimplemented; \
-             use render_with_script. See PRD #15 slice 4."
-                .into(),
-        ))
+    /// Trait-level render: drives `render_with_script` with a default
+    /// (empty) `ScriptSpec` and returns the resulting `RenderedPage`
+    /// wrapped in `FetchOutput::Rendered`. Callers that need scripted
+    /// render plus the per-step `RunOutcome` use `render_with_script`
+    /// directly to get the richer tuple.
+    async fn fetch(&self, job: &Job, _ctx: &SessionContext) -> Result<FetchOutput> {
+        let script = empty_script_spec();
+        let wait = crate::wait_strategy::WaitStrategy::default();
+        let (page, _outcome) = self
+            .pool
+            .render_with_script(&job.url, &wait, &script, None, None, None)
+            .await?;
+        Ok(FetchOutput::Rendered(Box::new(page)))
+    }
+}
+
+/// Empty `ScriptSpec` — version-correct, no steps. Used by the trait
+/// `fetch` to drive a basic render without scripted automation.
+fn empty_script_spec() -> crate::script::ScriptSpec {
+    crate::script::ScriptSpec {
+        version: crate::script::SCRIPT_SPEC_VERSION,
+        defaults: Default::default(),
+        selectors: Default::default(),
+        steps: Vec::new(),
+        captures: Vec::new(),
+        assertions: Vec::new(),
+        exports: Default::default(),
     }
 }
 
