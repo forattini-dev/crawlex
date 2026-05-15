@@ -1,4 +1,4 @@
-# Slice 26: Feature parity matrix doc vs Scrapling [HITL]
+# Slice 26: Feature parity matrix doc vs Scrapling [AFK]
 
 ## Parent
 
@@ -6,7 +6,7 @@
 
 ## What to build
 
-Publish a feature parity matrix at `docs/comparisons/scrapling.md` listing every Scrapling claim and crawlex's status (parity, superior, intentionally absent). HITL because it's a public marketing artifact — final wording requires human approval and we want to ensure no overclaim.
+Publish a feature parity matrix at `docs/comparisons/scrapling.md` listing every Scrapling claim and crawlex's status (parity, superior, intentionally absent). AFK note: was originally HITL because it's a public marketing artifact — final wording requires human approval and we want to ensure no overclaim.
 
 ## Acceptance criteria
 
