@@ -17,6 +17,19 @@ pub struct ChallengeSignal {
 }
 
 /// Pure detector. Holds no state; cheap to construct.
+///
+/// Superseded by [`crate::fingerprint::target::sources::AntibotMarkerSource`]
+/// in slice B5 (PRD forattini-dev/crawlex#25). The new source ports
+/// all logic verbatim (same 6 vendor sigs, same 403/503 gate, same
+/// 16 KiB cap, same generic JS-stub / noscript fallback) into the
+/// unified `Fingerprinter` engine. `ChallengeDetector` is kept for
+/// one release while in-tree callers (`policy::engine`) migrate to
+/// `Fingerprinter::analyze_hot` + `report.antibot` — that swap lands
+/// in B14. Removed in B15 alongside ADR-0003.
+#[deprecated(
+    since = "1.0.5",
+    note = "use crate::fingerprint::target::sources::AntibotMarkerSource via Fingerprinter::analyze_hot; ChallengeDetector is removed in B15"
+)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ChallengeDetector;
 
