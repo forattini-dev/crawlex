@@ -13,8 +13,11 @@ pub mod header;
 pub mod json_ld;
 pub mod link_rel;
 pub mod meta_tag;
+pub mod peer_cert;
 pub mod script_src;
 pub mod status_pattern;
+pub mod timing_pattern;
+pub mod tls_server;
 pub use alt_svc::AltSvcSource;
 pub use body_marker::BodyMarkerSource;
 pub use cookie::CookieSource;
@@ -22,8 +25,11 @@ pub use header::HeaderSource;
 pub use json_ld::JsonLdSource;
 pub use link_rel::LinkRelSource;
 pub use meta_tag::MetaTagSource;
+pub use peer_cert::PeerCertSource;
 pub use script_src::ScriptSrcSource;
 pub use status_pattern::StatusPatternSource;
+pub use timing_pattern::TimingPatternSource;
+pub use tls_server::TlsServerHelloSource;
 
 /// One detector. `analyze` is synchronous; the engine handles any
 /// async work (DNS, RDAP, oracle) before invoking sources.
