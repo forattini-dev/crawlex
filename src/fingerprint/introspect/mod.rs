@@ -7,10 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod catalog;
 pub mod ja3;
 pub mod ja4;
 pub mod h2_fp;
 
+pub use catalog::{diff_against, lookup_by_name};
 pub use h2_fp::compute_h2_settings_fingerprint;
 pub use ja3::compute_ja3;
 pub use ja4::compute_ja4;
