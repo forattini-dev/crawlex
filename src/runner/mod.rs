@@ -16,7 +16,9 @@
 
 use std::time::Duration;
 
+pub mod extract;
 pub mod fetcher;
+pub use extract::Extractor;
 pub use fetcher::{Fetcher, SpoofFetcher};
 
 /// Outcome of running one Job. Returned by value; the `Crawler`

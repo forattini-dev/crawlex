@@ -2674,7 +2674,7 @@ impl Crawler {
                 let html_for_parse = html;
                 let mut links = tokio::task::spawn_blocking(move || {
                     let doc = scraper::Html::parse_document(&html_for_parse);
-                    crate::discovery::links::extract_links_from_document(&url_for_parse, &doc)
+                    crate::runner::Extractor::new().extract_links_from_document(&url_for_parse, &doc)
                 })
                 .await
                 .map_err(|e| Error::Other(anyhow::anyhow!("prefetch html parse join: {e}")))?;
@@ -2787,7 +2787,7 @@ impl Crawler {
                     &target_root,
                 );
                 let links =
-                    crate::discovery::links::extract_links_from_document(&url_for_parse, &doc);
+                    crate::runner::Extractor::new().extract_links_from_document(&url_for_parse, &doc);
                 (asset_refs, links, tech_report)
             })
             .await
