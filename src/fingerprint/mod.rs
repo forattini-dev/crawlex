@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 pub mod detection;
+pub mod introspect;
 pub mod report;
 pub mod target;
 
