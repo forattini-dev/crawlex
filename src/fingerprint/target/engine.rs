@@ -9,7 +9,8 @@ use std::sync::Arc;
 use crate::fingerprint::detection::{Category, Detection, Tier};
 use crate::fingerprint::report::{FingerprintReport, Tiers};
 use crate::fingerprint::target::sources::{
-    BodyMarkerSource, CookieSource, HeaderSource, JsonLdSource, MetaTagSource, Source,
+    AltSvcSource, BodyMarkerSource, CookieSource, HeaderSource, JsonLdSource, LinkRelSource,
+    MetaTagSource, ScriptSrcSource, Source, StatusPatternSource,
 };
 use crate::fingerprint::target::TargetContext;
 
@@ -39,6 +40,10 @@ impl Engine {
         e.register(Arc::new(BodyMarkerSource::new()));
         e.register(Arc::new(MetaTagSource::new()));
         e.register(Arc::new(JsonLdSource::new()));
+        e.register(Arc::new(ScriptSrcSource::new()));
+        e.register(Arc::new(LinkRelSource::new()));
+        e.register(Arc::new(AltSvcSource::new()));
+        e.register(Arc::new(StatusPatternSource::new()));
         e
     }
 
@@ -113,10 +118,11 @@ mod tests {
 
     #[test]
     fn defaults_register_all_hot_sources() {
-        // 5 Hot sources after B2: header, cookie, body_marker,
-        // meta_tag, json_ld.
+        // 9 Hot sources after B3: header, cookie, body_marker,
+        // meta_tag, json_ld, script_src, link_rel, alt_svc,
+        // status_pattern.
         let e = Engine::with_defaults();
-        assert_eq!(e.hot_source_count(), 5);
+        assert_eq!(e.hot_source_count(), 9);
     }
 
     #[test]
