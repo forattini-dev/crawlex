@@ -2,7 +2,7 @@
 //!
 //! Gated entirely on the `CRAWLEX_NATIVE_PROVIDER_VALIDATION` env var. CI
 //! does NOT run this — the harness assumes a user-managed CDP endpoint
-//! (CloakBrowser, Camoufox, etc.) is reachable. Stock-Chromium runs are
+//! (, , etc.) is reachable. Stock-Chromium runs are
 //! also opt-in so the suite is one consistent gated path rather than two
 //! permission models.
 //!

@@ -127,7 +127,7 @@ pub struct StealthConfig {
     /// Worker-scope variant of the stealth shim. When set, the handler
     /// injects this source via `Runtime.evaluate` on every
     /// `Target.attachedToTarget` event whose target type is `worker`,
-    /// `shared_worker`, or `service_worker` (Camoufox port Sprint 3 S3.1).
+    /// `shared_worker`, or `service_worker`.
     /// Detectors increasingly move fingerprint collection off-thread; a
     /// shim that only runs in the main frame leaves `navigator.userAgent`
     /// + `AudioContext.sampleRate` + `WebGL` consistent on the page but
@@ -327,7 +327,7 @@ impl BrowserConfigBuilder {
         self
     }
 
-    /// Install the worker-scope stealth shim (Camoufox port S3.1). The
+    /// Install the worker-scope stealth shim. The
     /// rendered source is forwarded to every `worker`/`shared_worker`/
     /// `service_worker` target the page spawns, before the worker exits
     /// the `waitForDebuggerOnStart` pause — so persona coherence is

@@ -127,7 +127,7 @@ pub struct PersonaProfile {
     /// `navigator.mediaDevices.enumerateDevices()` surface counts. Real
     /// desktops commonly expose multiple microphones (built-in + headset +
     /// virtual/bluetooth) — our previous 1 mic / 1 cam / 1 speaker default
-    /// is itself a tell. Camoufox ships 3/1/1 as default; we let each
+    /// is itself a tell. ships 3/1/1 as default; we let each
     /// persona override so mobile can ship 1/1/1 and high-end workstations
     /// can ship higher counts without a new code path.
     pub media_mic_count: u8,

@@ -1558,7 +1558,7 @@ impl RenderPool {
         // world instead of main. See `BrowserConfigBuilder::stealth_runtime_enable_skip`
         // for the full contract. Port of rebrowser-patches runtime-enable-fix.
         builder = builder.stealth_runtime_enable_skip(true);
-        // Camoufox port S3.1: install worker-scope shim so Web/Shared/
+        // install worker-scope shim so Web/Shared/
         // Service Workers receive the same persona coherence as the main
         // frame. The `Target.attachedToTarget` handler in the CDP layer
         // injects this via `Runtime.evaluate` before releasing the
@@ -1636,7 +1636,7 @@ impl RenderPool {
                             // the worker-scope shim runs through the
                             // CDP `Target.attachedToTarget` handler in
                             // `chrome::handler::target.rs` instead
-                            // (Camoufox port S3.1 — wired via
+                            // (wired via
                             // `BrowserConfigBuilder::stealth_worker_shim`).
                             if let Err(e) = p.execute(install.clone()).await {
                                 tracing::debug!(target = ?id, ?e, "shim install on child target failed (likely worker — handled via Runtime.evaluate)");

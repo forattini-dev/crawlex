@@ -18,7 +18,7 @@ use super::selectors::ElementHandle;
 use super::similarity::{fingerprint, score, Fingerprint};
 use super::TreeHandle;
 
-/// Default similarity threshold (matches Scrapling).
+/// Default similarity threshold (matches ).
 pub const DEFAULT_THRESHOLD: f32 = 0.2;
 
 /// Result of an adaptive query.

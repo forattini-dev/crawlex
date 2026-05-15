@@ -1,7 +1,7 @@
 //! HTML cleaner for "main content only" extraction.
 //!
-//! Ported from Firecrawl `apps/api/native/src/html.rs::_transform_html_inner`
-//! (MIT). We keep the cleaner but drop Firecrawl's OMCE cross-page signature
+//! Ported from  `apps/api/native/src/html.rs::_transform_html_inner`
+//! (MIT). We keep the cleaner but drop 's OMCE cross-page signature
 //! machinery and metadata/image extraction — those belong to the Phase 5
 //! ExtractSpec subsystem and would inflate this module past its one job.
 //!
@@ -23,7 +23,7 @@
 use kuchikiki::{parse_html, traits::TendrilSink};
 use url::Url;
 
-/// 42 CSS selectors Firecrawl curated to trim page chrome (header, footer,
+/// 42 CSS selectors  curated to trim page chrome (header, footer,
 /// nav, sidebars, ads, cookie bars, share widgets, breadcrumbs). Kept
 /// verbatim from the upstream list so behaviour stays bug-compatible.
 pub const EXCLUDE_NON_MAIN_TAGS: &[&str] = &[

@@ -1,4 +1,4 @@
-//! Tests for the Firecrawl-ported HTML cleaner.
+//! Tests for the -ported HTML cleaner.
 
 use crawlex::extract::html_clean::{clean_html, remove_skip_to_content_links, CleanOptions};
 

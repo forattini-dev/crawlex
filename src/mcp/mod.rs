@@ -1,6 +1,6 @@
 //! Slice 24 — `crawlex mcp` JSON-RPC 2.0 server over stdio.
 //!
-//! Exposes a Scrapling-shaped tool surface to LLM hosts. The dispatcher
+//! Exposes a -shaped tool surface to LLM hosts. The dispatcher
 //! is intentionally split from the I/O loop so the integration test can
 //! drive `dispatch` directly with a stub fetcher and assert on the
 //! returned `serde_json::Value` — no process spawning required.

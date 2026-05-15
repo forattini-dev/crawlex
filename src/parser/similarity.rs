@@ -1,6 +1,6 @@
 // Element fingerprint + similarity scoring (pure, no I/O).
 //
-// Port of Scrapling's adaptive-element comparison: a `Fingerprint`
+// Port of 's adaptive-element comparison: a `Fingerprint`
 // captures tag, attribute subsets (id / class / href / other), a text
 // hash, the parent-chain tag sequence, and the sibling position. Two
 // fingerprints are compared by a weighted sum of per-feature scores;
@@ -159,7 +159,7 @@ fn stable_hash(s: &str) -> u64 {
 
 // ---------- scoring ----------
 
-// Weights sum to 1.0. Tuned to mirror Scrapling's adaptive weights:
+// Weights sum to 1.0. Tuned to mirror 's adaptive weights:
 // tag/id/class dominate; text + parent chain are tie-breakers; sibling
 // position is the lightest signal.
 const W_TAG: f32 = 0.20;

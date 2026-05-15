@@ -1,6 +1,6 @@
 //! Tests for URL permutations and the integrated Dedupe behaviour.
 //!
-//! Invariants from Firecrawl `generateURLPermutations`:
+//! Invariants from  `generateURLPermutations`:
 //!   1. Non-empty.
 //!   2. Idempotent (apply twice → same set).
 //!   3. No overlap between distinct-input URLs that are not aliases.

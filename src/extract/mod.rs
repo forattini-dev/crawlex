@@ -1,6 +1,6 @@
 //! Content extraction and link filtering.
 //!
-//! This module hosts logic ported from Firecrawl's `apps/api/native/src/`
+//! This module hosts logic ported from 's `apps/api/native/src/`
 //! (MIT-licensed; see `/NOTICE`). We picked the parts that directly improve
 //! crawlex's own weaker implementations:
 //!
@@ -10,7 +10,7 @@
 //!   "recurse" (follow another XML) and "process" (queue URLs).
 //!
 //! The originals live at:
-//!   references/firecrawl/apps/api/native/src/crawler.rs
+//!   
 //!
 //! We strip NAPI/FFI wiring, use our crate's error and URL types, and extend
 //! the filter API with a `Reason` enum so callers can surface denial reasons

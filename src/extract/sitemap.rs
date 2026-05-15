@@ -1,6 +1,6 @@
 //! XML sitemap + sitemapindex parser.
 //!
-//! Ported from Firecrawl `apps/api/native/src/crawler.rs` (MIT). Emits a
+//! Ported from  `apps/api/native/src/crawler.rs` (MIT). Emits a
 //! structured `SitemapProcessingResult` so callers can decide between
 //! "recurse into another .xml" and "process these URLs as regular jobs".
 //!

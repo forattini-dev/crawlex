@@ -2926,7 +2926,7 @@ mod browser_provider_tests {
     fn resolve_rejects_unknown_value() {
         let _g = env_guard();
         clear_env();
-        let err = resolve_browser_provider(Some("camoufox")).unwrap_err();
+        let err = resolve_browser_provider(Some("bogus_provider")).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("stock|cdp|auto"), "{msg}");
     }
@@ -3053,10 +3053,10 @@ mod browser_provider_tests {
     fn resolve_provider_fallback_rejects_unknown_token() {
         let _g = env_guard();
         clear_env();
-        let err = resolve_provider_fallback(true, Some("stock,camoufox")).unwrap_err();
+        let err = resolve_provider_fallback(true, Some("stock,bogus_provider")).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("stock|cdp|auto"), "{msg}");
-        assert!(msg.contains("camoufox"), "{msg}");
+        assert!(msg.contains("bogus_provider"), "{msg}");
     }
 
     #[test]

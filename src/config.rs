@@ -1269,7 +1269,7 @@ mod tests {
         );
         assert_eq!(BrowserProvider::parse("CDP"), Some(BrowserProvider::Cdp));
         assert_eq!(BrowserProvider::parse(" auto "), Some(BrowserProvider::Auto));
-        assert_eq!(BrowserProvider::parse("camoufox"), None);
+        assert_eq!(BrowserProvider::parse("bogus_provider"), None);
         assert_eq!(BrowserProvider::parse(""), None);
     }
 

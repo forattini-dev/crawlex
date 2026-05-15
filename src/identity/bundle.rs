@@ -110,7 +110,7 @@ pub struct IdentityBundle {
     #[serde(default = "default_fonts_json")]
     pub fonts_json: String,
 
-    /// `navigator.mediaDevices.enumerateDevices()` surface counts. Camoufox
+    /// `navigator.mediaDevices.enumerateDevices()` surface counts. 
     /// research: a single mic / single speaker response is itself a
     /// tell — real laptops expose built-in + headset + virtual. These
     /// drive the §23 shim. See leak #45.

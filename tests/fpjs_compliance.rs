@@ -264,12 +264,12 @@ fn shim_is_syntactically_plausible() {
 }
 
 // --------------------------------------------------------------
-// Camoufox port — Sprint 1/2/3 sections.
+//  — Sprint 1/2/3 sections.
 // --------------------------------------------------------------
 
 #[test]
 fn shim_perf_now_clamps_to_chrome_non_coi_grain() {
-    // Camoufox research: Chrome non-COI clamps to 100 µs (0.1 ms), not 5 µs.
+    // Chrome non-COI clamps to 100 µs (0.1 ms), not 5 µs.
     // A 5 µs grain is itself a tell.
     assert!(
         SHIM.contains("const GRAIN = 0.1;"),
@@ -298,7 +298,7 @@ fn shim_audio_buffer_get_channel_data_is_shimmed() {
 
 #[test]
 fn shim_canvas_preserves_zero_channels() {
-    // Camoufox rule: skip alpha, walk RGB, nudge first non-zero. Guarantees
+    // rule: skip alpha, walk RGB, nudge first non-zero. Guarantees
     // `clearRect + getImageData` returns all zeros.
     assert!(
         SHIM.contains("if (v === 0) continue;"),
@@ -383,7 +383,7 @@ fn shim_webrtc_scrub_section_present() {
 
 #[test]
 fn worker_shim_uses_globalthis_safe_sections() {
-    // Camoufox port S3.1: render_worker_shim_from_bundle must produce a
+    // render_worker_shim_from_bundle must produce a
     // worker-scope shim that retains globalThis-accessible sections
     // (navigator, AudioContext, performance, WebRTC) but strips DOM-only
     // ones. This is a static guard; the live test exercises the runtime.

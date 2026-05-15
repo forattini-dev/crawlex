@@ -1,4 +1,4 @@
-//! Tests for the sitemap XML processor ported from Firecrawl.
+//! Tests for the sitemap XML processor ported from .
 
 use crawlex::extract::sitemap::{process_sitemap, SitemapAction, SitemapError};
 

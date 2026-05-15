@@ -112,7 +112,7 @@ struct ShimSubstitutions<'a> {
     fonts_json: &'a str,
     gpu_vendor_keyword: &'a str,
     /// `navigator.mediaDevices.enumerateDevices()` surface counts (§23).
-    /// Camoufox research: 1/1/1 is a tell — desktops expose built-in +
+    /// 1/1/1 is a tell — desktops expose built-in +
     /// virtual/bluetooth. Per-persona counts carried in `IdentityBundle`.
     media_mic_count: u8,
     media_cam_count: u8,
@@ -489,7 +489,7 @@ fn apply_overrides<'a>(
 /// `HTMLCanvasElement`, `window.matchMedia`, etc. don't exist.
 ///
 /// Used by the CDP `Target.attachedToTarget` handler to inject persona
-/// coherence into worker globals before any user script runs (Camoufox port
+/// coherence into worker globals before any user script runs (
 /// Sprint 3 S3.1).
 pub fn render_worker_shim_from_bundle(bundle: &IdentityBundle) -> String {
     render_worker_shim_from_bundle_with_calibration(bundle, None)

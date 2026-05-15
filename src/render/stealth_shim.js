@@ -607,7 +607,7 @@
           return r;
         };
       }
-      // isEnabled spoof (Camoufox §MakeIsEnabledMap): Chrome's
+      // isEnabled spoof: Chrome's
       // `gl.isEnabled(cap)` returns the per-cap default state at
       // context creation. Headless sometimes reports SCISSOR_TEST=true
       // because the rendering pipeline is pre-warmed differently — a
@@ -693,7 +693,7 @@
       if (window.__crawlex_seed__ === 0) window.__crawlex_seed__ = 0x1779;
     }
     const stride = 23 + ((window.__crawlex_seed__ >> 8) & 0x1f);
-    // Camoufox-style per-pixel perturbation: for each selected pixel, walk
+    // per-pixel per-pixel perturbation: for each selected pixel, walk
     // R,G,B (skip alpha at offset 3), find the first channel that is NOT
     // zero, and nudge it by ±1 (bounded [0, 255]). Pure-zero pixels stay
     // zero, which preserves the CreepJS "clearRect + getImageData returns
@@ -840,7 +840,7 @@
     // AudioBuffer direct-read path. FingerprintJS (and several commercial
     // audio-FP stacks) extract samples through `getChannelData` and the
     // newer `copyFromChannel` API without ever calling `startRendering`,
-    // so the OfflineAudioContext hook above would miss them. Camoufox
+    // so the OfflineAudioContext hook above would miss them. 
     // notes Brave's 0.1-0.2% noise was defeated by sampling both points;
     // we apply a seeded LCG-style multiplicative jitter in [0.996, 1.004]
     // plus a tiny non-linear polynomial correction so the transform isn't
@@ -1380,7 +1380,7 @@
   // `navigator.mediaDevices.enumerateDevices()`. A real desktop rig
   // always has at least a default mic + default speaker, plus typically
   // a built-in + headset + virtual/bluetooth interface — `1 mic / 1 cam
-  // / 1 speaker` is itself a tell (Camoufox research). Per-persona
+  // / 1 speaker` is itself a tell. Per-persona
   // counts flow from `IdentityBundle.media_{mic,cam,speaker}_count`.
   // `deviceId`/`label` stay empty because real Chrome gates those
   // behind a `getUserMedia` permission grant. `getUserMedia` itself is
@@ -1586,11 +1586,11 @@
 
   // @worker-skip-start
   // ============================================================
-  // 28. TextMetrics / measureText jitter (Camoufox HarfBuzz analogue).
+  // 28. TextMetrics / measureText jitter (HarfBuzz analogue).
   //
   // Font-metric fingerprinting hashes `ctx.measureText(str).width` plus
   // the `actualBoundingBox*` / `fontBoundingBox*` / `emHeight*` family
-  // across a catalog of test strings. Camoufox perturbs glyph advances
+  // across a catalog of test strings. perturbs glyph advances
   // at the HarfBuzz shaping layer (~0-0.1 px per glyph, seeded). We
   // can't patch shaping, so we apply a seeded multiplicative jitter in
   // [0.9990, 1.0010] — invisible to layout (0.1 %), detectable only by
@@ -1667,7 +1667,7 @@
   // @worker-skip-end
 
   // ============================================================
-  // 29. WebRTC SDP/ICE/getStats scrub (Camoufox + IP-leak mitigation).
+  // 29. WebRTC SDP/ICE/getStats scrub.
   //
   // `new RTCPeerConnection().createOffer()` plus a follow-up
   // `setLocalDescription({})` generates an SDP blob that, by default,

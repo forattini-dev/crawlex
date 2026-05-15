@@ -5,7 +5,7 @@ use std::io::Read;
 use crate::{Error, Result};
 
 /// Decode response bytes to UTF-8 `String` using a 3-tier charset ladder
-/// (Firecrawl `engines/fetch/index.ts::decodeHtmlBuffer`, MIT):
+/// ( `engines/fetch/index.ts::decodeHtmlBuffer`, MIT):
 ///
 /// 1. `Content-Type: ...; charset=X` wins when present.
 /// 2. Otherwise, scan the first 1 KiB for `<meta charset="X">` or

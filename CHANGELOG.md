@@ -128,10 +128,10 @@ require a major bump.
   - WebGL — vendor, renderer, parameters, extensions list,
     `getShaderPrecisionFormat`, `getContextAttributes`, `isEnabled` defaults
   - Canvas 2D — deterministic per-channel **zero-preserving** noise
-    (Camoufox port; passes CreepJS clear-canvas invariant)
+
   - AudioContext / OfflineAudioContext — `Analyser`, `startRendering`,
     **`AudioBuffer.getChannelData` + `copyFromChannel`** with seeded LCG
-    + non-linear polynomial perturbation (Camoufox port)
+    + non-linear polynomial perturbation
   - `Function.prototype.toString` proxy keeps overrides looking native
   - `Notification.requestPermission` denied → default coercion
   - WebGPU adapter coherence
@@ -141,23 +141,23 @@ require a major bump.
   - Window inner / outer geometry — scrollbar shape per persona
   - `requestAnimationFrame` 1 Hz throttle when document hidden
   - **`performance.now()` clamp at 100 µs (Chrome non-COI grain) + xorshift32
-    sub-grain jitter**, replacing the previous 5 µs tell (Camoufox port)
+    sub-grain jitter**, replacing the previous 5 µs tell
   - `AudioContext.sampleRate` pinned per persona
   - **`navigator.mediaDevices.enumerateDevices` + `getUserMedia` with
-    persona-driven mic / cam / speaker counts** (Camoufox port)
+    persona-driven mic / cam / speaker counts**
   - `speechSynthesis.getVoices` per-OS list
   - Font-list coherence
   - `chrome.runtime.id` / `sendMessage` extension-hint shape
   - Web Worker concurrency ceiling matched to `hardwareConcurrency`
   - **`CanvasRenderingContext2D.measureText` / `TextMetrics` 0.1 % seeded
     multiplicative jitter across 12 metric fields** with FNV-1a 32-bit
-    hash for `(string, font)` determinism (Camoufox HarfBuzz analogue)
+    hash for `(string, font)` determinism (HarfBuzz analogue)
   - **WebRTC SDP / ICE / `getStats()` scrub** — strips `a=candidate` lines
     with private IPv4 (10/127/169.254/192.168/172.16-31) or IPv6 link-local
     (fc/fd/fe80/::1), filters `onicecandidate`, sanitizes `local-candidate`
-    rows in `getStats()` (Camoufox port)
+    rows in `getStats()`
 
-- **Worker auto-attach** (Camoufox port S3.1) — same persona shim runs in
+- **Worker auto-attach** — same persona shim runs in
   every dedicated / shared / service worker spawned by the page, via CDP
   `Target.setAutoAttach { flatten: true, waitForDebuggerOnStart: true }` +
   per-session `Runtime.evaluate` before `Runtime.runIfWaitingForDebugger`.

@@ -35,7 +35,7 @@ Standard crawlers fail on the first Cloudflare wall. `crawlex` arrives the way *
 <tr><td>🎭 <strong>JS fingerprint</strong></td><td>29-section stealth shim: <code>navigator</code>, <code>chrome.*</code>, permissions, plugins, screen, timezone, battery, WebGL (vendor / params / extensions), canvas (zero-preserving noise), AudioContext (FFT + offline render), <code>Function.prototype.toString</code> proxy, WebGPU, <code>performance.memory</code>, sensors, iframe, requestAnimationFrame throttle, <code>performance.now()</code> 100µs grain, mediaDevices, fonts, WebRTC SDP/ICE/getStats scrub</td></tr>
 <tr><td>🤖 <strong>Behavior</strong></td><td>Mouse jitter, scroll cadence, dwell time, idle drift — coherent <code>motion::</code> profiles per persona</td></tr>
 <tr><td>📦 <strong>Catalog</strong></td><td>30 Chrome stable × 30 Chromium × 20 Firefox × Edge × Safari fingerprints. Era-fallback resolution: ask for <code>chrome-149-linux</code>, get the closest captured profile</td></tr>
-<tr><td>🛠️ <strong>Worker scope</strong></td><td>Same shim auto-attached to dedicated / shared / service workers via CDP <code>Target.setAutoAttach</code> — Camoufox port</td></tr>
+<tr><td>🛠️ <strong>Worker scope</strong></td><td>Same shim auto-attached to dedicated / shared / service workers via CDP <code>Target.setAutoAttach</code></td></tr>
 </table>
 
 → Validated against [BrowserScan](https://browserscan.net), [CreepJS](https://abrahamjuliot.github.io/creepjs/), [Sannysoft](https://bot.sannysoft.com/), [tls.peet.ws](https://tls.peet.ws), [ja4db.com](https://ja4db.com).

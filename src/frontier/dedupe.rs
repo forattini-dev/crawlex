@@ -8,7 +8,7 @@
 //! normalizes a URL and inserts **every canonical permutation**
 //! (`{http,https}×{www.,bare}×{/,/index.html,/index.htm,/index.php,∅}`) so we never
 //! re-crawl the same page under a different URL spelling. Ported
-//! conceptually from Firecrawl's `generateURLPermutations`
+//! conceptually from 's `generateURLPermutations`
 //! (`apps/api/src/lib/crawl-redis.ts`).
 
 use growable_bloom_filter::GrowableBloom;

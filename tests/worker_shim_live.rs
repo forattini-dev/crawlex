@@ -1,5 +1,5 @@
 //! Live verification that the stealth shim flows into Web Worker scopes
-//! (Camoufox port Sprint 3 S3.1).
+//!.
 //!
 //! The fingerprint vector: detector spawns `new Worker(...)` and queries
 //! `navigator.userAgent` (or `AudioContext.sampleRate`, etc.) from inside.

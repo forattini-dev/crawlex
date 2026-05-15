@@ -1,7 +1,7 @@
 //! URL allow/deny list with domain, file-extension, subdomain,
 //! social-media, robots.txt and regex include/exclude gates.
 //!
-//! Ported from Firecrawl `apps/api/native/src/crawler.rs` (MIT). The rules
+//! Ported from  `apps/api/native/src/crawler.rs` (MIT). The rules
 //! and their ordering are kept identical so we stay bug-compatible with the
 //! canonical behaviour crawler operators expect; changes are:
 //!   * strip NAPI bindings;
@@ -16,7 +16,7 @@ use texting_robots::Robot;
 use url::Url;
 
 /// Extensions we treat as non-HTML assets; never enqueue a link ending in
-/// one of these. Matches Firecrawl's FILE_EXTENSIONS list.
+/// one of these. Matches 's FILE_EXTENSIONS list.
 static FILE_EXTENSIONS: &[&str] = &[
     ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".ico", ".svg", ".tiff", ".zip", ".exe",
     ".dmg", ".mp4", ".mp3", ".wav", ".pptx", ".xlsx", ".avi", ".flv", ".woff", ".ttf", ".woff2",
@@ -82,7 +82,7 @@ impl DenyReason {
     }
 }
 
-/// Parameters for [`filter_links`]. Mirrors Firecrawl's `FilterLinksCall`
+/// Parameters for [`filter_links`]. Mirrors 's `FilterLinksCall`
 /// minus the FFI object shape.
 pub struct FilterLinksInput<'a> {
     pub links: Vec<String>,

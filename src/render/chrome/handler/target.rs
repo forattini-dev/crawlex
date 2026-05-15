@@ -307,7 +307,7 @@ impl Target {
 
             // `Target` events
             CdpEvent::TargetAttachedToTarget(ev) => {
-                // Camoufox port S3.1: when the new target is a worker
+                // when the new target is a worker
                 // (dedicated/shared/service) and we have a worker-scope
                 // shim configured, push it via Runtime.evaluate on the
                 // worker session BEFORE releasing the debugger pause —
