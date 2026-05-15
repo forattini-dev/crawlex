@@ -16,6 +16,9 @@
 
 use std::time::Duration;
 
+pub mod fetcher;
+pub use fetcher::{Fetcher, SpoofFetcher};
+
 /// Outcome of running one Job. Returned by value; the `Crawler`
 /// post-processes storage, frontier feed, retry decision, and session
 /// state commit.
