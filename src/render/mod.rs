@@ -2,6 +2,8 @@ pub mod actions;
 pub mod android_profile;
 pub mod ax_snapshot;
 #[cfg(feature = "cdp-backend")]
+pub mod cdp_probe;
+#[cfg(feature = "cdp-backend")]
 pub mod chrome;
 #[cfg(feature = "cdp-backend")]
 pub mod chrome_fetcher;

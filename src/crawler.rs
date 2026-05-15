@@ -991,6 +991,16 @@ impl Crawler {
             match self.render_pool().preflight().await {
                 Ok(_) => {}
                 Err(e) => {
+                    // Slice 30 — an external CDP endpoint is operator-asserted
+                    // infrastructure: if the probe says the endpoint is
+                    // unreachable or incompatible, no amount of retrying the
+                    // job will recover. Surface the error before any target
+                    // work starts. Stock Chrome resolution stays best-effort
+                    // (a missing local binary may not matter for HTTP-only
+                    // queues with stray render flags).
+                    if self.config.external_cdp_url.is_some() {
+                        return Err(e);
+                    }
                     tracing::warn!(
                         ?e,
                         "render preflight failed — render jobs will error until \
