@@ -64,6 +64,7 @@ pub mod queue;
 #[cfg(feature = "cdp-backend")]
 pub mod render;
 pub mod robots;
+pub mod runner;
 pub mod scheduler;
 pub mod scraping;
 #[cfg(feature = "cli")]
