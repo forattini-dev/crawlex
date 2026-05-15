@@ -298,6 +298,14 @@ pub struct Config {
     /// `external_cdp_url` is unset.
     #[serde(default)]
     pub external_cdp_session_mode: ExternalCdpSessionMode,
+    /// Slice 36 — opt-in provider fallback. Disabled by default. When
+    /// `enabled = true` and `order` is non-empty, the render pool may
+    /// retry preflight against the listed providers after the primary
+    /// (`browser_provider`) fails. Fingerprint mismatch policy and
+    /// session mode decisions ride along unchanged — fallback never
+    /// silently relaxes them.
+    #[serde(default)]
+    pub provider_fallback: ProviderFallbackConfig,
     /// Slice 7 — wall-clock budget for the whole crawl. When `Some(n)`
     /// a watchdog auto-cancels the run after `n` seconds, writes
     /// `TerminalReason::CancelledDueToTimeout` to the `crawl_stats` row,
@@ -682,7 +690,7 @@ pub enum RenderMode {
 /// configured external endpoint when one is present and otherwise
 /// behaves like `Stock`. Critically, `Auto` does NOT auto-discover
 /// local CDP endpoints — operators must opt-in explicitly.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserProvider {
     #[default]
@@ -714,6 +722,47 @@ pub enum ExternalCdpSessionMode {
     #[default]
     Isolated,
     Persistent,
+}
+
+/// Slice 36 — explicit provider fallback configuration. `enabled` and a
+/// non-empty `order` together arm fallback; otherwise crawlex never
+/// switches providers. `order` is a vendor-neutral list of
+/// `BrowserProvider` names tried sequentially after the primary fails.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderFallbackConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub order: Vec<BrowserProvider>,
+}
+
+impl ProviderFallbackConfig {
+    /// True when both the toggle is on and a non-empty order is set.
+    pub fn is_active(&self) -> bool {
+        self.enabled && !self.order.is_empty()
+    }
+
+    /// Sequence of providers to try after `primary` fails. The primary
+    /// itself is skipped (no point retrying the same one), duplicates
+    /// are dropped (first occurrence wins), and `Auto` is dropped
+    /// because `Auto` itself is a meta-selector — only concrete
+    /// providers belong in a fallback chain.
+    pub fn chain_after(&self, primary: BrowserProvider) -> Vec<BrowserProvider> {
+        if !self.is_active() {
+            return Vec::new();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for p in &self.order {
+            if *p == primary || *p == BrowserProvider::Auto {
+                continue;
+            }
+            if seen.insert(*p) {
+                out.push(*p);
+            }
+        }
+        out
+    }
 }
 
 impl ExternalCdpSessionMode {
@@ -931,6 +980,7 @@ impl Default for Config {
             browser_provider: BrowserProvider::default(),
             mismatch_policy: MismatchPolicy::default(),
             external_cdp_session_mode: ExternalCdpSessionMode::default(),
+            provider_fallback: ProviderFallbackConfig::default(),
             job_max_runtime_secs: None,
             result_retention_secs: None,
             max_pages: None,
@@ -1279,6 +1329,72 @@ mod tests {
             let s = mode.as_str();
             assert_eq!(ExternalCdpSessionMode::parse(s), Some(mode));
         }
+    }
+
+    #[test]
+    fn provider_fallback_default_is_disabled_and_empty() {
+        // Slice 36 acceptance: fallback OFF by default. Existing configs
+        // (including those serialized before slice 36) must deserialize
+        // unchanged via `#[serde(default)]` on every new field.
+        let c = Config::default();
+        assert!(!c.provider_fallback.enabled);
+        assert!(c.provider_fallback.order.is_empty());
+        assert!(!c.provider_fallback.is_active());
+        assert!(
+            c.provider_fallback
+                .chain_after(BrowserProvider::Cdp)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn provider_fallback_inactive_unless_enabled_and_nonempty() {
+        let mut fb = ProviderFallbackConfig::default();
+        fb.order = vec![BrowserProvider::Stock];
+        assert!(!fb.is_active(), "order without enable must stay inert");
+        let mut fb = ProviderFallbackConfig::default();
+        fb.enabled = true;
+        assert!(!fb.is_active(), "enable without order must stay inert");
+    }
+
+    #[test]
+    fn provider_fallback_chain_skips_primary_and_dedupes() {
+        let fb = ProviderFallbackConfig {
+            enabled: true,
+            order: vec![
+                BrowserProvider::Cdp,
+                BrowserProvider::Stock,
+                BrowserProvider::Cdp,
+            ],
+        };
+        // primary == Cdp -> skip Cdp entries entirely, keep Stock once.
+        assert_eq!(fb.chain_after(BrowserProvider::Cdp), vec![BrowserProvider::Stock]);
+        // primary == Stock -> keep Cdp (first occurrence only).
+        assert_eq!(fb.chain_after(BrowserProvider::Stock), vec![BrowserProvider::Cdp]);
+    }
+
+    #[test]
+    fn provider_fallback_chain_drops_auto() {
+        // Auto is a meta-selector — it cannot be a fallback target.
+        let fb = ProviderFallbackConfig {
+            enabled: true,
+            order: vec![BrowserProvider::Auto, BrowserProvider::Stock],
+        };
+        assert_eq!(fb.chain_after(BrowserProvider::Cdp), vec![BrowserProvider::Stock]);
+    }
+
+    #[test]
+    fn provider_fallback_serde_roundtrip_snake_case() {
+        let fb = ProviderFallbackConfig {
+            enabled: true,
+            order: vec![BrowserProvider::Stock, BrowserProvider::Cdp],
+        };
+        let json = serde_json::to_string(&fb).unwrap();
+        // Field names + provider variants are snake_case in YAML/JSON.
+        assert!(json.contains("\"enabled\":true"), "{json}");
+        assert!(json.contains("\"order\":[\"stock\",\"cdp\"]"), "{json}");
+        let back: ProviderFallbackConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, fb);
     }
 
     #[test]

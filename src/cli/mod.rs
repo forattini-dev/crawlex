@@ -2302,6 +2302,10 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         external_cdp_session_mode: resolve_external_cdp_session_mode(
             c.external_cdp_session_mode.as_deref(),
         )?,
+        provider_fallback: resolve_provider_fallback(
+            c.provider_fallback_enable,
+            c.provider_fallback_order.as_deref(),
+        )?,
         job_max_runtime_secs: c.job_max_runtime_secs,
         result_retention_secs: c.result_retention_secs,
         max_pages: c.max_pages,
@@ -2378,10 +2382,23 @@ fn validate_browser_provider(config: &mut Config) -> Result<()> {
         }
         BrowserProvider::Stock => {
             if config.external_cdp_url.is_some() {
-                tracing::warn!(
-                    "browser_provider=stock ignores external_cdp_url; clearing endpoint"
-                );
-                config.external_cdp_url = None;
+                // Slice 36 — keep the endpoint when explicit provider
+                // fallback is armed and Cdp is in the chain, so a Stock
+                // primary can demote to Cdp on local-Chrome failure.
+                // Otherwise the stale field must be cleared so nothing
+                // accidentally routes through it.
+                let keep_for_fallback = config.provider_fallback.is_active()
+                    && config
+                        .provider_fallback
+                        .order
+                        .iter()
+                        .any(|p| *p == BrowserProvider::Cdp);
+                if !keep_for_fallback {
+                    tracing::warn!(
+                        "browser_provider=stock ignores external_cdp_url; clearing endpoint"
+                    );
+                    config.external_cdp_url = None;
+                }
             }
         }
         BrowserProvider::Auto => {
@@ -2419,6 +2436,57 @@ fn resolve_external_cdp_session_mode(
             ))
         }),
     }
+}
+
+/// Slice 36 — resolve explicit provider fallback. Flag/env tuple:
+/// * `enable` flag OR `CRAWLEX_PROVIDER_FALLBACK_ENABLE=1` toggles on.
+/// * `order` CSV flag OR `CRAWLEX_PROVIDER_FALLBACK_ORDER` env supplies
+///   the ordered list of vendor-neutral provider names.
+///
+/// Unknown provider tokens reject with an actionable message; empty
+/// order combined with `enable` is allowed at parse time but stays
+/// inert per `ProviderFallbackConfig::is_active` — keeping config and
+/// runtime decoupled lets operators stage rollouts by toggling the
+/// boolean without recomputing the order list every time.
+fn resolve_provider_fallback(
+    enable_flag: bool,
+    order_flag: Option<&str>,
+) -> Result<crate::config::ProviderFallbackConfig> {
+    use crate::config::{BrowserProvider, ProviderFallbackConfig};
+    let enabled = enable_flag
+        || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE")
+            .ok()
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+    let order_raw_owned;
+    let order_raw = match order_flag {
+        Some(s) => Some(s),
+        None => match std::env::var("CRAWLEX_PROVIDER_FALLBACK_ORDER") {
+            Ok(v) => {
+                order_raw_owned = v;
+                Some(order_raw_owned.as_str())
+            }
+            Err(_) => None,
+        },
+    };
+    let mut order = Vec::new();
+    if let Some(raw) = order_raw {
+        for tok in raw.split(',') {
+            let t = tok.trim();
+            if t.is_empty() {
+                continue;
+            }
+            match BrowserProvider::parse(t) {
+                Some(p) => order.push(p),
+                None => {
+                    return Err(crate::Error::Config(format!(
+                        "--provider-fallback-order: expected comma-separated stock|cdp|auto, got `{t}`"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(ProviderFallbackConfig { enabled, order })
 }
 
 fn parse_render_mode(raw: Option<&str>) -> Result<crate::config::RenderMode> {
@@ -2467,13 +2535,44 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
     } else if std::env::var("CRAWLEX_BROWSER_PROVIDER").is_ok() {
         config.browser_provider = resolve_browser_provider(None)?;
     }
-    validate_browser_provider(config)?;
     if c.external_cdp_session_mode.is_some() {
         config.external_cdp_session_mode =
             resolve_external_cdp_session_mode(c.external_cdp_session_mode.as_deref())?;
     } else if std::env::var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE").is_ok() {
         config.external_cdp_session_mode = resolve_external_cdp_session_mode(None)?;
     }
+    // Slice 36 — provider fallback. The flag is a plain `bool`, so we
+    // can't distinguish "user passed --no-flag" from "default false";
+    // a true flag OR any env signal triggers re-resolution. Order flag
+    // alone (no enable) is also honored so operators can pre-stage the
+    // chain on the CLI before flipping the boolean from a config file.
+    if c.provider_fallback_enable
+        || c.provider_fallback_order.is_some()
+        || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE").is_ok()
+        || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ORDER").is_ok()
+    {
+        let resolved = resolve_provider_fallback(
+            c.provider_fallback_enable,
+            c.provider_fallback_order.as_deref(),
+        )?;
+        // Treat flag-only mutations as additive: if the operator only
+        // toggled enable, keep the config-file order; if they only
+        // supplied an order, keep the config-file enable flag.
+        if c.provider_fallback_enable
+            || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE").is_ok()
+        {
+            config.provider_fallback.enabled = resolved.enabled;
+        }
+        if c.provider_fallback_order.is_some()
+            || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ORDER").is_ok()
+        {
+            config.provider_fallback.order = resolved.order;
+        }
+    }
+    // Validate provider/endpoint pairing AFTER fallback resolution so
+    // the validator can spare `external_cdp_url` when Stock is the
+    // primary but the operator armed a Cdp fallback.
+    validate_browser_provider(config)?;
     if let Some(raw) = c.gpu_policy.as_deref() {
         config.gpu_policy = parse_gpu_policy(raw)?;
     }
@@ -2769,7 +2868,10 @@ mod telemetry_format_tests {
 
 #[cfg(test)]
 mod browser_provider_tests {
-    use super::{resolve_browser_provider, resolve_external_cdp_session_mode, validate_browser_provider};
+    use super::{
+        resolve_browser_provider, resolve_external_cdp_session_mode, resolve_provider_fallback,
+        validate_browser_provider,
+    };
     use crate::config::{BrowserProvider, Config};
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -2788,6 +2890,8 @@ mod browser_provider_tests {
         std::env::remove_var("CRAWLEX_BROWSER_PROVIDER");
         std::env::remove_var("CRAWLEX_EXTERNAL_CDP_URL");
         std::env::remove_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE");
+        std::env::remove_var("CRAWLEX_PROVIDER_FALLBACK_ENABLE");
+        std::env::remove_var("CRAWLEX_PROVIDER_FALLBACK_ORDER");
     }
 
     #[test]
@@ -2902,6 +3006,65 @@ mod browser_provider_tests {
         let err = resolve_external_cdp_session_mode(Some("ephemeral")).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("isolated|persistent"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_provider_fallback_defaults_disabled_and_empty() {
+        let _g = env_guard();
+        clear_env();
+        let fb = resolve_provider_fallback(false, None).unwrap();
+        assert!(!fb.enabled);
+        assert!(fb.order.is_empty());
+    }
+
+    #[test]
+    fn resolve_provider_fallback_flag_enables_with_csv_order() {
+        let _g = env_guard();
+        clear_env();
+        let fb = resolve_provider_fallback(true, Some("stock,cdp")).unwrap();
+        assert!(fb.enabled);
+        assert_eq!(fb.order, vec![BrowserProvider::Stock, BrowserProvider::Cdp]);
+        assert!(fb.is_active());
+    }
+
+    #[test]
+    fn resolve_provider_fallback_env_enables_and_orders() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_PROVIDER_FALLBACK_ENABLE", "true");
+        std::env::set_var("CRAWLEX_PROVIDER_FALLBACK_ORDER", "cdp, stock");
+        let fb = resolve_provider_fallback(false, None).unwrap();
+        clear_env();
+        assert!(fb.enabled);
+        assert_eq!(fb.order, vec![BrowserProvider::Cdp, BrowserProvider::Stock]);
+    }
+
+    #[test]
+    fn resolve_provider_fallback_flag_wins_over_env_for_order() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_PROVIDER_FALLBACK_ORDER", "cdp");
+        let fb = resolve_provider_fallback(true, Some("stock")).unwrap();
+        clear_env();
+        assert_eq!(fb.order, vec![BrowserProvider::Stock]);
+    }
+
+    #[test]
+    fn resolve_provider_fallback_rejects_unknown_token() {
+        let _g = env_guard();
+        clear_env();
+        let err = resolve_provider_fallback(true, Some("stock,camoufox")).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("stock|cdp|auto"), "{msg}");
+        assert!(msg.contains("camoufox"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_provider_fallback_tolerates_empty_tokens() {
+        let _g = env_guard();
+        clear_env();
+        let fb = resolve_provider_fallback(true, Some(" , stock ,, ")).unwrap();
+        assert_eq!(fb.order, vec![BrowserProvider::Stock]);
     }
 
     #[test]

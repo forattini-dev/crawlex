@@ -476,6 +476,18 @@ pub struct CrawlArgs {
     /// profile). Has no effect when `--external-cdp-url` is unset.
     #[arg(long = "external-cdp-session-mode")]
     pub external_cdp_session_mode: Option<String>,
+    /// Slice 36 — enable explicit provider fallback. Must be paired with
+    /// `--provider-fallback-order`; otherwise crawlex behaves as if
+    /// fallback were off. Also settable via
+    /// `CRAWLEX_PROVIDER_FALLBACK_ENABLE=1`.
+    #[arg(long = "provider-fallback-enable", default_value_t = false)]
+    pub provider_fallback_enable: bool,
+    /// Slice 36 — comma-separated ordered list of vendor-neutral
+    /// provider names to try after the primary preflight fails (e.g.
+    /// `stock,cdp`). Has no effect unless `--provider-fallback-enable`
+    /// is set. Also settable via `CRAWLEX_PROVIDER_FALLBACK_ORDER`.
+    #[arg(long = "provider-fallback-order")]
+    pub provider_fallback_order: Option<String>,
     /// GPU posture for managed Chrome: `compat` keeps `--disable-gpu`,
     /// `stealth` keeps GPU surfaces enabled where Chrome can support them.
     #[arg(long)]
