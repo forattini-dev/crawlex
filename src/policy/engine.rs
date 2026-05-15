@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::antibot::{ChallengeLevel, ChallengeSignal, ChallengeVendor, SessionState};
 use crate::config::RenderSessionScope;
-use crate::escalation::detect_antibot_vendor;
+use crate::runner::ChallengeDetector;
 use crate::policy::profile::PolicyThresholds;
 use crate::policy::reason::{Decision, DecisionReason};
 use crate::queue::FetchMethod;
@@ -204,7 +204,7 @@ impl PolicyEngine {
         // way will fail the same way. Escalate to render (or drop if
         // render is forbidden) before retry kicks in.
         if let (Some(hdrs), Some(body)) = (headers, body) {
-            if let Some(vendor) = detect_antibot_vendor(status, hdrs, body) {
+            if let Some(vendor) = ChallengeDetector::new().detect(status, hdrs, body).map(|s| s.vendor) {
                 let render_allowed = ctx.render_budget_left.is_none_or(|n| n > 0)
                     && !matches!(ctx.thresholds.max_render_jobs, Some(0))
                     && ctx.initial_method != FetchMethod::Render;

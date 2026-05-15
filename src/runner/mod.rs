@@ -16,8 +16,10 @@
 
 use std::time::Duration;
 
+pub mod challenge;
 pub mod extract;
 pub mod fetcher;
+pub use challenge::{ChallengeDetector, ChallengeSignal};
 pub use extract::Extractor;
 pub use fetcher::{Fetcher, SpoofFetcher};
 
