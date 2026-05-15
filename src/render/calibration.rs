@@ -242,6 +242,333 @@ pub fn count_mismatches(
     n
 }
 
+/// Re-export from config so slice 34 callers can write
+/// `calibration::MismatchPolicy` without crossing module boundaries.
+pub use crate::config::MismatchPolicy;
+
+/// Slice 34 — kinds of calibration mismatches that classification can
+/// surface. The first seven entries are the critical categories the
+/// PRD enumerates; `GpuClass` is reserved for non-critical drifts that
+/// should be reported but never fail a strict run on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MismatchCategory {
+    BrowserFamily,
+    BrowserVersion,
+    ProxyIpWebrtc,
+    Locale,
+    Timezone,
+    Platform,
+    StorageProfile,
+    GpuClass,
+}
+
+impl MismatchCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MismatchCategory::BrowserFamily => "browser_family",
+            MismatchCategory::BrowserVersion => "browser_version",
+            MismatchCategory::ProxyIpWebrtc => "proxy_ip_webrtc",
+            MismatchCategory::Locale => "locale",
+            MismatchCategory::Timezone => "timezone",
+            MismatchCategory::Platform => "platform",
+            MismatchCategory::StorageProfile => "storage_profile",
+            MismatchCategory::GpuClass => "gpu_class",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MismatchSeverity {
+    Critical,
+    NonCritical,
+}
+
+impl MismatchSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MismatchSeverity::Critical => "critical",
+            MismatchSeverity::NonCritical => "non_critical",
+        }
+    }
+}
+
+/// One classified divergence between the session's intended identity
+/// and what the calibration probe actually observed. Carries enough
+/// context to debug (category, severity, short expected/observed
+/// strings) without dumping the full fingerprint.
+#[derive(Debug, Clone, Serialize)]
+pub struct Mismatch {
+    pub category: MismatchCategory,
+    pub severity: MismatchSeverity,
+    pub expected: String,
+    pub observed: String,
+    /// True when the calibration-aware shim (slice 33) can rewrite the
+    /// observed value at JS scope so the page sees the expected value.
+    /// False when the divergence lives below the shim (network egress
+    /// IP, browser engine binary, storage backing) and a strict run
+    /// must refuse to proceed.
+    pub reconcilable: bool,
+}
+
+/// Caller-supplied identity expectations. Every field is optional —
+/// classification only flags an axis when the caller actually declared
+/// an expectation for it.
+#[derive(Debug, Clone, Default)]
+pub struct ExpectedIdentity {
+    pub browser_family: Option<String>,
+    pub browser_major: Option<String>,
+    pub platform: Option<String>,
+    pub locale: Option<String>,
+    pub timezone: Option<String>,
+    /// Public IPv4 the proxy is expected to egress from. When set,
+    /// any observed WebRTC IPv4 that is not this value (and is a
+    /// routable public address) is flagged as a proxy/IP/WebRTC
+    /// coherence mismatch. Strict runs cannot reconcile this.
+    pub proxy_egress_ipv4: Option<String>,
+    /// Profile id the session is supposed to be running under. A
+    /// contradiction here (e.g. storage backed by a different profile)
+    /// is critical and not reconcilable from the shim.
+    pub profile_id: Option<String>,
+    /// Minimum storage quota the session expects (bytes). When set
+    /// and observed quota is meaningfully lower (less than half), the
+    /// storage backing is treated as a profile contradiction.
+    pub min_storage_quota: Option<u64>,
+}
+
+fn short(s: &str) -> String {
+    const MAX: usize = 64;
+    if s.len() <= MAX {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..MAX])
+    }
+}
+
+fn is_public_ipv4(addr: &str) -> bool {
+    let octets: Vec<u8> = addr
+        .split('.')
+        .filter_map(|p| p.parse::<u8>().ok())
+        .collect();
+    if octets.len() != 4 {
+        return false;
+    }
+    let (a, b) = (octets[0], octets[1]);
+    if a == 10 || a == 127 || a == 0 {
+        return false;
+    }
+    if a == 172 && (16..=31).contains(&b) {
+        return false;
+    }
+    if a == 192 && b == 168 {
+        return false;
+    }
+    if a == 169 && b == 254 {
+        return false;
+    }
+    if a == 100 && (64..=127).contains(&b) {
+        return false;
+    }
+    true
+}
+
+/// Slice 34 — compare expected session intent against the effective
+/// fingerprint and produce one entry per divergence. Empty result
+/// means the fingerprint honoured every declared expectation.
+pub fn classify_mismatches(
+    fp: &EffectiveFingerprint,
+    expected: &ExpectedIdentity,
+) -> Vec<Mismatch> {
+    let mut out = Vec::new();
+    if let Some(fam) = expected.browser_family.as_deref() {
+        let fam = fam.trim();
+        if !fam.is_empty() && !fp.browser_product.eq_ignore_ascii_case(fam) {
+            out.push(Mismatch {
+                category: MismatchCategory::BrowserFamily,
+                severity: MismatchSeverity::Critical,
+                expected: short(fam),
+                observed: short(&fp.browser_product),
+                reconcilable: false,
+            });
+        }
+    }
+    if let Some(major) = expected.browser_major.as_deref() {
+        let major = major.trim();
+        if !major.is_empty() {
+            let observed_major = fp
+                .browser_version
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !observed_major.is_empty() && observed_major != major {
+                out.push(Mismatch {
+                    category: MismatchCategory::BrowserVersion,
+                    severity: MismatchSeverity::Critical,
+                    expected: short(major),
+                    observed: short(observed_major),
+                    // UA-string + UA-CH versions can be rewritten by
+                    // the shim; on-wire UA from the engine cannot.
+                    // We mark reconcilable=true because the shim
+                    // override layer (slice 33) covers the JS-visible
+                    // surface, which is what fingerprint probes read.
+                    reconcilable: true,
+                });
+            }
+        }
+    }
+    if let Some(plat) = expected.platform.as_deref() {
+        let plat = plat.trim();
+        if !plat.is_empty()
+            && !fp
+                .platform
+                .to_ascii_lowercase()
+                .contains(&plat.to_ascii_lowercase())
+        {
+            out.push(Mismatch {
+                category: MismatchCategory::Platform,
+                severity: MismatchSeverity::Critical,
+                expected: short(plat),
+                observed: short(&fp.platform),
+                reconcilable: true,
+            });
+        }
+    }
+    if let Some(loc) = expected.locale.as_deref() {
+        let loc = loc.trim();
+        if !loc.is_empty() && !fp.locale.eq_ignore_ascii_case(loc) {
+            out.push(Mismatch {
+                category: MismatchCategory::Locale,
+                severity: MismatchSeverity::Critical,
+                expected: short(loc),
+                observed: short(&fp.locale),
+                reconcilable: true,
+            });
+        }
+    }
+    if let Some(tz) = expected.timezone.as_deref() {
+        let tz = tz.trim();
+        if !tz.is_empty() && fp.timezone != tz {
+            out.push(Mismatch {
+                category: MismatchCategory::Timezone,
+                severity: MismatchSeverity::Critical,
+                expected: short(tz),
+                observed: short(&fp.timezone),
+                reconcilable: true,
+            });
+        }
+    }
+    if let Some(ip) = expected.proxy_egress_ipv4.as_deref() {
+        let ip = ip.trim();
+        if !ip.is_empty() {
+            let leaked: Vec<&String> = fp
+                .webrtc
+                .ipv4
+                .iter()
+                .filter(|a| is_public_ipv4(a) && a.as_str() != ip)
+                .collect();
+            if !leaked.is_empty() {
+                let observed_summary = leaked
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                out.push(Mismatch {
+                    category: MismatchCategory::ProxyIpWebrtc,
+                    severity: MismatchSeverity::Critical,
+                    expected: short(ip),
+                    observed: short(&observed_summary),
+                    // WebRTC public-IP leak past the proxy lives at
+                    // the network stack — no shim rewrite can hide it
+                    // from a determined fingerprint probe.
+                    reconcilable: false,
+                });
+            }
+        }
+    }
+    if let Some(min_q) = expected.min_storage_quota {
+        if min_q > 0 && fp.storage_quota > 0 && fp.storage_quota.saturating_mul(2) < min_q {
+            out.push(Mismatch {
+                category: MismatchCategory::StorageProfile,
+                severity: MismatchSeverity::Critical,
+                expected: format!(">= {min_q}"),
+                observed: fp.storage_quota.to_string(),
+                reconcilable: false,
+            });
+        }
+    }
+    if let Some(pid) = expected.profile_id.as_deref() {
+        // A profile contradiction is only observable through indirect
+        // signals — here we treat a zero storage quota under an
+        // expected non-empty profile as a backing contradiction.
+        if !pid.trim().is_empty() && fp.storage_quota == 0 {
+            out.push(Mismatch {
+                category: MismatchCategory::StorageProfile,
+                severity: MismatchSeverity::Critical,
+                expected: short(pid),
+                observed: "storage_quota=0".to_string(),
+                reconcilable: false,
+            });
+        }
+    }
+    out
+}
+
+/// True when at least one entry is both `Critical` and not
+/// reconcilable by the shim. Strict policy uses this to decide
+/// whether to fail before target navigation.
+pub fn has_unreconciled_critical(mismatches: &[Mismatch]) -> bool {
+    mismatches
+        .iter()
+        .any(|m| m.severity == MismatchSeverity::Critical && !m.reconcilable)
+}
+
+/// Compact event payload describing the classified mismatch set. Used
+/// for `event="calibration.mismatch"` warning emission. The full
+/// fingerprint is deliberately *not* included.
+#[derive(Debug, Clone, Serialize)]
+pub struct MismatchReport<'a> {
+    pub policy: &'a str,
+    pub critical: u32,
+    pub non_critical: u32,
+    pub unreconciled_critical: u32,
+    pub categories: Vec<&'static str>,
+    pub mismatches: &'a [Mismatch],
+}
+
+impl<'a> MismatchReport<'a> {
+    pub fn new(policy: MismatchPolicy, mismatches: &'a [Mismatch]) -> Self {
+        let mut critical = 0u32;
+        let mut non_critical = 0u32;
+        let mut unreconciled_critical = 0u32;
+        let mut cats: Vec<&'static str> = Vec::new();
+        for m in mismatches {
+            match m.severity {
+                MismatchSeverity::Critical => {
+                    critical += 1;
+                    if !m.reconcilable {
+                        unreconciled_critical += 1;
+                    }
+                }
+                MismatchSeverity::NonCritical => non_critical += 1,
+            }
+            let c = m.category.as_str();
+            if !cats.contains(&c) {
+                cats.push(c);
+            }
+        }
+        Self {
+            policy: policy.as_str(),
+            critical,
+            non_critical,
+            unreconciled_critical,
+            categories: cats,
+            mismatches,
+        }
+    }
+}
+
 /// JS source of the calibration probe. Evaluated as an expression that
 /// resolves to a JSON string (the host parses with [`parse_probe`]).
 pub const CALIBRATION_PROBE_JS: &str = include_str!("calibration_probe.js");
@@ -595,6 +922,195 @@ mod tests {
         let body = reqwest::get(&url).await.unwrap().text().await.unwrap();
         assert!(body.contains("__crawlex_calibrate"));
         assert!(body.contains("__crawlex_calibrate_ready"));
+    }
+
+    fn base_fp() -> EffectiveFingerprint {
+        parse_probe(sample_probe_json()).unwrap()
+    }
+
+    #[test]
+    fn policy_parse_round_trips() {
+        assert_eq!(MismatchPolicy::parse("adapt"), Some(MismatchPolicy::Adapt));
+        assert_eq!(MismatchPolicy::parse("Strict"), Some(MismatchPolicy::Strict));
+        assert_eq!(MismatchPolicy::parse("nope"), None);
+        assert_eq!(MismatchPolicy::default(), MismatchPolicy::Adapt);
+        assert_eq!(MismatchPolicy::Strict.as_str(), "strict");
+    }
+
+    #[test]
+    fn classify_no_expectations_returns_empty() {
+        let fp = base_fp();
+        assert!(classify_mismatches(&fp, &ExpectedIdentity::default()).is_empty());
+    }
+
+    #[test]
+    fn classify_locale_and_timezone_flagged_critical_reconcilable() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            locale: Some("en-US".to_string()),
+            timezone: Some("UTC".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 2);
+        for entry in &m {
+            assert_eq!(entry.severity, MismatchSeverity::Critical);
+            assert!(entry.reconcilable);
+        }
+        // Strict can proceed because both are reconcilable by the shim.
+        assert!(!has_unreconciled_critical(&m));
+    }
+
+    #[test]
+    fn classify_browser_family_critical_not_reconcilable() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            browser_family: Some("Firefox".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].category, MismatchCategory::BrowserFamily);
+        assert!(!m[0].reconcilable);
+        assert!(has_unreconciled_critical(&m));
+    }
+
+    #[test]
+    fn classify_browser_major_reconcilable() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            browser_major: Some("120".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].category, MismatchCategory::BrowserVersion);
+        assert!(m[0].reconcilable);
+        assert!(!has_unreconciled_critical(&m));
+    }
+
+    #[test]
+    fn classify_platform_reconcilable() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            platform: Some("Windows".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].category, MismatchCategory::Platform);
+        assert!(m[0].reconcilable);
+    }
+
+    #[test]
+    fn classify_proxy_ip_leak_flagged_unreconcilable() {
+        // Sample probe leaks 192.0.2.1; expected egress is 203.0.113.5.
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            proxy_egress_ipv4: Some("203.0.113.5".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].category, MismatchCategory::ProxyIpWebrtc);
+        assert!(!m[0].reconcilable);
+        assert!(has_unreconciled_critical(&m));
+    }
+
+    #[test]
+    fn classify_proxy_ip_private_address_is_not_a_leak() {
+        let mut fp = base_fp();
+        fp.webrtc.ipv4 = vec!["10.0.0.5".to_string(), "192.168.1.7".to_string()];
+        let exp = ExpectedIdentity {
+            proxy_egress_ipv4: Some("203.0.113.5".to_string()),
+            ..Default::default()
+        };
+        assert!(classify_mismatches(&fp, &exp).is_empty());
+    }
+
+    #[test]
+    fn classify_storage_quota_below_minimum_is_unreconcilable() {
+        let mut fp = base_fp();
+        fp.storage_quota = 100;
+        let exp = ExpectedIdentity {
+            min_storage_quota: Some(1_000_000),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].category, MismatchCategory::StorageProfile);
+        assert!(!m[0].reconcilable);
+    }
+
+    #[test]
+    fn classify_profile_id_contradiction_when_storage_zero() {
+        let mut fp = base_fp();
+        fp.storage_quota = 0;
+        let exp = ExpectedIdentity {
+            profile_id: Some("warm-profile-A".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        assert!(m.iter().any(|x| x.category == MismatchCategory::StorageProfile));
+    }
+
+    #[test]
+    fn mismatch_report_aggregates_counts_and_categories() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            browser_family: Some("Firefox".to_string()),
+            locale: Some("en-US".to_string()),
+            timezone: Some("UTC".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        let r = MismatchReport::new(MismatchPolicy::Adapt, &m);
+        assert_eq!(r.policy, "adapt");
+        assert_eq!(r.critical, 3);
+        assert_eq!(r.non_critical, 0);
+        assert_eq!(r.unreconciled_critical, 1);
+        assert!(r.categories.contains(&"browser_family"));
+        assert!(r.categories.contains(&"locale"));
+        assert!(r.categories.contains(&"timezone"));
+        // Serializes without dumping the full fingerprint.
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(!json.contains("canvas_hash"));
+        assert!(!json.contains("user_agent"));
+        assert!(json.contains("\"unreconciled_critical\":1"));
+    }
+
+    #[test]
+    fn non_critical_does_not_trigger_strict_failure() {
+        // Hand-roll a NonCritical+unreconcilable entry — strict policy
+        // must NOT abort on these per AC.
+        let m = vec![Mismatch {
+            category: MismatchCategory::GpuClass,
+            severity: MismatchSeverity::NonCritical,
+            expected: "intel".into(),
+            observed: "nvidia".into(),
+            reconcilable: false,
+        }];
+        assert!(!has_unreconciled_critical(&m));
+        let r = MismatchReport::new(MismatchPolicy::Strict, &m);
+        assert_eq!(r.unreconciled_critical, 0);
+        assert_eq!(r.non_critical, 1);
+    }
+
+    #[test]
+    fn adapt_does_not_flag_strict_when_only_reconcilable_critical() {
+        let fp = base_fp();
+        let exp = ExpectedIdentity {
+            locale: Some("en-US".to_string()),
+            timezone: Some("UTC".to_string()),
+            platform: Some("Windows".to_string()),
+            browser_major: Some("120".to_string()),
+            ..Default::default()
+        };
+        let m = classify_mismatches(&fp, &exp);
+        let r = MismatchReport::new(MismatchPolicy::Strict, &m);
+        assert!(r.critical >= 4);
+        assert_eq!(r.unreconciled_critical, 0);
+        assert!(!has_unreconciled_critical(&m));
     }
 
     #[test]

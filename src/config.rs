@@ -280,6 +280,15 @@ pub struct Config {
     /// local CDP endpoints.
     #[serde(default)]
     pub browser_provider: BrowserProvider,
+    /// Slice 34 — what to do when the calibration probe surfaces a
+    /// critical fingerprint mismatch the shim cannot reconcile.
+    /// `Adapt` (default) records mismatches, emits a warning event,
+    /// and continues with calibrated values where possible. `Strict`
+    /// aborts the render before target navigation when at least one
+    /// critical mismatch is unreconcilable (e.g. WebRTC IP leak past
+    /// the proxy, mismatched browser engine, storage backing).
+    #[serde(default)]
+    pub mismatch_policy: MismatchPolicy,
     /// Slice 7 — wall-clock budget for the whole crawl. When `Some(n)`
     /// a watchdog auto-cancels the run after `n` seconds, writes
     /// `TerminalReason::CancelledDueToTimeout` to the `crawl_stats` row,
@@ -673,6 +682,35 @@ pub enum BrowserProvider {
     Auto,
 }
 
+/// Slice 34 — adapt vs strict policy for unreconciled critical
+/// calibration mismatches. Defined at config scope so the crate
+/// builds without the `cdp-backend` feature; the calibration module
+/// re-exports this type for ergonomic callers.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MismatchPolicy {
+    #[default]
+    Adapt,
+    Strict,
+}
+
+impl MismatchPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MismatchPolicy::Adapt => "adapt",
+            MismatchPolicy::Strict => "strict",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "adapt" => Some(MismatchPolicy::Adapt),
+            "strict" => Some(MismatchPolicy::Strict),
+            _ => None,
+        }
+    }
+}
+
 impl BrowserProvider {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -848,6 +886,7 @@ impl Default for Config {
             dom_capture: DomCaptureConfig::default(),
             render_mode: RenderMode::default(),
             browser_provider: BrowserProvider::default(),
+            mismatch_policy: MismatchPolicy::default(),
             job_max_runtime_secs: None,
             result_retention_secs: None,
             max_pages: None,

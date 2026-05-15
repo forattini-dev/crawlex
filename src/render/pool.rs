@@ -884,6 +884,36 @@ impl RenderPool {
         Ok(self.calibration_cache.insert(key, fp))
     }
 
+    /// Slice 34 — declare what we *expect* the live external CDP
+    /// session to look like, so classification can flag divergences.
+    /// Only axes the operator actually pinned are populated; absent
+    /// fields are not checked.
+    fn expected_identity_for_session(
+        &self,
+    ) -> crate::render::calibration::ExpectedIdentity {
+        let bundle = self.bundle();
+        let platform = match bundle.ua_platform.trim_matches('"') {
+            "" => None,
+            other => Some(other.to_string()),
+        };
+        crate::render::calibration::ExpectedIdentity {
+            // The pool only manages Chromium-family endpoints today —
+            // any non-Chromium browser_product from the probe is a
+            // critical, unreconcilable divergence.
+            browser_family: Some("Chromium".to_string()),
+            browser_major: Some(bundle.ua_major.to_string()),
+            platform,
+            locale: self.config.locale.clone().filter(|s| !s.is_empty()),
+            timezone: self.config.timezone.clone().filter(|s| !s.is_empty()),
+            // No declared egress IP today — leave None so we don't
+            // flag every proxied session. Operators that pin an
+            // egress can set it via future configuration.
+            proxy_egress_ipv4: None,
+            profile_id: Some(bundle.id.clone()),
+            min_storage_quota: None,
+        }
+    }
+
     /// Slice 32 — assemble the calibration key for the current render.
     /// Folds in every identity input that should bust the cache.
     fn calibration_key_for(
@@ -3158,6 +3188,57 @@ impl RenderPool {
             let cal_key = self.calibration_key_for(proxy, &session_id, &ctx_id);
             match self.ensure_calibrated(&page, cal_key).await {
                 Ok(fp) => {
+                    // Slice 34 — classify mismatches against the
+                    // declared session intent. On `Strict` policy with
+                    // any critical+unreconcilable divergence, abort
+                    // BEFORE the target navigation. On `Adapt` (default)
+                    // emit a warning event with category context and
+                    // continue — the calibration-aware shim below will
+                    // adapt the reconcilable axes.
+                    let expected = self.expected_identity_for_session();
+                    let mismatches =
+                        crate::render::calibration::classify_mismatches(&fp, &expected);
+                    if !mismatches.is_empty() {
+                        let policy = self.config.mismatch_policy;
+                        let report = crate::render::calibration::MismatchReport::new(
+                            policy,
+                            &mismatches,
+                        );
+                        let payload = serde_json::to_string(&report).unwrap_or_else(|_| {
+                            format!(
+                                "{{\"policy\":\"{}\",\"critical\":{},\"unreconciled_critical\":{}}}",
+                                report.policy, report.critical, report.unreconciled_critical
+                            )
+                        });
+                        tracing::warn!(
+                            event = "calibration.mismatch",
+                            policy = report.policy,
+                            critical = report.critical,
+                            non_critical = report.non_critical,
+                            unreconciled_critical = report.unreconciled_critical,
+                            categories = ?report.categories,
+                            report = payload.as_str(),
+                            "calibration mismatch detected"
+                        );
+                        if policy == crate::config::MismatchPolicy::Strict
+                            && crate::render::calibration::has_unreconciled_critical(&mismatches)
+                        {
+                            let cats: Vec<&str> = mismatches
+                                .iter()
+                                .filter(|m| {
+                                    m.severity
+                                        == crate::render::calibration::MismatchSeverity::Critical
+                                        && !m.reconcilable
+                                })
+                                .map(|m| m.category.as_str())
+                                .collect();
+                            return Err(Error::Render(format!(
+                                "strict calibration policy: unreconciled critical mismatch in {} — aborted before target navigation",
+                                cats.join(",")
+                            )));
+                        }
+                    }
+
                     // Slice 33 — reflect the calibrated effective
                     // fingerprint into the stealth shim. We never
                     // disable the shim; the second install is wrapped

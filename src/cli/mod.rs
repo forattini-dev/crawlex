@@ -2074,6 +2074,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
     }
 
     let mut config = Config {
+        mismatch_policy: crate::config::MismatchPolicy::default(),
         max_concurrent_render: c.max_concurrent_render.unwrap_or(0),
         max_concurrent_http: c.max_concurrent_http.unwrap_or(500),
         max_depth: c.max_depth,
