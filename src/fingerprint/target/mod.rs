@@ -8,9 +8,11 @@
 use http::HeaderMap;
 use url::Url;
 
+pub mod cache;
 pub mod engine;
 pub mod sources;
 
+pub use cache::{CachedFingerprint, WarmCache};
 pub use engine::Engine;
 
 /// Per-target input bundle. Hot sources see fields populated by the
