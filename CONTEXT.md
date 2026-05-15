@@ -38,7 +38,49 @@ _Avoid_: client, downloader
 Pure component that derives links and asset classifications from a FetchResponse. Concrete struct, no trait.
 
 **ChallengeDetector**:
-Pure component that inspects a FetchResponse and emits a `ChallengeSignal` when an antibot interstitial is recognised.
+Pure component that inspects a FetchResponse and emits a `ChallengeSignal` when an antibot interstitial is recognised. *Superseded by [[Fingerprinter]] Hot tier (ADR-0003) — kept here for historical reference until the substitution lands.*
+
+**Fetcher::fetch**:
+Returns a `FetchOutput` (enum: `Http(impersonate::Response)` | `Rendered(RenderedPage)`). Common helpers (`status`, `headers`, `body`, `final_url`) on the enum let extractors and detectors stay variant-agnostic.
+
+### Fingerprint (target + self)
+
+**Fingerprinter**:
+Engine that consumes a TargetContext and emits a FingerprintReport. Holds a registry of Sources, partitioned by Tier (Hot / Warm / Cold). Replaces `discovery::tech_fingerprint`, `runner::ChallengeDetector`, and the detect-* fns in `antibot::*` (action modules — bypass, cookie_pin, solver, telemetry, recaptcha — stay where they are).
+_Avoid_: TechFingerprinter, Detector, Analyzer
+
+**Detection**:
+One finding emitted by a Source. Carries `{ category: Category, vendor: String, version: Option<String>, confidence: Confidence, evidence: Vec<Evidence> }`. The unit the Fingerprinter aggregates into the report.
+
+**Evidence**:
+Why a Detection fired. `{ source: EvidenceSource, detail: String, weight: u8 }`. `source` is the kind of signal (Header, CookieName, BodyMarker, TlsServerHello, …); `detail` is human-readable proof; `weight` 1–10 feeds the Confidence bucket via a fixed rule.
+
+**Confidence**:
+`High | Medium | Low`. Derived from summed evidence weights — never set directly. Threshold rule lives in `fingerprint/detection.rs`; tested in isolation.
+
+**Vendor**:
+Consolidated identity enum — Cloudflare, Akamai, Fastly, DataDome, PerimeterX, Imperva, etc. Replaces three legacy enums: `error::AntibotVendor`, `antibot::ChallengeVendor`, the `vendor` field on `runner::ChallengeSignal`. Old types kept as `#[deprecated]` re-exports for one release.
+
+**Category**:
+What kind of thing the Vendor is. CDN, WAF, Antibot, CMS, Ecommerce, FrontendFramework, BackendRuntime, WebServer, ReverseProxy, Cache, Analytics, TagManager, AbTesting, Auth, Payment, Chat, DnsHosting, TlsProfile, HttpFingerprint, CookiePattern, Other. Extensible — non-exhaustive enum.
+
+**Source**:
+Trait that produces Detections from a TargetContext. `{ name(): &'static str, tier(): Tier, analyze(&TargetContext) -> Vec<Detection> }`. 20+ initial impls (Header, CookieName, BodyMarker, MetaTag, ScriptSrc, LinkRel, JsonLd, TlsServerHello, AltSvc, PeerCert, StatusPattern, TimingPattern, H2Settings, RobotsTxt, WellKnown, FaviconHash, Dns, Asn, AntibotMarker, BlockPattern). New sources added without touching the engine.
+
+**Tier**:
+When a Source runs. `Hot` (free, every fetch — runs on `analyze_hot`), `Warm` (medium cost, per-host once, cached — runs on `analyze_warm`), `Cold` (external network probes, opt-in via `--deep-fingerprint` — runs on `analyze_cold`).
+
+**TargetContext**:
+Input bundle the Fingerprinter passes to each Source. Carries status, headers, body, TLS observation, final URL, and `Option<&T>` slots for warm/cold-only data (h2 settings, robots.txt, well-known, favicon hash, DNS observation, ASN, peer cert).
+
+**FingerprintReport**:
+Aggregated output. One struct per host, typed slots per Category (`cdn: Vec<Detection>`, `waf: Vec<Detection>`, `antibot: Vec<Detection>`, …) plus single-detection slots (`tls_profile: Option<TlsProfile>`, `http_fingerprint: Option<HttpFp>`). Includes `tiers_run` bitflags, `stale_at` cache TTL, embedded `self_fp: Option<SelfFingerprint>`, and a `coherence: Coherence` cross-check.
+
+**Coherence**:
+Cross-check between FP-A (target) and FP-B (self). Surfaces "our JA3 matches our Profile expectation" and "our profile is plausible against the antibot vendor we detected" — the diff vs. plain tech-detection (redblue baseline).
+
+**SelfFingerprint**:
+What we expose outbound: JA3, JA4, JA3 hash, h2 SETTINGS fingerprint, observed header order, sec-ch-ua tier. Built by `fingerprint/self/` from three sources — live capture of our own ClientHello bytes (truth), static catalog keyed on Profile (expected baseline, ADR), external oracle (opt-in audit, `--audit-tls`).
 
 ### Policy and identity
 
@@ -56,9 +98,14 @@ Antibot finite-state snapshot for one session. Mutated only via JobOutcome; neve
 
 - A **Crawler** runs many **Jobs** through one or more **JobRunners**.
 - A **JobRunner** consumes a **Job** + **SessionContext** → produces a **JobOutcome**.
-- A **JobRunner** delegates fetching to a **Fetcher**, link extraction to an **Extractor**, and challenge detection to a **ChallengeDetector**.
+- A **JobRunner** delegates fetching to a **Fetcher**, link extraction to an **Extractor**, and detection to a **Fingerprinter** (Hot tier).
 - A **Fetcher** variant is chosen by the **Method** on the **Job**.
+- A **Fetcher::fetch** returns a **FetchOutput** carrying either an HTTP response or a rendered page.
 - A **SessionContext** carries one **SessionIdentity**, one optional proxy lease, and one **SessionState**.
+- A **Fingerprinter** holds Sources partitioned by **Tier**. Hot tier runs every fetch; Warm tier runs once per host (cached); Cold tier runs on-demand.
+- A **Source** consumes a **TargetContext** and emits zero or more **Detection**s.
+- A **Detection** belongs to one **Category** and carries one **Vendor** + one **Confidence** + a `Vec<`**Evidence**`>`.
+- A **FingerprintReport** aggregates Detections per host, embeds the run's **SelfFingerprint**, and exposes a **Coherence** cross-check.
 
 ## Example dialogue
 
@@ -72,3 +119,5 @@ Antibot finite-state snapshot for one session. Mutated only via JobOutcome; neve
 
 - "session" was used to mean both **SessionContext** (per-attempt) and **SessionIdentity** (persona that survives many Jobs) — resolved: distinct.
 - "auto" historically named both a **Method** and the **AutoFetcher** type — resolved: `auto` is the Method; **AutoFetcher** is the impl.
+- "ChallengeSignal" used to live in three places (`antibot::ChallengeSignal`, `runner::ChallengeSignal`, plus an implicit shape inside `error::AntibotChallenge`) — resolved (ADR-0003): one **Detection** with `category: Antibot` is the single representation; the three legacy types collapse into the consolidated **Vendor** enum.
+- "fingerprint" used to mean either the tech-stack of the target (`discovery::tech_fingerprint`) or our own outbound identity (loosely in `identity::*`) — resolved: **TargetContext**/**FingerprintReport** for FP-A (their stack), **SelfFingerprint** for FP-B (our outbound). Both live under `fingerprint/`.
