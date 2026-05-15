@@ -24,21 +24,10 @@ impl BodyMarkerSource {
 /// 16 KiB cap matches the legacy escalation body sampler.
 const BODY_SAMPLE_CAP: usize = 16 * 1024;
 
-/// Antibot / WAF markers — only meaningful on 403/503 (the challenge
-/// statuses). Same gate as the legacy `escalation::detect_antibot_vendor`.
-const ANTIBOT_403_503_TABLE: &[(&str, u8, Vendor, &str)] = &[
-    ("cf-chl-bypass", 10, Vendor::Cloudflare, "body marker 'cf-chl-bypass'"),
-    ("Just a moment", 8, Vendor::Cloudflare, "body marker 'Just a moment'"),
-    ("/cdn-cgi/challenge-platform/", 10, Vendor::Cloudflare, "body marker challenge-platform"),
-    ("DataDome", 10, Vendor::DataDome, "body marker 'DataDome'"),
-    ("PerimeterX", 10, Vendor::PerimeterX, "body marker 'PerimeterX'"),
-    ("_Incapsula_", 10, Vendor::Imperva, "body marker '_Incapsula_'"),
-    ("Imperva", 8, Vendor::Imperva, "body marker 'Imperva'"),
-    ("distilnetworks", 10, Vendor::DistilNetworks, "body marker 'distilnetworks'"),
-];
-
 /// Platform / framework markers — fire on any status, identify the
-/// runtime/CMS/ecommerce stack.
+/// runtime/CMS/ecommerce stack. Antibot vendor signatures moved to
+/// `AntibotMarkerSource` in B5 — that source owns the
+/// "what antibot vendor is this?" question now.
 const PLATFORM_TABLE: &[(&str, u8, Category, Vendor, &str)] = &[
     ("__NEXT_DATA__", 10, Category::Frontend, Vendor::NextJs, "body marker __NEXT_DATA__"),
     ("__NUXT__", 10, Category::Frontend, Vendor::Nuxt, "body marker __NUXT__"),
@@ -67,50 +56,9 @@ impl Source for BodyMarkerSource {
         let sample = body_sample(ctx.body);
         let body_str = String::from_utf8_lossy(sample);
 
-        // Antibot vendor markers — gated on 403/503 per legacy semantics.
-        if matches!(ctx.status, 403 | 503) {
-            for (needle, weight, vendor, detail) in ANTIBOT_403_503_TABLE {
-                if body_str.contains(needle) {
-                    out.push(Detection::from_single(
-                        Category::Antibot,
-                        *vendor,
-                        Evidence::new(EvidenceSource::BodyMarker, *detail, *weight),
-                    ));
-                }
-            }
-        }
-
-        // Generic JS-stub / noscript heuristic — only when the body is
-        // small enough to look like a stub (legacy 2 KiB threshold).
-        if is_html(ctx) && ctx.body.len() < 2048 {
-            if body_str.contains("<script") && body_str.contains("window.location") {
-                out.push(Detection::from_single(
-                    Category::Antibot,
-                    Vendor::Unknown,
-                    Evidence::new(
-                        EvidenceSource::BodyMarker,
-                        "small HTML + <script>window.location stub",
-                        6,
-                    ),
-                ));
-            }
-            if body_str.contains("<noscript")
-                && (body_str.contains("enable JavaScript")
-                    || body_str.contains("Please enable JavaScript"))
-            {
-                out.push(Detection::from_single(
-                    Category::Antibot,
-                    Vendor::Unknown,
-                    Evidence::new(
-                        EvidenceSource::BodyMarker,
-                        "small HTML + noscript 'enable JavaScript'",
-                        6,
-                    ),
-                ));
-            }
-        }
-
-        // Platform / framework markers — fire on any status.
+        // Platform / framework markers — fire on any status. Antibot
+        // detection is `AntibotMarkerSource`'s job; this source only
+        // recognises CMS / framework / ecommerce platforms.
         for (needle, weight, cat, vendor, detail) in PLATFORM_TABLE {
             if body_str.contains(needle) {
                 out.push(Detection::from_single(
@@ -159,35 +107,6 @@ mod tests {
     }
 
     #[test]
-    fn detects_cloudflare_403() {
-        let h = html_headers();
-        let u: Url = "https://example.com/".parse().unwrap();
-        let body = b"<html>cf-chl-bypass</html>";
-        let dets = BodyMarkerSource::new().analyze(&ctx_with(&h, &u, 403, body));
-        assert!(dets.iter().any(|d| d.vendor == Vendor::Cloudflare));
-    }
-
-    #[test]
-    fn detects_datadome_on_503() {
-        let h = html_headers();
-        let u: Url = "https://example.com/".parse().unwrap();
-        let body = b"DataDome blocked";
-        let dets = BodyMarkerSource::new().analyze(&ctx_with(&h, &u, 503, body));
-        assert!(dets.iter().any(|d| d.vendor == Vendor::DataDome));
-    }
-
-    #[test]
-    fn cloudflare_marker_on_200_does_not_fire_antibot() {
-        let h = html_headers();
-        let u: Url = "https://example.com/".parse().unwrap();
-        // Body contains cf-chl-bypass but status is 200 — legacy
-        // gating says no antibot signal.
-        let body = b"<html>article about cf-chl-bypass...</html>";
-        let dets = BodyMarkerSource::new().analyze(&ctx_with(&h, &u, 200, body));
-        assert!(!dets.iter().any(|d| d.category == Category::Antibot));
-    }
-
-    #[test]
     fn detects_nextjs() {
         let h = html_headers();
         let u: Url = "https://example.com/".parse().unwrap();
@@ -206,24 +125,7 @@ mod tests {
         assert!(dets.iter().any(|d| d.vendor == Vendor::Magento));
     }
 
-    #[test]
-    fn js_stub_small_html_fires_unknown_antibot() {
-        let h = html_headers();
-        let u: Url = "https://example.com/".parse().unwrap();
-        let body =
-            b"<html><script>window.location='/real';</script></html>";
-        let dets = BodyMarkerSource::new().analyze(&ctx_with(&h, &u, 200, body));
-        assert!(dets.iter().any(|d| d.category == Category::Antibot));
-    }
-
-    #[test]
-    fn noscript_challenge_fires_unknown_antibot() {
-        let h = html_headers();
-        let u: Url = "https://example.com/".parse().unwrap();
-        let body = b"<html><noscript>Please enable JavaScript</noscript></html>";
-        let dets = BodyMarkerSource::new().analyze(&ctx_with(&h, &u, 200, body));
-        assert!(dets.iter().any(|d| d.category == Category::Antibot));
-    }
+    // Antibot detection tests live in `antibot_marker.rs` after B5.
 
     #[test]
     fn healthy_html_no_detections() {

@@ -7,6 +7,7 @@ use crate::fingerprint::detection::{Detection, Tier};
 use crate::fingerprint::target::TargetContext;
 
 pub mod alt_svc;
+pub mod antibot_marker;
 pub mod body_marker;
 pub mod cookie;
 pub mod header;
@@ -19,6 +20,7 @@ pub mod status_pattern;
 pub mod timing_pattern;
 pub mod tls_server;
 pub use alt_svc::AltSvcSource;
+pub use antibot_marker::AntibotMarkerSource;
 pub use body_marker::BodyMarkerSource;
 pub use cookie::CookieSource;
 pub use header::HeaderSource;
