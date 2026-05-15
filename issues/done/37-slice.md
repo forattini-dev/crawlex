@@ -1,4 +1,4 @@
-# Slice 37: Native provider live validation harness [HITL]
+# Slice 37: Native provider live validation harness [AFK]
 
 Status: needs-triage
 Labels: needs-triage
