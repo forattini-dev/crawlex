@@ -132,6 +132,10 @@ pub struct JobRunner {
     fetcher: std::sync::Arc<dyn Fetcher>,
     extractor: Extractor,
     detector: ChallengeDetector,
+    /// Per-attempt lifecycle events are fired live through this sink
+    /// (PRD #15 Q13). Optional so callers can run the runner in tests
+    /// or in tools where the global NDJSON wire isn't relevant.
+    events: Option<std::sync::Arc<dyn crate::events::EventSink>>,
 }
 
 impl JobRunner {
@@ -140,18 +144,43 @@ impl JobRunner {
             fetcher,
             extractor: Extractor::new(),
             detector: ChallengeDetector::new(),
+            events: None,
+        }
+    }
+
+    /// Inject an `EventSink` so per-attempt lifecycle events fire live
+    /// while `run` executes. Once the `Crawler::process_job` cutover
+    /// lands (follow-up PR), the runner's sink becomes the only
+    /// emitter of the per-attempt event subset — `Crawler` keeps
+    /// run-level / decision events.
+    pub fn with_events(mut self, events: std::sync::Arc<dyn crate::events::EventSink>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    fn emit(&self, kind: crate::events::EventKind, url: Option<&url::Url>) {
+        if let Some(sink) = &self.events {
+            let mut ev = crate::events::Event::of(kind);
+            if let Some(u) = url {
+                ev = ev.with_url(u.as_str());
+            }
+            sink.emit(&ev);
         }
     }
 
     /// Execute one job. Pure of queue, storage, admission, and frontier
     /// concerns — the `Crawler` post-processes those.
     ///
-    /// Outcome is returned by value (ADR-0001). Live events fire from
-    /// the injected `EventSink` held by the fetcher / future runner
-    /// deps — slice #23 moves per-attempt event emission into this
-    /// function explicitly.
+    /// Outcome is returned by value (ADR-0001). Per-attempt lifecycle
+    /// events fire live through the injected `EventSink`:
+    /// `JobStarted` → `FetchCompleted` → `ChallengeDetected?` →
+    /// `ExtractCompleted` on the success path, or `JobFailed` on the
+    /// error path. The wire names match `EventKind` exactly, so the
+    /// NDJSON contract is preserved when `Crawler::process_job` calls
+    /// `runner.run` instead of inlining the dispatch (PRD #15 Q13).
     pub async fn run(&self, job: &crate::queue::Job, ctx: &SessionContext) -> JobOutcome {
         let start = std::time::Instant::now();
+        self.emit(crate::events::EventKind::JobStarted, Some(&job.url));
         let fetch_started = std::time::Instant::now();
         let fetch_result = self.fetcher.fetch(job, ctx).await;
         let fetch_ms = Some(fetch_started.elapsed());
@@ -160,7 +189,14 @@ impl JobRunner {
             Ok(resp) => {
                 let status = resp.status.as_u16();
                 let body_bytes = resp.body.len();
+                self.emit(crate::events::EventKind::FetchCompleted, Some(&resp.final_url));
                 let signal = self.detector.detect(status, &resp.headers, &resp.body);
+                if signal.is_some() {
+                    self.emit(
+                        crate::events::EventKind::ChallengeDetected,
+                        Some(&resp.final_url),
+                    );
+                }
                 let extract_started = std::time::Instant::now();
                 // Body decoded once; extract reuses the same slice.
                 let body_str = String::from_utf8_lossy(&resp.body).into_owned();
@@ -171,6 +207,10 @@ impl JobRunner {
                     .map(|u| u.to_string())
                     .collect::<Vec<_>>();
                 let extract_ms = Some(extract_started.elapsed());
+                self.emit(
+                    crate::events::EventKind::ExtractCompleted,
+                    Some(&resp.final_url),
+                );
 
                 let retry = match signal {
                     Some(_) => RetryDecision::Suggest {
@@ -202,6 +242,7 @@ impl JobRunner {
                 }
             }
             Err(e) => {
+                self.emit(crate::events::EventKind::JobFailed, Some(&job.url));
                 let (error, retry) = classify_error(e);
                 JobOutcome {
                     result: None,
@@ -438,6 +479,70 @@ mod tests {
     #[test]
     fn runner_is_send_sync() {
         assert_send_sync::<JobRunner>();
+    }
+
+    #[tokio::test]
+    async fn run_emits_lifecycle_events_in_order_on_success() {
+        let url: Url = "https://example.com/".parse().unwrap();
+        let body = b"<html><body>ok</body></html>";
+        let fake = FakeFetcher::ok(200, html_headers(), body, url.clone());
+        let sink = std::sync::Arc::new(crate::events::MemorySink::create());
+        let runner =
+            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let _ = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::events::EventKind::JobStarted,
+                crate::events::EventKind::FetchCompleted,
+                crate::events::EventKind::ExtractCompleted,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_emits_challenge_detected_before_extract() {
+        let url: Url = "https://example.com/".parse().unwrap();
+        let fake = FakeFetcher::ok(403, html_headers(), b"cf-chl-bypass", url);
+        let sink = std::sync::Arc::new(crate::events::MemorySink::create());
+        let runner =
+            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let _ = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::events::EventKind::JobStarted,
+                crate::events::EventKind::FetchCompleted,
+                crate::events::EventKind::ChallengeDetected,
+                crate::events::EventKind::ExtractCompleted,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_emits_job_failed_on_error() {
+        let err = crate::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"));
+        let fake = FakeFetcher::err(err);
+        let sink = std::sync::Arc::new(crate::events::MemorySink::create());
+        let runner =
+            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let _ = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::events::EventKind::JobStarted,
+                crate::events::EventKind::JobFailed,
+            ]
+        );
     }
 
     #[test]
