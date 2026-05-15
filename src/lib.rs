@@ -42,6 +42,7 @@ pub mod error;
 pub mod events;
 pub mod extract;
 pub mod fallback_fetch;
+pub mod fingerprint;
 pub mod from_curl;
 pub mod frontier;
 pub mod hooks;
