@@ -105,7 +105,10 @@ impl Fetcher for AutoFetcher {
     /// **not** chained inline (ADR-0002) — the caller inspects the
     /// returned response via `decide_after_spoof` and re-queues the
     /// job when escalation is required.
-    async fn fetch(&self, job: &Job, ctx: &SessionContext) -> Result<crate::impersonate::Response> {
+    async fn fetch(&self, job: &Job, ctx: &SessionContext) -> Result<crate::runner::FetchOutput> {
+        // SpoofFetcher::fetch already wraps in FetchOutput::Http — pass
+        // through. Escalation signalling stays in JobOutcome.retry per
+        // ADR-0002; this method never chains inline to render.
         self.spoof.fetch(job, ctx).await
     }
 }
