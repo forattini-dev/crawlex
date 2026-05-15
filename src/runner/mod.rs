@@ -120,25 +120,320 @@ pub struct PolicyProfilePlaceholder;
 #[derive(Debug, Clone, Default)]
 pub struct ChallengeSignalPlaceholder;
 
-/// Top-level runner. Slice 0: empty shell. Slice #22 promotes
-/// `JobRunner::run` to the per-Job entry point called by `Crawler::process_job`.
+/// Top-level runner. Slice #22 implements `run` for the spoof path and
+/// the rest of `process_job`-style post-processing stays with the
+/// `Crawler`. Render and Auto paths flow through `Fetcher`-trait impls
+/// added in #20/#21; `run` delegates to whichever fetcher matches the
+/// `Method` on the job.
 ///
 /// Held as `Arc<JobRunner>` and shared across workers. `Send + Sync`,
 /// stateless on `self`.
-#[derive(Debug, Default)]
-pub struct JobRunner;
+pub struct JobRunner {
+    fetcher: std::sync::Arc<dyn Fetcher>,
+    extractor: Extractor,
+    detector: ChallengeDetector,
+}
 
 impl JobRunner {
-    pub fn new() -> Self {
-        Self
+    pub fn new(fetcher: std::sync::Arc<dyn Fetcher>) -> Self {
+        Self {
+            fetcher,
+            extractor: Extractor::new(),
+            detector: ChallengeDetector::new(),
+        }
+    }
+
+    /// Execute one job. Pure of queue, storage, admission, and frontier
+    /// concerns — the `Crawler` post-processes those.
+    ///
+    /// Outcome is returned by value (ADR-0001). Live events fire from
+    /// the injected `EventSink` held by the fetcher / future runner
+    /// deps — slice #23 moves per-attempt event emission into this
+    /// function explicitly.
+    pub async fn run(&self, job: &crate::queue::Job, ctx: &SessionContext) -> JobOutcome {
+        let start = std::time::Instant::now();
+        let fetch_started = std::time::Instant::now();
+        let fetch_result = self.fetcher.fetch(job, ctx).await;
+        let fetch_ms = Some(fetch_started.elapsed());
+
+        match fetch_result {
+            Ok(resp) => {
+                let status = resp.status.as_u16();
+                let body_bytes = resp.body.len();
+                let signal = self.detector.detect(status, &resp.headers, &resp.body);
+                let extract_started = std::time::Instant::now();
+                // Body decoded once; extract reuses the same slice.
+                let body_str = String::from_utf8_lossy(&resp.body).into_owned();
+                let links = self
+                    .extractor
+                    .extract_links(&resp.final_url, &body_str)
+                    .into_iter()
+                    .map(|u| u.to_string())
+                    .collect::<Vec<_>>();
+                let extract_ms = Some(extract_started.elapsed());
+
+                let retry = match signal {
+                    Some(_) => RetryDecision::Suggest {
+                        reason: RetryReason::EscalateToRender,
+                        backoff_hint: None,
+                    },
+                    None => RetryDecision::None,
+                };
+                let signals = signal
+                    .map(|_| vec![ChallengeSignalPlaceholder])
+                    .unwrap_or_default();
+
+                JobOutcome {
+                    result: Some(FetchSuccess {
+                        status,
+                        body_bytes,
+                        links,
+                        signals,
+                    }),
+                    error: None,
+                    timings: JobTimings {
+                        fetch_ms,
+                        extract_ms,
+                        total_ms: Some(start.elapsed()),
+                        ..Default::default()
+                    },
+                    retry,
+                    new_session_state: None,
+                }
+            }
+            Err(e) => {
+                let (error, retry) = classify_error(e);
+                JobOutcome {
+                    result: None,
+                    error: Some(error),
+                    timings: JobTimings {
+                        fetch_ms,
+                        total_ms: Some(start.elapsed()),
+                        ..Default::default()
+                    },
+                    retry,
+                    new_session_state: None,
+                }
+            }
+        }
+    }
+}
+
+/// Map an `Error` from the fetch layer to a `JobError` + advised
+/// `RetryDecision`. The mapping is the contract the `Crawler` reads:
+/// transient network problems advise retry; render failures and
+/// unrecoverable challenges do not.
+fn classify_error(err: crate::Error) -> (JobError, RetryDecision) {
+    use crate::Error;
+    match err {
+        Error::Io(io) => {
+            let msg = io.to_string();
+            let is_timeout = matches!(io.kind(), std::io::ErrorKind::TimedOut)
+                || msg.contains("timed out");
+            if is_timeout {
+                (
+                    JobError::Timeout,
+                    RetryDecision::Suggest {
+                        reason: RetryReason::Timeout,
+                        backoff_hint: None,
+                    },
+                )
+            } else {
+                (
+                    JobError::Network(msg),
+                    RetryDecision::Suggest {
+                        reason: RetryReason::Network,
+                        backoff_hint: None,
+                    },
+                )
+            }
+        }
+        Error::Http(s) | Error::Tls(s) | Error::Decompression(s) => (
+            JobError::Network(s),
+            RetryDecision::Suggest {
+                reason: RetryReason::Network,
+                backoff_hint: None,
+            },
+        ),
+        Error::Render(s) | Error::RenderDisabled(s) => {
+            (JobError::RenderFailed(s), RetryDecision::None)
+        }
+        Error::AntibotChallenge { vendor, .. } => (
+            JobError::ChallengeUnrecoverable(format!("{vendor:?}")),
+            RetryDecision::None,
+        ),
+        other => (JobError::Network(other.to_string()), RetryDecision::None),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use http::{HeaderMap, StatusCode};
+    use url::Url;
 
     fn assert_send_sync<T: Send + Sync>() {}
+
+    /// Fake fetcher whose response is whatever the test sets up. Used
+    /// to drive `JobRunner::run` without touching the network or
+    /// Chrome.
+    struct FakeFetcher {
+        response: parking_lot::Mutex<Option<crate::Result<crate::impersonate::Response>>>,
+    }
+    impl FakeFetcher {
+        fn ok(status: u16, headers: HeaderMap, body: &[u8], final_url: Url) -> Arc<Self> {
+            Arc::new(Self {
+                response: parking_lot::Mutex::new(Some(Ok(crate::impersonate::Response {
+                    status: StatusCode::from_u16(status).unwrap(),
+                    headers,
+                    body: Bytes::copy_from_slice(body),
+                    final_url,
+                    alpn: None,
+                    tls_version: None,
+                    cipher: None,
+                    timings: crate::metrics::NetworkTimings::default(),
+                    peer_cert: None,
+                    body_truncated: false,
+                }))),
+            })
+        }
+        fn err(err: crate::Error) -> Arc<Self> {
+            Arc::new(Self {
+                response: parking_lot::Mutex::new(Some(Err(err))),
+            })
+        }
+    }
+    #[async_trait]
+    impl Fetcher for FakeFetcher {
+        async fn fetch(
+            &self,
+            _job: &crate::queue::Job,
+            _ctx: &SessionContext,
+        ) -> crate::Result<crate::impersonate::Response> {
+            self.response.lock().take().expect("fake response set")
+        }
+    }
+
+    fn dummy_job(url: &str) -> crate::queue::Job {
+        crate::queue::Job {
+            id: 1,
+            crawl_id: 0,
+            url: Url::parse(url).unwrap(),
+            depth: 0,
+            priority: 0,
+            method: crate::queue::FetchMethod::HttpSpoof,
+            attempts: 0,
+            last_error: None,
+        }
+    }
+
+    fn html_headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+        h
+    }
+
+    #[tokio::test]
+    async fn run_ok_emits_fetch_success_with_links() {
+        let url: Url = "https://example.com/".parse().unwrap();
+        let body = b"<html><body><a href=\"/a\">a</a><a href=\"/b\">b</a></body></html>";
+        let fake = FakeFetcher::ok(200, html_headers(), body, url.clone());
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
+        let outcome = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        let success = outcome.result.expect("ok branch");
+        assert_eq!(success.status, 200);
+        assert!(success.links.iter().any(|u| u.ends_with("/a")));
+        assert!(success.links.iter().any(|u| u.ends_with("/b")));
+        assert!(success.signals.is_empty());
+        assert!(matches!(outcome.retry, RetryDecision::None));
+        assert!(outcome.timings.total_ms.is_some());
+        assert!(outcome.timings.fetch_ms.is_some());
+        assert!(outcome.timings.extract_ms.is_some());
+        assert!(outcome.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_detects_challenge_and_suggests_escalate() {
+        let url: Url = "https://example.com/".parse().unwrap();
+        let body = b"cf-chl-bypass";
+        let fake = FakeFetcher::ok(403, html_headers(), body, url);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
+        let outcome = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        let success = outcome.result.expect("ok branch");
+        assert_eq!(success.status, 403);
+        assert_eq!(success.signals.len(), 1);
+        assert!(matches!(
+            outcome.retry,
+            RetryDecision::Suggest {
+                reason: RetryReason::EscalateToRender,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_io_timeout_maps_to_retry_timeout() {
+        let err = crate::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"));
+        let fake = FakeFetcher::err(err);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
+        let outcome = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        assert!(outcome.result.is_none());
+        assert!(matches!(outcome.error, Some(JobError::Timeout)));
+        assert!(matches!(
+            outcome.retry,
+            RetryDecision::Suggest {
+                reason: RetryReason::Timeout,
+                ..
+            }
+        ));
+        // Timings populated even on failure.
+        assert!(outcome.timings.total_ms.is_some());
+        assert!(outcome.timings.fetch_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn run_render_failure_does_not_suggest_retry() {
+        let err = crate::Error::Render("nav".into());
+        let fake = FakeFetcher::err(err);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
+        let outcome = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        assert!(matches!(
+            outcome.error,
+            Some(JobError::RenderFailed(_))
+        ));
+        assert!(matches!(outcome.retry, RetryDecision::None));
+    }
+
+    #[tokio::test]
+    async fn run_antibot_challenge_error_is_unrecoverable_no_retry() {
+        let err = crate::Error::AntibotChallenge {
+            vendor: crate::error::AntibotVendor::Cloudflare,
+            status: 403,
+            note: "x".into(),
+        };
+        let fake = FakeFetcher::err(err);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
+        let outcome = runner
+            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .await;
+        assert!(matches!(
+            outcome.error,
+            Some(JobError::ChallengeUnrecoverable(_))
+        ));
+        assert!(matches!(outcome.retry, RetryDecision::None));
+    }
 
     #[test]
     fn runner_is_send_sync() {
