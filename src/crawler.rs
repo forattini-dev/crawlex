@@ -38,6 +38,7 @@ pub struct Crawler {
     robots: Arc<RobotsCache>,
     graph: Arc<DiscoveryGraph>,
     client: Arc<ImpersonateClient>,
+    spoof: Arc<crate::runner::SpoofFetcher>,
     /// Lazily constructed on first access. When `max_concurrent_render == 0`
     /// and no render job ever hits `process_job`, we never allocate the pool
     /// (no browser spawn, no user-data-dir, no fetcher wiring).
@@ -223,6 +224,7 @@ impl Crawler {
             rate_limiter: Arc::new(HostRateLimiter::new(config.rate_per_host_rps)),
             robots: Arc::new(RobotsCache::new(Duration::from_secs(24 * 3600))),
             graph: Arc::new(DiscoveryGraph::new()),
+            spoof: Arc::new(crate::runner::SpoofFetcher::new(client.clone())),
             client,
             #[cfg(feature = "cdp-backend")]
             render,
@@ -1343,6 +1345,7 @@ impl Crawler {
             robots: self.robots.clone(),
             graph: self.graph.clone(),
             client: self.client.clone(),
+            spoof: self.spoof.clone(),
             #[cfg(feature = "cdp-backend")]
             render: self.render.clone(),
             #[cfg(feature = "cdp-backend")]
@@ -2275,21 +2278,15 @@ impl Crawler {
                 let proxy_for_job = ctx.proxy.clone();
                 let fetch_started = std::time::Instant::now();
                 let collect_net_timings = self.config.collect_net_timings || prefetch_observability;
-                let fetch = if proxy_for_job.is_some() && collect_net_timings {
-                    self.client
-                        .get_timed_via(&job.url, proxy_for_job.as_ref(), dest)
-                        .await
-                } else if proxy_for_job.is_some() {
-                    self.client
-                        .get_via(&job.url, proxy_for_job.as_ref(), dest)
-                        .await
-                } else if collect_net_timings {
-                    self.client.get_timed_with_dest(&job.url, dest).await
-                } else if matches!(dest, crate::discovery::assets::SecFetchDest::Document) {
-                    self.client.get(&job.url).await
-                } else {
-                    self.client.get_with_dest(&job.url, dest).await
-                };
+                let fetch = self
+                    .spoof
+                    .fetch_with(
+                        &job.url,
+                        dest,
+                        proxy_for_job.as_ref(),
+                        collect_net_timings,
+                    )
+                    .await;
                 let resp = match fetch {
                     Ok(r) => r,
                     Err(e) => {
