@@ -9,9 +9,9 @@ use std::sync::Arc;
 use crate::fingerprint::detection::{Category, Detection, Tier};
 use crate::fingerprint::report::{FingerprintReport, Tiers};
 use crate::fingerprint::target::sources::{
-    AltSvcSource, AntibotMarkerSource, BodyMarkerSource, CookieSource, HeaderSource, JsonLdSource,
-    LinkRelSource, MetaTagSource, PeerCertSource, ScriptSrcSource, Source, StatusPatternSource,
-    TimingPatternSource, TlsServerHelloSource,
+    AltSvcSource, AntibotMarkerSource, BlockPatternSource, BodyMarkerSource, CookieSource,
+    HeaderSource, JsonLdSource, LinkRelSource, MetaTagSource, PeerCertSource, ScriptSrcSource,
+    Source, StatusPatternSource, TimingPatternSource, TlsServerHelloSource,
 };
 use crate::fingerprint::target::TargetContext;
 
@@ -49,6 +49,7 @@ impl Engine {
         e.register(Arc::new(PeerCertSource::new()));
         e.register(Arc::new(TimingPatternSource::new()));
         e.register(Arc::new(AntibotMarkerSource::new()));
+        e.register(Arc::new(BlockPatternSource::new()));
         e
     }
 
@@ -127,7 +128,7 @@ mod tests {
         // meta_tag, json_ld, script_src, link_rel, alt_svc,
         // status_pattern.
         let e = Engine::with_defaults();
-        assert_eq!(e.hot_source_count(), 13);
+        assert_eq!(e.hot_source_count(), 14);
     }
 
     #[test]
