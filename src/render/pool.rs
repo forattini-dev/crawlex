@@ -414,7 +414,10 @@ fn build_accept_language(locale: Option<&str>) -> String {
 use crate::config::Config;
 use crate::identity::IdentityBundle;
 use crate::impersonate::Profile;
-use crate::render::stealth::{render_shim_from_bundle, render_worker_shim_from_bundle};
+use crate::render::stealth::{
+    render_shim_from_bundle, render_shim_from_bundle_with_calibration,
+    render_worker_shim_from_bundle, CalibrationOverrides,
+};
 use crate::render::{RenderedPage, Renderer, WaitStrategy};
 use crate::storage::Storage;
 use crate::{Error, Result};
@@ -1992,8 +1995,33 @@ impl RenderPool {
     }
 
     async fn install_stealth(&self, page: &Page) -> Result<()> {
+        self.install_stealth_with_overrides(page, None).await
+    }
+
+    /// Slice 33 — install the stealth shim, optionally consuming
+    /// calibrated values from an external CDP session's effective
+    /// fingerprint. With `overrides=None` this is identical to the
+    /// pre-slice-33 behaviour (uses the cached shim from the bundle).
+    /// With `Some` the rendered shim is generated on the spot so the
+    /// listed placeholders reflect the calibrated values.
+    async fn install_stealth_with_overrides(
+        &self,
+        page: &Page,
+        overrides: Option<&CalibrationOverrides>,
+    ) -> Result<()> {
+        let source = match overrides {
+            Some(o) if !o.is_empty() => {
+                let bundle = self.bundle();
+                let mut js = render_shim_from_bundle_with_calibration(&bundle, Some(o));
+                if self.config.dom_capture.flatten_shadow_dom {
+                    js.push_str(SHADOW_ROOT_CAPTURE_JS);
+                }
+                js
+            }
+            _ => self.shim_js(),
+        };
         page.execute(AddScriptToEvaluateOnNewDocumentParams {
-            source: self.shim_js(),
+            source,
             world_name: None,
             include_command_line_api: Some(false),
             run_immediately: Some(true),
@@ -2001,6 +2029,60 @@ impl RenderPool {
         .await
         .map_err(|e| Error::Render(format!("stealth inject: {e}")))?;
         Ok(())
+    }
+
+    /// Project a calibrated [`EffectiveFingerprint`] into the shim
+    /// override surface. Empty / zero-valued fields are left as `None`
+    /// so the bundle defaults still apply for any axis the probe could
+    /// not measure.
+    fn calibration_overrides_from_fingerprint(
+        fp: &crate::render::calibration::EffectiveFingerprint,
+    ) -> CalibrationOverrides {
+        fn s(v: &str) -> Option<String> {
+            let t = v.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        let mut o = CalibrationOverrides::default();
+        o.user_agent = s(&fp.user_agent);
+        o.platform = s(&fp.platform);
+        o.locale = s(&fp.locale);
+        o.timezone = s(&fp.timezone);
+        o.webgl_unmasked_vendor = s(&fp.webgl.unmasked_vendor);
+        o.webgl_unmasked_renderer = s(&fp.webgl.unmasked_renderer);
+        o.webgpu_adapter_description = fp.webgpu_adapter.as_deref().and_then(s);
+        if let Some(pm) = fp.performance_memory.as_ref() {
+            if pm.js_heap_size_limit > 0 {
+                o.heap_size_limit = Some(pm.js_heap_size_limit);
+            }
+        }
+        // media_devices is a flat list of kinds; bucket by substring.
+        let mut mics = 0u8;
+        let mut cams = 0u8;
+        let mut spk = 0u8;
+        for d in &fp.media_devices {
+            let l = d.to_ascii_lowercase();
+            if l.contains("audioinput") {
+                mics = mics.saturating_add(1);
+            } else if l.contains("videoinput") {
+                cams = cams.saturating_add(1);
+            } else if l.contains("audiooutput") {
+                spk = spk.saturating_add(1);
+            }
+        }
+        if mics > 0 {
+            o.media_mic_count = Some(mics);
+        }
+        if cams > 0 {
+            o.media_cam_count = Some(cams);
+        }
+        if spk > 0 {
+            o.media_speaker_count = Some(spk);
+        }
+        o
     }
 
     /// Install the SPA/PWA JS observer (History API + fetch + XHR
@@ -3074,8 +3156,35 @@ impl RenderPool {
         // empty and the next render will retry.
         if self.config.external_cdp_url.is_some() {
             let cal_key = self.calibration_key_for(proxy, &session_id, &ctx_id);
-            if let Err(e) = self.ensure_calibrated(&page, cal_key).await {
-                tracing::warn!(?e, "calibration failed; continuing to target without cached fingerprint");
+            match self.ensure_calibrated(&page, cal_key).await {
+                Ok(fp) => {
+                    // Slice 33 — reflect the calibrated effective
+                    // fingerprint into the stealth shim. We never
+                    // disable the shim; the second install is wrapped
+                    // in `addScriptToEvaluateOnNewDocument` and so will
+                    // apply on the upcoming target navigation. The
+                    // shim's per-section try/catch tolerates the second
+                    // pass; we only run it when the projection actually
+                    // produced non-bundle values.
+                    let overrides = Self::calibration_overrides_from_fingerprint(&fp);
+                    if !overrides.is_empty() {
+                        if let Err(e) = self
+                            .install_stealth_with_overrides(&page, Some(&overrides))
+                            .await
+                        {
+                            tracing::debug!(
+                                ?e,
+                                "calibration-aware stealth inject failed; falling back to bundle shim"
+                            );
+                        } else {
+                            tracing::debug!(
+                                event = "stealth.calibration.applied",
+                                "external CDP shim updated with calibrated values"
+                            );
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(?e, "calibration failed; continuing to target without cached fingerprint"),
             }
         }
         self.restore_session_state(&page, url, &session_id).await?;

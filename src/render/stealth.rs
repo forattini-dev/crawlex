@@ -11,6 +11,55 @@ use crate::impersonate::Profile;
 
 pub const STEALTH_SHIM_TEMPLATE: &str = include_str!("stealth_shim.js");
 
+/// Slice 33 — values measured from an external CDP session's effective
+/// browser fingerprint that should override the `IdentityBundle`-derived
+/// defaults when rendering the stealth shim. Every field is optional;
+/// only fields populated by an upstream calibration are applied, so the
+/// stock (non-CDP) path keeps producing byte-identical output by passing
+/// `None`.
+///
+/// The struct is intentionally decoupled from `crate::render::calibration`
+/// so `stealth` stays buildable without the `cdp-backend` feature. The
+/// caller (typically the render pool) is responsible for projecting an
+/// `EffectiveFingerprint` into this shape.
+#[derive(Debug, Clone, Default)]
+pub struct CalibrationOverrides {
+    pub user_agent: Option<String>,
+    pub platform: Option<String>,
+    pub locale: Option<String>,
+    pub languages_json: Option<String>,
+    pub timezone: Option<String>,
+    pub tz_offset_min: Option<i32>,
+    pub webgl_unmasked_vendor: Option<String>,
+    pub webgl_unmasked_renderer: Option<String>,
+    pub webgpu_adapter_description: Option<String>,
+    pub heap_size_limit: Option<u64>,
+    pub media_mic_count: Option<u8>,
+    pub media_cam_count: Option<u8>,
+    pub media_speaker_count: Option<u8>,
+}
+
+impl CalibrationOverrides {
+    /// True when no override is set — used to short-circuit to the
+    /// bundle-only render path so the stock branch produces unchanged
+    /// output.
+    pub fn is_empty(&self) -> bool {
+        self.user_agent.is_none()
+            && self.platform.is_none()
+            && self.locale.is_none()
+            && self.languages_json.is_none()
+            && self.timezone.is_none()
+            && self.tz_offset_min.is_none()
+            && self.webgl_unmasked_vendor.is_none()
+            && self.webgl_unmasked_renderer.is_none()
+            && self.webgpu_adapter_description.is_none()
+            && self.heap_size_limit.is_none()
+            && self.media_mic_count.is_none()
+            && self.media_cam_count.is_none()
+            && self.media_speaker_count.is_none()
+    }
+}
+
 /// Legacy shim vars driven by `Profile` + caller-supplied locale/timezone.
 /// Retained for transition; prefer `render_shim_from_bundle`.
 pub struct ShimVars<'a> {
@@ -329,6 +378,110 @@ impl ShimScratch {
     }
 }
 
+/// Owned strings produced when applying [`CalibrationOverrides`] to the
+/// bundle. Held separately so [`ShimSubstitutions`] can borrow `&str`
+/// from these fields while the bundle remains the fallback source.
+#[derive(Default)]
+struct OverrideScratch {
+    user_agent: Option<String>,
+    app_version: Option<String>,
+    platform: Option<String>,
+    ua_platform: Option<String>,
+    locale: Option<String>,
+    languages_json: Option<String>,
+    timezone: Option<String>,
+    webgl_unmasked_vendor: Option<String>,
+    webgpu_adapter_description: Option<String>,
+    gpu_vendor_keyword: Option<&'static str>,
+}
+
+impl OverrideScratch {
+    fn from_overrides(o: &CalibrationOverrides) -> Self {
+        let app_version = o
+            .user_agent
+            .as_deref()
+            .map(|ua| ua.strip_prefix("Mozilla/").unwrap_or(ua).to_string());
+        let gpu_vendor_keyword = o
+            .webgl_unmasked_renderer
+            .as_deref()
+            .map(gpu_keyword_from_renderer);
+        Self {
+            user_agent: o.user_agent.clone(),
+            app_version,
+            platform: o.platform.clone(),
+            // UA-CH platform token is the bare first word of `platform`
+            // (e.g. "Linux x86_64" → "Linux"). Match the legacy path.
+            ua_platform: o.platform.as_deref().map(|p| {
+                p.split_whitespace()
+                    .next()
+                    .unwrap_or(p)
+                    .trim_matches('"')
+                    .to_string()
+            }),
+            locale: o.locale.clone(),
+            languages_json: o.languages_json.clone(),
+            timezone: o.timezone.clone(),
+            webgl_unmasked_vendor: o.webgl_unmasked_vendor.clone(),
+            webgpu_adapter_description: o.webgpu_adapter_description.clone(),
+            gpu_vendor_keyword,
+        }
+    }
+}
+
+/// Layer [`CalibrationOverrides`] on top of a bundle-derived
+/// substitution. Any unset field falls through to the bundle.
+fn apply_overrides<'a>(
+    subs: &mut ShimSubstitutions<'a>,
+    overrides: &'a CalibrationOverrides,
+    scratch: &'a OverrideScratch,
+) {
+    if let Some(s) = scratch.user_agent.as_deref() {
+        subs.user_agent = s;
+    }
+    if let Some(s) = scratch.app_version.as_deref() {
+        subs.app_version = s;
+    }
+    if let Some(s) = scratch.platform.as_deref() {
+        subs.platform = s;
+    }
+    if let Some(s) = scratch.ua_platform.as_deref() {
+        subs.ua_platform = s;
+    }
+    if let Some(s) = scratch.locale.as_deref() {
+        subs.locale = s;
+    }
+    if let Some(s) = scratch.languages_json.as_deref() {
+        subs.languages_json = s;
+    }
+    if let Some(s) = scratch.timezone.as_deref() {
+        subs.timezone = s;
+    }
+    if let Some(n) = overrides.tz_offset_min {
+        subs.tz_offset_min = n;
+    }
+    if let Some(s) = scratch.webgl_unmasked_vendor.as_deref() {
+        subs.webgl_unmasked_vendor = s;
+    }
+    if let Some(s) = scratch.webgpu_adapter_description.as_deref() {
+        subs.webgpu_adapter_description = s;
+    }
+    if let Some(n) = overrides.heap_size_limit {
+        subs.heap_size_limit = n;
+    }
+    if let Some(kw) = scratch.gpu_vendor_keyword {
+        subs.gpu_vendor_keyword = kw;
+    }
+    if let Some(n) = overrides.media_mic_count {
+        subs.media_mic_count = n;
+    }
+    if let Some(n) = overrides.media_cam_count {
+        subs.media_cam_count = n;
+    }
+    if let Some(n) = overrides.media_speaker_count {
+        subs.media_speaker_count = n;
+    }
+}
+
 /// Worker-scope variant of the stealth shim. Same persona substitutions, but
 /// DOM-only sections (`@worker-skip-start`/`@worker-skip-end` blocks in
 /// `stealth_shim.js`) are stripped so the script runs cleanly inside
@@ -339,9 +492,27 @@ impl ShimScratch {
 /// coherence into worker globals before any user script runs (Camoufox port
 /// Sprint 3 S3.1).
 pub fn render_worker_shim_from_bundle(bundle: &IdentityBundle) -> String {
+    render_worker_shim_from_bundle_with_calibration(bundle, None)
+}
+
+/// Calibration-aware worker shim. When `overrides` is `None` this is
+/// byte-identical to [`render_worker_shim_from_bundle`] so the stock
+/// path is preserved. When set, the listed fields are taken from the
+/// calibrated fingerprint and the rest fall through to `bundle`.
+pub fn render_worker_shim_from_bundle_with_calibration(
+    bundle: &IdentityBundle,
+    overrides: Option<&CalibrationOverrides>,
+) -> String {
     let stripped = strip_worker_skip_blocks(STEALTH_SHIM_TEMPLATE);
     let scratch = ShimScratch::from_bundle(bundle);
-    let subs = build_subs(bundle, &scratch);
+    let mut subs = build_subs(bundle, &scratch);
+    let ov_scratch;
+    if let Some(o) = overrides {
+        if !o.is_empty() {
+            ov_scratch = OverrideScratch::from_overrides(o);
+            apply_overrides(&mut subs, o, &ov_scratch);
+        }
+    }
     apply_to(&stripped, &subs)
 }
 
@@ -350,47 +521,27 @@ pub fn render_worker_shim_from_bundle(bundle: &IdentityBundle) -> String {
 /// and (b) the session-scoped `canvas_audio_seed` flows into the JS as
 /// `window.__crawlex_seed__` via `{{TZ_OFFSET_MIN}}`-style substitution.
 pub fn render_shim_from_bundle(bundle: &IdentityBundle) -> String {
-    // `ua_platform` in the bundle is already wrapped in quotes
-    // (`"Linux"`) because it's the Sec-CH-UA-Platform HTTP value; for the
-    // JS substitution we want the bare token. Strip one layer of quotes.
-    let ua_platform_raw = bundle.ua_platform.trim_matches('"').to_string();
-    let ua_major = bundle.ua_major.to_string();
-    let app_version = bundle
-        .ua
-        .strip_prefix("Mozilla/")
-        .unwrap_or(&bundle.ua)
-        .to_string();
-    apply(&ShimSubstitutions {
-        user_agent: &bundle.ua,
-        app_version: &app_version,
-        ua_brands: &bundle.ua_brands,
-        ua_full_version_list: &bundle.ua_full_version_list,
-        ua_full_version: &bundle.ua_full_version,
-        ua_major: &ua_major,
-        platform: &bundle.platform,
-        ua_platform: &ua_platform_raw,
-        locale: &bundle.locale,
-        languages_json: &bundle.languages_json,
-        timezone: &bundle.timezone,
-        tz_offset_min: bundle.tz_offset_min,
-        canvas_seed: seed_u31(bundle.canvas_audio_seed),
-        webgl_unmasked_vendor: &bundle.webgl_unmasked_vendor,
-        webgpu_adapter_description: &bundle.webgpu_adapter_description,
-        scrollbar_width: bundle.scrollbar_width,
-        heap_size_limit: bundle.heap_size_limit,
-        device_memory: bundle.device_memory,
-        hardware_concurrency: bundle.hardware_concurrency,
-        max_texture_size: bundle.max_texture_size,
-        max_viewport_w: bundle.max_viewport_w,
-        max_viewport_h: bundle.max_viewport_h,
-        audio_sample_rate: bundle.audio_sample_rate,
-        fonts_json: &bundle.fonts_json,
-        gpu_vendor_keyword: gpu_keyword_from_renderer(&bundle.webgl_renderer),
-        media_mic_count: bundle.media_mic_count,
-        media_cam_count: bundle.media_cam_count,
-        media_speaker_count: bundle.media_speaker_count,
-        expose_battery: gpu_keyword_from_renderer(&bundle.webgl_renderer) == "adreno",
-    })
+    render_shim_from_bundle_with_calibration(bundle, None)
+}
+
+/// Calibration-aware variant. With `overrides=None` the output is
+/// byte-identical to [`render_shim_from_bundle`] (stock path preserved).
+/// When set, listed fields come from the calibrated fingerprint; every
+/// other placeholder falls through to `bundle`.
+pub fn render_shim_from_bundle_with_calibration(
+    bundle: &IdentityBundle,
+    overrides: Option<&CalibrationOverrides>,
+) -> String {
+    let scratch = ShimScratch::from_bundle(bundle);
+    let mut subs = build_subs(bundle, &scratch);
+    let ov_scratch;
+    if let Some(o) = overrides {
+        if !o.is_empty() {
+            ov_scratch = OverrideScratch::from_overrides(o);
+            apply_overrides(&mut subs, o, &ov_scratch);
+        }
+    }
+    apply(&subs)
 }
 
 #[cfg(test)]
@@ -577,6 +728,106 @@ mod tests {
             js.contains("new Date().getTimezoneOffset()"),
             "timezone anchoring missing — curve must follow local midnight"
         );
+    }
+
+    #[test]
+    fn calibration_overrides_none_matches_stock_output() {
+        // Slice 33: passing None must be byte-identical to the
+        // bundle-only path so the stock branch is provably preserved.
+        let b = IdentityBundle::from_chromium(131, 42);
+        let stock = render_shim_from_bundle(&b);
+        let via_calibration = render_shim_from_bundle_with_calibration(&b, None);
+        assert_eq!(stock, via_calibration);
+        // Empty (all-None) overrides also short-circuit.
+        let empty = CalibrationOverrides::default();
+        assert!(empty.is_empty());
+        let via_empty = render_shim_from_bundle_with_calibration(&b, Some(&empty));
+        assert_eq!(stock, via_empty);
+    }
+
+    #[test]
+    fn calibration_overrides_reflected_in_shim() {
+        let b = IdentityBundle::from_chromium(131, 42);
+        let overrides = CalibrationOverrides {
+            user_agent: Some(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) Chrome/149.0".into(),
+            ),
+            platform: Some("MacIntel".into()),
+            locale: Some("pt-PT".into()),
+            languages_json: Some(r#"["pt-PT","pt","en"]"#.into()),
+            timezone: Some("Europe/Lisbon".into()),
+            tz_offset_min: Some(-60),
+            webgl_unmasked_vendor: Some("Apple Inc.".into()),
+            webgl_unmasked_renderer: Some("Apple M2".into()),
+            webgpu_adapter_description: Some("Apple M2 GPU".into()),
+            heap_size_limit: Some(4_294_967_296),
+            media_mic_count: Some(3),
+            media_cam_count: Some(2),
+            media_speaker_count: Some(4),
+        };
+        let js = render_shim_from_bundle_with_calibration(&b, Some(&overrides));
+        assert!(!js.contains("{{"), "unsubstituted token leaked");
+        // UA + derived app_version (UA without `Mozilla/` prefix).
+        assert!(
+            js.contains("Chrome/149.0"),
+            "calibrated UA missing"
+        );
+        // Platform + UA-CH platform token.
+        assert!(js.contains("MacIntel"), "calibrated platform missing");
+        // Locale, languages, timezone, tz offset.
+        assert!(js.contains("pt-PT"), "calibrated locale missing");
+        assert!(js.contains(r#"["pt-PT","pt","en"]"#));
+        assert!(js.contains("Europe/Lisbon"));
+        assert!(js.contains("-60"), "calibrated tz offset missing");
+        // WebGL + WebGPU + GPU keyword (apple).
+        assert!(js.contains("Apple Inc."), "calibrated WebGL vendor missing");
+        assert!(
+            js.contains("Apple M2 GPU"),
+            "calibrated WebGPU adapter missing"
+        );
+        assert!(
+            js.contains("'apple'") || js.contains("\"apple\""),
+            "GPU keyword not derived from calibrated renderer"
+        );
+        // Heap limit + media counts.
+        assert!(js.contains("4294967296"), "calibrated heap limit missing");
+        assert!(js.contains("MIC_COUNT = 3"), "calibrated mic count missing");
+    }
+
+    #[test]
+    fn partial_overrides_only_replace_listed_fields() {
+        let b = IdentityBundle::from_chromium(131, 42);
+        let stock = render_shim_from_bundle(&b);
+        let mut overrides = CalibrationOverrides::default();
+        overrides.timezone = Some("Asia/Tokyo".into());
+        let mixed = render_shim_from_bundle_with_calibration(&b, Some(&overrides));
+        // Only the timezone is allowed to differ; bundle UA and locale
+        // must still be present.
+        assert!(mixed.contains("Asia/Tokyo"));
+        assert!(mixed.contains(&b.ua), "non-overridden UA dropped");
+        assert!(mixed.contains(&b.locale), "non-overridden locale dropped");
+        // The byte-string differs from stock because we changed timezone.
+        assert_ne!(stock, mixed);
+    }
+
+    #[test]
+    fn worker_shim_honours_calibration_overrides() {
+        let b = IdentityBundle::from_chromium(131, 7);
+        let stock = render_worker_shim_from_bundle(&b);
+        let via_none = render_worker_shim_from_bundle_with_calibration(&b, None);
+        assert_eq!(stock, via_none, "worker stock path must be preserved");
+        let overrides = CalibrationOverrides {
+            timezone: Some("Asia/Tokyo".into()),
+            webgl_unmasked_vendor: Some("Apple Inc.".into()),
+            webgl_unmasked_renderer: Some("Apple M2".into()),
+            ..Default::default()
+        };
+        let calibrated =
+            render_worker_shim_from_bundle_with_calibration(&b, Some(&overrides));
+        assert!(calibrated.contains("Asia/Tokyo"));
+        assert!(calibrated.contains("Apple Inc."));
+        // Worker variant still has DOM-only sections stripped.
+        assert!(!calibrated.contains("@worker-skip-start"));
     }
 
     #[test]
