@@ -14,6 +14,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct ProbeOk {
     pub web_socket_debugger_url: String,
     pub browser: String,
+    /// Slice 31 — non-standard `Stealth-Provider` field surfaced by
+    /// native-stealth multiplexers (e.g. cloakserve-like hosts) on
+    /// `/json/version`. Empty for plain Chromium DevTools.
+    pub stealth_provider: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -22,6 +26,8 @@ struct VersionPayload {
     web_socket_debugger_url: String,
     #[serde(default, rename = "Browser")]
     browser: String,
+    #[serde(default, rename = "Stealth-Provider")]
+    stealth_provider: String,
 }
 
 /// Probe an external CDP endpoint by fetching `/json/version`. Returns
@@ -82,6 +88,7 @@ pub async fn probe(endpoint: &str) -> std::result::Result<ProbeOk, String> {
     Ok(ProbeOk {
         web_socket_debugger_url: parsed.web_socket_debugger_url,
         browser: parsed.browser,
+        stealth_provider: parsed.stealth_provider,
     })
 }
 
