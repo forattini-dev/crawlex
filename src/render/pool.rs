@@ -1185,47 +1185,159 @@ impl RenderPool {
     /// Validate the Chrome binary before the first render runs. Returns the
     /// resolved path so callers can log it. Safe to call even when no render
     /// is planned — in that case `Err` is typically ignored by the caller.
+    ///
+    /// Slice 36 — when explicit provider fallback is armed, a primary
+    /// failure walks the configured chain. Each transition emits a
+    /// `provider.fallback` event (or `provider.fallback.skipped` if the
+    /// candidate isn't usable in the current config). If every fallback
+    /// fails, the returned error preserves the original primary error
+    /// and lists every attempted provider so operators can read the
+    /// full path off a single log line.
     pub async fn preflight(&self) -> Result<String> {
-        if let Some(endpoint) = self.config.external_cdp_url.as_deref() {
-            // Slice 30 — probe `/json/version` so an unreachable or
-            // incompatible CDP host fails preflight with an actionable
-            // message instead of surfacing as a generic transport error
-            // on the first render job. Slice 29 added the structured
-            // `event="provider.selected"` log entry; we keep emitting it
-            // once the probe succeeds and enrich it with the resolved
-            // WebSocket URL and browser identity for traceability.
-            let probe = crate::render::cdp_probe::probe(endpoint)
-                .await
-                .map_err(|msg| Error::Render(format!("external CDP preflight failed: {msg}")))?;
-            // Slice 31 — capability detection. Stays vendor-neutral:
-            // we record what the endpoint *supports*, not which vendor
-            // it is. `ensure_browser` reads this to decide whether to
-            // append identity query params.
-            let caps = crate::render::cdp_capabilities::EndpointCapabilities::detect(&probe);
-            tracing::info!(
-                event = "provider.selected",
-                provider = crate::config::BrowserProvider::Cdp.as_str(),
-                endpoint = endpoint,
-                external_cdp_url = endpoint,
-                ws_debugger_url = probe.web_socket_debugger_url.as_str(),
-                browser = probe.browser.as_str(),
-                endpoint_kind = caps.kind.as_str(),
-                identity_params = caps.identity_params,
-                vendor = caps.vendor.as_deref().unwrap_or(""),
-                session_mode = self.config.external_cdp_session_mode.as_str(),
-                "render pool: using external CDP endpoint"
-            );
-            *self.cdp_capabilities.write() = Some(caps);
-            return Ok(endpoint.to_string());
+        let primary = self.effective_primary_provider();
+        let primary_err = match self.preflight_for_provider(primary).await {
+            Ok(v) => return Ok(v),
+            Err(e) => e,
+        };
+        let chain = self.config.provider_fallback.chain_after(primary);
+        if chain.is_empty() {
+            return Err(primary_err);
         }
-        let path = self.resolve_chrome_path_async().await?;
-        tracing::info!(
-            event = "provider.selected",
-            provider = crate::config::BrowserProvider::Stock.as_str(),
-            chrome = %path,
-            "render pool: using Chrome binary"
-        );
-        Ok(path)
+        let original = primary_err.to_string();
+        let mut attempts: Vec<(crate::config::BrowserProvider, String)> = Vec::new();
+        for next in chain {
+            if !self.provider_usable_for_fallback(next) {
+                let reason = self.unusable_reason(next);
+                tracing::warn!(
+                    event = "provider.fallback.skipped",
+                    source = primary.as_str(),
+                    destination = next.as_str(),
+                    reason = %reason,
+                    "render pool: provider fallback skipped — candidate not usable"
+                );
+                attempts.push((next, reason.to_string()));
+                continue;
+            }
+            tracing::warn!(
+                event = "provider.fallback",
+                source = primary.as_str(),
+                destination = next.as_str(),
+                reason = %original,
+                mismatch_policy = self.config.mismatch_policy.as_str(),
+                session_mode = self.config.external_cdp_session_mode.as_str(),
+                "render pool: provider fallback attempt"
+            );
+            match self.preflight_for_provider(next).await {
+                Ok(v) => return Ok(v),
+                Err(e) => attempts.push((next, e.to_string())),
+            }
+        }
+        let path_str = attempts
+            .iter()
+            .map(|(p, e)| format!("{}=> {}", p.as_str(), e))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(Error::Render(format!(
+            "preflight failed for primary `{}`: {}; fallback attempted: [{}]",
+            primary.as_str(),
+            original,
+            path_str
+        )))
+    }
+
+    /// Slice 36 — concrete provider that primary preflight actually
+    /// drives. `Auto` collapses to `Cdp` when an external endpoint is
+    /// set, else `Stock`. `Cdp` / `Stock` map to themselves. The render
+    /// path itself still keys off `external_cdp_url`, so this routing
+    /// only affects fallback eligibility decisions.
+    fn effective_primary_provider(&self) -> crate::config::BrowserProvider {
+        use crate::config::BrowserProvider;
+        match self.config.browser_provider {
+            BrowserProvider::Stock => BrowserProvider::Stock,
+            BrowserProvider::Cdp => BrowserProvider::Cdp,
+            BrowserProvider::Auto => {
+                if self.config.external_cdp_url.is_some() {
+                    BrowserProvider::Cdp
+                } else {
+                    BrowserProvider::Stock
+                }
+            }
+        }
+    }
+
+    /// Slice 36 — true when the given provider has the prerequisites it
+    /// needs for a fallback preflight to even be attempted. We skip the
+    /// preflight (and emit `provider.fallback.skipped`) instead of
+    /// running and failing, so the surfaced error chain is informative.
+    fn provider_usable_for_fallback(&self, p: crate::config::BrowserProvider) -> bool {
+        use crate::config::BrowserProvider;
+        match p {
+            BrowserProvider::Cdp => self.config.external_cdp_url.is_some(),
+            BrowserProvider::Stock => true,
+            // Already filtered out by `ProviderFallbackConfig::chain_after`.
+            BrowserProvider::Auto => false,
+        }
+    }
+
+    fn unusable_reason(&self, p: crate::config::BrowserProvider) -> &'static str {
+        use crate::config::BrowserProvider;
+        match p {
+            BrowserProvider::Cdp => "no external_cdp_url configured",
+            BrowserProvider::Auto => "auto is a meta-selector, not a concrete fallback target",
+            BrowserProvider::Stock => "",
+        }
+    }
+
+    /// Slice 36 — single-provider preflight, extracted so the fallback
+    /// loop can drive both `Stock` and `Cdp` paths through a common
+    /// signature.
+    async fn preflight_for_provider(
+        &self,
+        p: crate::config::BrowserProvider,
+    ) -> Result<String> {
+        use crate::config::BrowserProvider;
+        match p {
+            BrowserProvider::Cdp => {
+                let endpoint = self.config.external_cdp_url.as_deref().ok_or_else(|| {
+                    Error::Render(
+                        "external CDP preflight failed: external_cdp_url not configured".into(),
+                    )
+                })?;
+                let probe = crate::render::cdp_probe::probe(endpoint).await.map_err(
+                    |msg| Error::Render(format!("external CDP preflight failed: {msg}")),
+                )?;
+                let caps =
+                    crate::render::cdp_capabilities::EndpointCapabilities::detect(&probe);
+                tracing::info!(
+                    event = "provider.selected",
+                    provider = BrowserProvider::Cdp.as_str(),
+                    endpoint = endpoint,
+                    external_cdp_url = endpoint,
+                    ws_debugger_url = probe.web_socket_debugger_url.as_str(),
+                    browser = probe.browser.as_str(),
+                    endpoint_kind = caps.kind.as_str(),
+                    identity_params = caps.identity_params,
+                    vendor = caps.vendor.as_deref().unwrap_or(""),
+                    session_mode = self.config.external_cdp_session_mode.as_str(),
+                    "render pool: using external CDP endpoint"
+                );
+                *self.cdp_capabilities.write() = Some(caps);
+                Ok(endpoint.to_string())
+            }
+            BrowserProvider::Stock => {
+                let path = self.resolve_chrome_path_async().await?;
+                tracing::info!(
+                    event = "provider.selected",
+                    provider = BrowserProvider::Stock.as_str(),
+                    chrome = %path,
+                    "render pool: using Chrome binary"
+                );
+                Ok(path)
+            }
+            BrowserProvider::Auto => Err(Error::Render(
+                "internal: Auto is not a concrete preflight target".into(),
+            )),
+        }
     }
 
     fn browser_key_for(&self, proxy: Option<&Url>) -> String {
@@ -3937,6 +4049,158 @@ mod storage_clear_audit {
         // can't intercept fetches mid-clear.
         let params = SetBypassServiceWorkerParams::new(true);
         assert!(params.bypass);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 36 — provider fallback wiring.
+//
+// Helpers (`effective_primary_provider`, `provider_usable_for_fallback`,
+// `unusable_reason`) and the preflight loop itself are exercised here
+// against a `MemoryStorage` so a pool can be constructed without
+// touching a real browser. The runtime tests force a deterministic
+// CDP-probe failure by pointing at `127.0.0.1:1` (refused) and pair it
+// with a chrome path that doesn't exist, so the fallback Stock branch
+// also fails — that's exactly the "no fallback provider is usable"
+// case the acceptance criteria call out.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod provider_fallback_wiring {
+    use super::*;
+    use crate::config::{BrowserProvider, Config, ProviderFallbackConfig};
+    use crate::storage::memory::MemoryStorage;
+    use std::sync::Arc;
+
+    fn build_pool(config: Config) -> RenderPool {
+        RenderPool::new(Arc::new(config), Arc::new(MemoryStorage::new()))
+    }
+
+    #[test]
+    fn effective_primary_auto_with_endpoint_picks_cdp() {
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Auto;
+        cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
+        let p = build_pool(cfg);
+        assert_eq!(p.effective_primary_provider(), BrowserProvider::Cdp);
+    }
+
+    #[test]
+    fn effective_primary_auto_without_endpoint_picks_stock() {
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Auto;
+        cfg.external_cdp_url = None;
+        let p = build_pool(cfg);
+        assert_eq!(p.effective_primary_provider(), BrowserProvider::Stock);
+    }
+
+    #[test]
+    fn effective_primary_concrete_providers_map_to_themselves() {
+        for primary in [BrowserProvider::Stock, BrowserProvider::Cdp] {
+            let mut cfg = Config::default();
+            cfg.browser_provider = primary;
+            if primary == BrowserProvider::Cdp {
+                cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
+            }
+            let p = build_pool(cfg);
+            assert_eq!(p.effective_primary_provider(), primary);
+        }
+    }
+
+    #[test]
+    fn cdp_fallback_unusable_without_endpoint() {
+        // Slice 36: fallback target `Cdp` is only usable when an external
+        // endpoint is configured; otherwise the loop must skip it with
+        // `provider.fallback.skipped` instead of attempting a probe.
+        let cfg = Config::default(); // no external_cdp_url
+        let p = build_pool(cfg);
+        assert!(!p.provider_usable_for_fallback(BrowserProvider::Cdp));
+        assert_eq!(
+            p.unusable_reason(BrowserProvider::Cdp),
+            "no external_cdp_url configured"
+        );
+    }
+
+    #[test]
+    fn auto_never_usable_as_fallback_target() {
+        // `chain_after` already filters Auto, but the helper must agree —
+        // otherwise a future caller bypassing chain_after could route
+        // through Auto and crash the preflight loop.
+        let p = build_pool(Config::default());
+        assert!(!p.provider_usable_for_fallback(BrowserProvider::Auto));
+    }
+
+    #[test]
+    fn stock_always_usable_as_fallback_target() {
+        // Stock has no extra prerequisites; chrome resolution can still
+        // fail at preflight time, but eligibility is unconditional.
+        let p = build_pool(Config::default());
+        assert!(p.provider_usable_for_fallback(BrowserProvider::Stock));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn preflight_without_fallback_surfaces_primary_cdp_error() {
+        // Slice 36 acceptance: when fallback is OFF, crawlex must NOT
+        // switch providers. A CDP probe failure surfaces unchanged.
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Cdp;
+        cfg.external_cdp_url = Some("http://127.0.0.1:1".into());
+        // fallback explicitly disabled
+        cfg.provider_fallback = ProviderFallbackConfig::default();
+        let pool = build_pool(cfg);
+        let err = pool.preflight().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("external CDP preflight failed"), "{msg}");
+        assert!(
+            !msg.contains("fallback attempted"),
+            "primary failure must not carry a fallback path when fallback is off: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn preflight_with_fallback_to_stock_reports_full_path_when_both_fail() {
+        // Slice 36 acceptance: when every fallback provider is also
+        // unusable, the returned error preserves the original failure
+        // *and* the attempted fallback path so operators can read the
+        // whole story off a single line.
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Cdp;
+        cfg.external_cdp_url = Some("http://127.0.0.1:1".into());
+        cfg.chrome_path = Some("/nonexistent/crawlex-slice-36-no-chrome".into());
+        cfg.provider_fallback = ProviderFallbackConfig {
+            enabled: true,
+            order: vec![BrowserProvider::Stock],
+        };
+        let pool = build_pool(cfg);
+        let err = pool.preflight().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("primary `cdp`"), "{msg}");
+        assert!(msg.contains("fallback attempted"), "{msg}");
+        assert!(msg.contains("stock=>"), "{msg}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn preflight_with_fallback_skips_cdp_when_endpoint_missing() {
+        // Primary `Stock` (no endpoint), fallback configured to try Cdp.
+        // The Cdp candidate has no endpoint to probe, so the loop must
+        // skip it (emitting `provider.fallback.skipped`) and report
+        // both the original primary error AND the skipped fallback in
+        // the surfaced error.
+        let mut cfg = Config::default();
+        cfg.browser_provider = BrowserProvider::Stock;
+        cfg.chrome_path = Some("/nonexistent/crawlex-slice-36-no-chrome".into());
+        // No external_cdp_url set — Cdp fallback cannot run.
+        cfg.provider_fallback = ProviderFallbackConfig {
+            enabled: true,
+            order: vec![BrowserProvider::Cdp],
+        };
+        let pool = build_pool(cfg);
+        let err = pool.preflight().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("primary `stock`"), "{msg}");
+        assert!(
+            msg.contains("no external_cdp_url configured"),
+            "skipped reason must be in the surfaced error: {msg}"
+        );
     }
 }
 
