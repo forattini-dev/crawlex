@@ -3,9 +3,17 @@
 //!
 //! Each case here is a signature we've observed in the wild. Regressions
 //! here would silently break the `FetchMethod::Auto` fallback path.
+//!
+//! Slice #21: rerouted through `runner::ChallengeDetector`. The legacy
+//! `crate::escalation::should_escalate` shim has been removed; all
+//! callers go through the new seam.
 
-use crawlex::escalation::should_escalate;
+use crawlex::runner::ChallengeDetector;
 use http::{HeaderMap, HeaderValue};
+
+fn should_escalate(status: u16, headers: &HeaderMap, body: &[u8]) -> bool {
+    ChallengeDetector::new().detect(status, headers, body).is_some()
+}
 
 fn html_headers() -> HeaderMap {
     let mut h = HeaderMap::new();

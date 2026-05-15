@@ -21,7 +21,7 @@ pub mod extract;
 pub mod fetcher;
 pub use challenge::{ChallengeDetector, ChallengeSignal};
 pub use extract::Extractor;
-pub use fetcher::{Fetcher, SpoofFetcher};
+pub use fetcher::{AutoFetcher, AutoOutcome, Fetcher, SpoofFetcher};
 #[cfg(feature = "cdp-backend")]
 pub use fetcher::RenderFetcher;
 
