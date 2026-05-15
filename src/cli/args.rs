@@ -469,6 +469,13 @@ pub struct CrawlArgs {
     /// back to stock).
     #[arg(long = "browser-provider")]
     pub browser_provider: Option<String>,
+    /// Slice 35 — external CDP session mode. `isolated` (default)
+    /// creates a crawlex-owned BrowserContext per session so backend
+    /// state stays segregated. `persistent` reuses the endpoint's
+    /// default context (cookies / localStorage / cache / signed-in
+    /// profile). Has no effect when `--external-cdp-url` is unset.
+    #[arg(long = "external-cdp-session-mode")]
+    pub external_cdp_session_mode: Option<String>,
     /// GPU posture for managed Chrome: `compat` keeps `--disable-gpu`,
     /// `stealth` keeps GPU surfaces enabled where Chrome can support them.
     #[arg(long)]

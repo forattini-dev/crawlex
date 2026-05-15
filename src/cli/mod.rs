@@ -2299,6 +2299,9 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         },
         render_mode: parse_render_mode(c.render_mode.as_deref())?,
         browser_provider: resolve_browser_provider(c.browser_provider.as_deref())?,
+        external_cdp_session_mode: resolve_external_cdp_session_mode(
+            c.external_cdp_session_mode.as_deref(),
+        )?,
         job_max_runtime_secs: c.job_max_runtime_secs,
         result_retention_secs: c.result_retention_secs,
         max_pages: c.max_pages,
@@ -2389,6 +2392,35 @@ fn validate_browser_provider(config: &mut Config) -> Result<()> {
     Ok(())
 }
 
+/// Slice 35 — resolve external CDP session mode. Flag wins; falls back
+/// to `CRAWLEX_EXTERNAL_CDP_SESSION_MODE` env var; otherwise the
+/// `Isolated` default. Rejects unknown values with an actionable
+/// message.
+fn resolve_external_cdp_session_mode(
+    flag: Option<&str>,
+) -> Result<crate::config::ExternalCdpSessionMode> {
+    use crate::config::ExternalCdpSessionMode;
+    let raw_owned;
+    let raw = match flag {
+        Some(s) => Some(s),
+        None => match std::env::var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE") {
+            Ok(v) => {
+                raw_owned = v;
+                Some(raw_owned.as_str())
+            }
+            Err(_) => None,
+        },
+    };
+    match raw {
+        None => Ok(ExternalCdpSessionMode::default()),
+        Some(s) => ExternalCdpSessionMode::parse(s).ok_or_else(|| {
+            crate::Error::Config(format!(
+                "--external-cdp-session-mode: expected one of isolated|persistent, got `{s}`"
+            ))
+        }),
+    }
+}
+
 fn parse_render_mode(raw: Option<&str>) -> Result<crate::config::RenderMode> {
     match raw {
         None => Ok(crate::config::RenderMode::default()),
@@ -2436,6 +2468,12 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
         config.browser_provider = resolve_browser_provider(None)?;
     }
     validate_browser_provider(config)?;
+    if c.external_cdp_session_mode.is_some() {
+        config.external_cdp_session_mode =
+            resolve_external_cdp_session_mode(c.external_cdp_session_mode.as_deref())?;
+    } else if std::env::var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE").is_ok() {
+        config.external_cdp_session_mode = resolve_external_cdp_session_mode(None)?;
+    }
     if let Some(raw) = c.gpu_policy.as_deref() {
         config.gpu_policy = parse_gpu_policy(raw)?;
     }
@@ -2731,7 +2769,7 @@ mod telemetry_format_tests {
 
 #[cfg(test)]
 mod browser_provider_tests {
-    use super::{resolve_browser_provider, validate_browser_provider};
+    use super::{resolve_browser_provider, resolve_external_cdp_session_mode, validate_browser_provider};
     use crate::config::{BrowserProvider, Config};
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -2749,6 +2787,7 @@ mod browser_provider_tests {
     fn clear_env() {
         std::env::remove_var("CRAWLEX_BROWSER_PROVIDER");
         std::env::remove_var("CRAWLEX_EXTERNAL_CDP_URL");
+        std::env::remove_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE");
     }
 
     #[test]
@@ -2826,6 +2865,43 @@ mod browser_provider_tests {
         cfg.external_cdp_url = Some("http://127.0.0.1:9222".into());
         validate_browser_provider(&mut cfg).unwrap();
         assert!(cfg.external_cdp_url.is_none());
+    }
+
+    #[test]
+    fn resolve_session_mode_defaults_to_isolated_when_unset() {
+        let _g = env_guard();
+        clear_env();
+        let m = resolve_external_cdp_session_mode(None).unwrap();
+        assert_eq!(m, crate::config::ExternalCdpSessionMode::Isolated);
+    }
+
+    #[test]
+    fn resolve_session_mode_env_picks_up_persistent() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE", "persistent");
+        let m = resolve_external_cdp_session_mode(None).unwrap();
+        std::env::remove_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE");
+        assert_eq!(m, crate::config::ExternalCdpSessionMode::Persistent);
+    }
+
+    #[test]
+    fn resolve_session_mode_flag_wins_over_env() {
+        let _g = env_guard();
+        clear_env();
+        std::env::set_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE", "persistent");
+        let m = resolve_external_cdp_session_mode(Some("isolated")).unwrap();
+        std::env::remove_var("CRAWLEX_EXTERNAL_CDP_SESSION_MODE");
+        assert_eq!(m, crate::config::ExternalCdpSessionMode::Isolated);
+    }
+
+    #[test]
+    fn resolve_session_mode_rejects_unknown_value() {
+        let _g = env_guard();
+        clear_env();
+        let err = resolve_external_cdp_session_mode(Some("ephemeral")).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("isolated|persistent"), "{msg}");
     }
 
     #[test]

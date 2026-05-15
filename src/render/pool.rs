@@ -868,6 +868,7 @@ impl RenderPool {
             webgl_renderer = summary.webgl_renderer,
             mismatch_count = summary.mismatch_count,
             policy = summary.policy,
+            session_mode = self.config.external_cdp_session_mode.as_str(),
             "external CDP session calibration"
         );
         // Optional full report — opt-in only, never on by default.
@@ -916,13 +917,20 @@ impl RenderPool {
 
     /// Slice 32 — assemble the calibration key for the current render.
     /// Folds in every identity input that should bust the cache.
+    /// Slice 35 — also folds in the external CDP session mode so an
+    /// isolated and persistent run of the same identity never share
+    /// a cached fingerprint.
     fn calibration_key_for(
         &self,
         proxy: Option<&Url>,
         session_id: &str,
-        ctx_id: &BrowserContextId,
+        ctx_id: Option<&BrowserContextId>,
     ) -> crate::render::calibration::CalibrationKey {
         let bundle = self.bundle();
+        let ctx_part = match ctx_id {
+            Some(c) => format!("{session_id}|{}", c.inner()),
+            None => format!("{session_id}|<default>"),
+        };
         crate::render::calibration::CalibrationKey {
             endpoint: self
                 .config
@@ -934,7 +942,8 @@ impl RenderPool {
             locale: self.config.locale.clone().unwrap_or_default(),
             timezone: self.config.timezone.clone().unwrap_or_default(),
             profile: bundle.id.clone(),
-            context: format!("{session_id}|{}", ctx_id.inner()),
+            context: ctx_part,
+            session_mode: self.config.external_cdp_session_mode.as_str().to_string(),
         }
     }
 
@@ -1203,6 +1212,7 @@ impl RenderPool {
                 endpoint_kind = caps.kind.as_str(),
                 identity_params = caps.identity_params,
                 vendor = caps.vendor.as_deref().unwrap_or(""),
+                session_mode = self.config.external_cdp_session_mode.as_str(),
                 "render pool: using external CDP endpoint"
             );
             *self.cdp_capabilities.write() = Some(caps);
@@ -1662,16 +1672,31 @@ impl RenderPool {
         Ok(())
     }
 
+    /// Slice 35 — returns `Some(BrowserContextId)` for the default
+    /// isolated mode (a crawlex-owned `BrowserContext` per session,
+    /// created on demand and disposed on `drop_session`). Returns
+    /// `None` when external CDP runs in persistent mode: callers then
+    /// create targets in the endpoint's default browser context so
+    /// cookies / localStorage / cache / signed-in profile are shared
+    /// across sessions on that endpoint by design. Persistent mode
+    /// also short-circuits `session_state` loading because we must not
+    /// overwrite backend-owned storage.
     async fn ensure_session_context(
         &self,
         browser_key: &str,
         browser: &Browser,
         session_id: &str,
-    ) -> Result<BrowserContextId> {
+    ) -> Result<Option<BrowserContextId>> {
+        if self.is_persistent_external_cdp() {
+            // Persistent mode: don't touch session_state, don't create
+            // a context — let the default context carry whatever the
+            // user already has.
+            return Ok(None);
+        }
         self.ensure_session_state_loaded(session_id).await?;
         let key = Self::browser_session_key(browser_key, session_id);
         if let Some(ctx_id) = self.contexts.get(&key) {
-            return Ok(ctx_id.clone());
+            return Ok(Some(ctx_id.clone()));
         }
         let lock = self
             .context_locks
@@ -1680,7 +1705,7 @@ impl RenderPool {
             .clone();
         let _guard = lock.lock().await;
         if let Some(ctx_id) = self.contexts.get(&key) {
-            return Ok(ctx_id.clone());
+            return Ok(Some(ctx_id.clone()));
         }
         let ctx_id = browser
             .create_browser_context(CreateBrowserContextParams::default())
@@ -1691,7 +1716,15 @@ impl RenderPool {
             c.contexts_active
                 .store(self.contexts.len(), std::sync::atomic::Ordering::Relaxed);
         }
-        Ok(ctx_id)
+        Ok(Some(ctx_id))
+    }
+
+    /// Slice 35 — true when the configured provider is an external CDP
+    /// endpoint AND the operator has opted in to persistent session
+    /// mode. Drives the "don't create / dispose / restore" branches.
+    fn is_persistent_external_cdp(&self) -> bool {
+        self.config.external_cdp_url.is_some()
+            && self.config.external_cdp_session_mode.is_persistent()
     }
 
     /// Tear down every BrowserContext associated with `session_id`
@@ -1703,6 +1736,21 @@ impl RenderPool {
     /// This is the hook `SessionRegistry` (phase 6) calls when a TTL
     /// sweep or explicit operator drop fires.
     pub async fn drop_session(&self, session_id: &str) {
+        // Slice 35 — persistent external CDP mode never created a
+        // crawlex-owned BrowserContext and never wrote to
+        // `session_states`, so the dispose loop has nothing to do.
+        // Bail early without touching backend storage: the user's
+        // cookies, localStorage, cache, and signed-in profile must
+        // survive a crawlex-side TTL sweep or explicit drop.
+        if self.is_persistent_external_cdp() {
+            tracing::debug!(
+                event = "session.drop.skipped",
+                session_id,
+                session_mode = self.config.external_cdp_session_mode.as_str(),
+                "persistent external CDP session — backend state preserved"
+            );
+            return;
+        }
         // Collect the `(browser_key, ctx_key, ctx_id)` triples to dispose
         // before mutating the map so we don't iterate a DashMap we're
         // writing to.
@@ -3136,7 +3184,7 @@ impl RenderPool {
                         // In-flight was bumped by try_acquire; decrement.
                         self.page_pool.release_dirty_key(&ctx_key);
                         let mut params = CreateTargetParams::new("about:blank");
-                        params.browser_context_id = Some(ctx_id.clone());
+                        params.browser_context_id = ctx_id.clone();
                         let fresh = browser
                             .new_page(params)
                             .await
@@ -3155,7 +3203,7 @@ impl RenderPool {
                 }
             } else {
                 let mut params = CreateTargetParams::new("about:blank");
-                params.browser_context_id = Some(ctx_id.clone());
+                params.browser_context_id = ctx_id.clone();
                 let fresh = browser
                     .new_page(params)
                     .await
@@ -3185,7 +3233,7 @@ impl RenderPool {
         // logged but don't kill the render — the cache simply stays
         // empty and the next render will retry.
         if self.config.external_cdp_url.is_some() {
-            let cal_key = self.calibration_key_for(proxy, &session_id, &ctx_id);
+            let cal_key = self.calibration_key_for(proxy, &session_id, ctx_id.as_ref());
             match self.ensure_calibrated(&page, cal_key).await {
                 Ok(fp) => {
                     // Slice 34 — classify mismatches against the
@@ -3268,7 +3316,12 @@ impl RenderPool {
                 Err(e) => tracing::warn!(?e, "calibration failed; continuing to target without cached fingerprint"),
             }
         }
-        self.restore_session_state(&page, url, &session_id).await?;
+        // Slice 35 — persistent external CDP mode must not write into
+        // backend storage. Skip both crawlex-managed restoration and
+        // any redundant capture.
+        if !self.is_persistent_external_cdp() {
+            self.restore_session_state(&page, url, &session_id).await?;
+        }
 
         // Force the outgoing User-Agent + UA-CH metadata from our active
         // `IdentityBundle`. Same bundle that populates the shim, same
