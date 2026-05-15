@@ -56,6 +56,15 @@ impl ChallengeLevel {
 
 /// Vendor identity. Narrower than `escalation::AntibotVendor` — splits CF JS
 /// challenge from Turnstile, reCAPTCHA v2 from Enterprise, etc.
+///
+/// Superseded by [`crate::fingerprint::detection::Vendor`] (slice B7
+/// of PRD forattini-dev/crawlex#25). Kept until B15 removes the
+/// legacy antibot detection modules; `From<ChallengeVendor>` for
+/// `Vendor` is provided for migration.
+#[deprecated(
+    since = "1.0.5",
+    note = "use crate::fingerprint::detection::Vendor; ChallengeVendor is removed in B15"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChallengeVendor {
@@ -71,6 +80,7 @@ pub enum ChallengeVendor {
     AccessDenied,
 }
 
+#[allow(deprecated)]
 impl ChallengeVendor {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -84,6 +94,27 @@ impl ChallengeVendor {
             Self::Akamai => "akamai",
             Self::GenericCaptcha => "generic_captcha",
             Self::AccessDenied => "access_denied",
+        }
+    }
+}
+
+/// Lossless conversion to the consolidated `fingerprint::Vendor`.
+/// Used during the deprecation window.
+#[allow(deprecated)]
+impl From<ChallengeVendor> for crate::fingerprint::detection::Vendor {
+    fn from(v: ChallengeVendor) -> Self {
+        use crate::fingerprint::detection::Vendor;
+        match v {
+            ChallengeVendor::CloudflareJsChallenge => Vendor::Cloudflare,
+            ChallengeVendor::CloudflareTurnstile => Vendor::CloudflareTurnstile,
+            ChallengeVendor::Recaptcha | ChallengeVendor::RecaptchaEnterprise => {
+                Vendor::Recaptcha
+            }
+            ChallengeVendor::HCaptcha => Vendor::HCaptcha,
+            ChallengeVendor::DataDome => Vendor::DataDome,
+            ChallengeVendor::PerimeterX => Vendor::PerimeterX,
+            ChallengeVendor::Akamai => Vendor::AkamaiBotManager,
+            ChallengeVendor::GenericCaptcha | ChallengeVendor::AccessDenied => Vendor::Unknown,
         }
     }
 }

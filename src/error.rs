@@ -11,6 +11,17 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Anti-bot vendor a challenge response was attributed to.
+///
+/// Superseded by [`crate::fingerprint::detection::Vendor`] (slice B7
+/// of PRD forattini-dev/crawlex#25). The new enum carries 70+
+/// variants spanning CDN/WAF/Antibot/CMS/Ecommerce; this seven-variant
+/// enum was the antibot subset only. Removed in B15 alongside
+/// ADR-0003. Use [`From`] conversion (added below) during the
+/// migration window.
+#[deprecated(
+    since = "1.0.5",
+    note = "use crate::fingerprint::detection::Vendor; AntibotVendor is removed in B15. From<AntibotVendor> for Vendor is provided for the migration window."
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntibotVendor {
     Cloudflare,
@@ -22,6 +33,7 @@ pub enum AntibotVendor {
     Other,
 }
 
+#[allow(deprecated)]
 impl AntibotVendor {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -32,6 +44,26 @@ impl AntibotVendor {
             Self::DistilNetworks => "distilnetworks",
             Self::Akamai => "akamai",
             Self::Other => "other",
+        }
+    }
+}
+
+/// Lossless conversion to the consolidated `fingerprint::Vendor`.
+/// Used during the deprecation window — call sites can stop
+/// constructing `AntibotVendor` directly and switch to `Vendor`
+/// without behavioural change.
+#[allow(deprecated)]
+impl From<AntibotVendor> for crate::fingerprint::detection::Vendor {
+    fn from(v: AntibotVendor) -> Self {
+        use crate::fingerprint::detection::Vendor;
+        match v {
+            AntibotVendor::Cloudflare => Vendor::Cloudflare,
+            AntibotVendor::DataDome => Vendor::DataDome,
+            AntibotVendor::PerimeterX => Vendor::PerimeterX,
+            AntibotVendor::Imperva => Vendor::Imperva,
+            AntibotVendor::DistilNetworks => Vendor::DistilNetworks,
+            AntibotVendor::Akamai => Vendor::Akamai,
+            AntibotVendor::Other => Vendor::Unknown,
         }
     }
 }
