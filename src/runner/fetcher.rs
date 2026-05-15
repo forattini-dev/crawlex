@@ -14,8 +14,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use url::Url;
 
+pub mod auto;
 #[cfg(feature = "cdp-backend")]
 pub mod render;
+pub use auto::{AutoFetcher, AutoOutcome};
 #[cfg(feature = "cdp-backend")]
 pub use render::RenderFetcher;
 

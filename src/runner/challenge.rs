@@ -1,9 +1,8 @@
 //! Challenge detection seam (slice 3 of the JobRunner extraction, GH #19).
 //!
 //! Inspects an HTTP response and emits a `ChallengeSignal` when an
-//! antibot interstitial is recognised. Absorbs the body of the legacy
-//! `crate::escalation::detect_antibot_vendor` — slice #21 deletes
-//! `escalation.rs` once `AutoFetcher` is the last remaining caller.
+//! antibot interstitial is recognised. Absorbed the body of the legacy
+//! `escalation.rs` — deleted in slice #21.
 //!
 //! Concrete struct, no trait. Pure logic.
 
@@ -21,9 +20,7 @@ pub struct ChallengeSignal {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ChallengeDetector;
 
-/// (signature, vendor) pairs — checked in order; first match wins. Kept
-/// in sync with the legacy table in `escalation.rs` until that file is
-/// deleted in slice #21.
+/// (signature, vendor) pairs — checked in order; first match wins.
 const VENDOR_SIGNATURES: &[(&str, AntibotVendor)] = &[
     ("cf-chl-bypass", AntibotVendor::Cloudflare),
     ("Just a moment", AntibotVendor::Cloudflare),
@@ -181,33 +178,6 @@ mod tests {
         assert!(ChallengeDetector::new()
             .detect(200, &empty_headers(), body)
             .is_none());
-    }
-
-    #[test]
-    fn parity_with_legacy_detect_antibot_vendor() {
-        // Trip wire: as long as `escalation.rs` lives, the two paths
-        // must agree byte-for-byte on the same inputs. Slice #21 deletes
-        // `escalation.rs`; this test then becomes redundant and is
-        // removed in that PR.
-        let cases: &[(u16, &str, &[u8])] = &[
-            (403, "text/html", b"cf-chl-bypass"),
-            (503, "text/html", b"DataDome"),
-            (200, "text/html", b"<html><script>window.location='x'</script></html>"),
-            (200, "text/html", b"<html><body>healthy</body></html>"),
-            (404, "text/html", b"cf-chl-bypass"), // not 403/503 → none
-        ];
-        for &(status, ct, body) in cases {
-            let mut h = HeaderMap::new();
-            h.insert("content-type", ct.parse().unwrap());
-            let new_sig = ChallengeDetector::new().detect(status, &h, body);
-            let legacy = crate::escalation::detect_antibot_vendor(status, &h, body);
-            assert_eq!(
-                new_sig.map(|s| s.vendor),
-                legacy,
-                "parity drift for status={status} body={:?}",
-                std::str::from_utf8(body).unwrap_or("<binary>")
-            );
-        }
     }
 
     #[test]
