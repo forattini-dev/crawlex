@@ -1,4 +1,4 @@
-# Slice 25: v1 API removal + migration guide [HITL]
+# Slice 25: v1 API removal + migration guide [AFK]
 
 ## Parent
 
@@ -6,7 +6,7 @@
 
 ## What to build
 
-Remove v1 entrypoints (`crawl()`, v1 hook signatures) and publish a migration guide at `docs/guides/migrating-v1-to-v2.md` mapping every v1 API to its v2 equivalent. HITL because the final call on what to delete vs preserve as a thin shim requires human review, and the migration guide needs editorial pass.
+Remove v1 entrypoints (`crawl()`, v1 hook signatures) and publish a migration guide at `docs/guides/migrating-v1-to-v2.md` mapping every v1 API to its v2 equivalent. Note: was originally HITL because the final call on what to delete vs preserve as a thin shim requires human review, and the migration guide needs editorial pass.
 
 ## Acceptance criteria
 
