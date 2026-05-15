@@ -1,0 +1,8 @@
+run.started
+job.started
+decision.made
+crawl.attempted
+decision.made
+fetch.completed
+crawl.resolved
+run.completed
