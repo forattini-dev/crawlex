@@ -34,7 +34,7 @@ pub struct JobOutcome {
     pub error: Option<JobError>,
     pub timings: JobTimings,
     pub retry: RetryDecision,
-    pub new_session_state: Option<SessionStatePlaceholder>,
+    pub new_session_state: Option<crate::antibot::SessionState>,
 }
 
 /// Success branch of `JobOutcome`.
@@ -43,7 +43,7 @@ pub struct FetchSuccess {
     pub status: u16,
     pub body_bytes: usize,
     pub links: Vec<String>,
-    pub signals: Vec<ChallengeSignalPlaceholder>,
+    pub signals: Vec<crate::fingerprint::Detection>,
 }
 
 /// Per-attempt timings populated on both success and failure branches.
@@ -124,18 +124,6 @@ pub enum JobError {
     BudgetExhausted,
     Cancelled,
 }
-
-// Remaining placeholders retained until B14 widens JobOutcome.
-
-/// Placeholder retained because `JobOutcome.new_session_state` uses it.
-/// Slice B14 widens the outcome to carry the real `antibot::SessionState`.
-#[derive(Debug, Clone, Default)]
-pub struct SessionStatePlaceholder;
-
-/// Same retention reason — `JobOutcome.signals` continues to carry
-/// placeholder Detections until B14 wires real Fingerprinter output.
-#[derive(Debug, Clone, Default)]
-pub struct ChallengeSignalPlaceholder;
 
 /// Top-level runner. Slice #22 implements `run` for the spoof path and
 /// the rest of `process_job`-style post-processing stays with the
@@ -234,7 +222,7 @@ impl JobRunner {
                 // detection path. Falls back to legacy ChallengeDetector
                 // when no Fingerprinter is injected so existing unit
                 // tests keep working.
-                let signal: Option<()> = if let Some(fp) = &self.fingerprinter {
+                let signals: Vec<crate::fingerprint::Detection> = if let Some(fp) = &self.fingerprinter {
                     let ctx = crate::fingerprint::TargetContext::http_only(
                         &final_url_owned,
                         status,
@@ -242,18 +230,29 @@ impl JobRunner {
                         output.body(),
                     );
                     let report = fp.analyze_hot(&ctx);
-                    if !report.antibot.is_empty() {
-                        Some(())
-                    } else {
-                        None
-                    }
+                    report.antibot
                 } else {
                     #[allow(deprecated)]
                     self.detector
                         .detect(status, headers_cow.as_ref(), output.body())
-                        .map(|_| ())
+                        .map(|sig| {
+                            use crate::fingerprint::detection::{
+                                Category, Detection, Evidence, EvidenceSource, Vendor,
+                            };
+                            let vendor: Vendor = sig.vendor.into();
+                            vec![Detection::from_single(
+                                Category::Antibot,
+                                vendor,
+                                Evidence::new(
+                                    EvidenceSource::BodyMarker,
+                                    "challenge signature",
+                                    7,
+                                ),
+                            )]
+                        })
+                        .unwrap_or_default()
                 };
-                if signal.is_some() {
+                if !signals.is_empty() {
                     self.emit(
                         crate::events::EventKind::ChallengeDetected,
                         Some(&final_url_owned),
@@ -274,16 +273,14 @@ impl JobRunner {
                     Some(&final_url_owned),
                 );
 
-                let retry = match signal {
-                    Some(_) => RetryDecision::Suggest {
+                let retry = if signals.is_empty() {
+                    RetryDecision::None
+                } else {
+                    RetryDecision::Suggest {
                         reason: RetryReason::EscalateToRender,
                         backoff_hint: None,
-                    },
-                    None => RetryDecision::None,
+                    }
                 };
-                let signals = signal
-                    .map(|_| vec![ChallengeSignalPlaceholder])
-                    .unwrap_or_default();
 
                 JobOutcome {
                     result: Some(FetchSuccess {
