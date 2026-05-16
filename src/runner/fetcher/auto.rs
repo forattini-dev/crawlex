@@ -25,6 +25,10 @@ use crate::runner::RenderFetcher;
 /// attempt completes. Mirrors the runner-level `RetryDecision` so
 /// `JobRunner::run` (slice #22) can lift this straight into
 /// `JobOutcome.retry` without translation.
+#[deprecated(
+    since = "1.0.5",
+    note = "ADR-0004: AutoFetcher is dead code; policy::engine remains the auto-escalation arbiter. Removed in B15."
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutoOutcome {
     /// Spoof returned usable content — `Crawler` writes the response
@@ -49,6 +53,10 @@ impl AutoOutcome {
     }
 }
 
+#[deprecated(
+    since = "1.0.5",
+    note = "ADR-0004: AutoFetcher is dead code; policy::engine remains the auto-escalation arbiter. Removed in B15."
+)]
 pub struct AutoFetcher {
     spoof: Arc<SpoofFetcher>,
     #[cfg(feature = "cdp-backend")]
