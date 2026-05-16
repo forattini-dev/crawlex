@@ -39,6 +39,14 @@ pub struct Crawler {
     graph: Arc<DiscoveryGraph>,
     client: Arc<ImpersonateClient>,
     spoof: Arc<crate::runner::SpoofFetcher>,
+    /// Runner held on the Crawler so per-Job execution can flow
+    /// through `runner.run(...)`. Slice A2 (PRD #24) lands the field
+    /// + lazy init; the full inline-dispatch cutover in `process_job`
+    /// is incremental work tracked by B14 (Fingerprinter wiring also
+    /// needs the same call site) and the remaining cutover steps
+    /// inside `process_job` itself.
+    runner: Arc<crate::runner::JobRunner>,
+    fingerprinter: Arc<crate::fingerprint::Fingerprinter>,
     /// Lazily constructed on first access. When `max_concurrent_render == 0`
     /// and no render job ever hits `process_job`, we never allocate the pool
     /// (no browser spawn, no user-data-dir, no fetcher wiring).
@@ -225,6 +233,10 @@ impl Crawler {
             robots: Arc::new(RobotsCache::new(Duration::from_secs(24 * 3600))),
             graph: Arc::new(DiscoveryGraph::new()),
             spoof: Arc::new(crate::runner::SpoofFetcher::new(client.clone())),
+            runner: Arc::new(crate::runner::JobRunner::new(Arc::new(
+                crate::runner::SpoofFetcher::new(client.clone()),
+            ))),
+            fingerprinter: Arc::new(crate::fingerprint::Fingerprinter::default()),
             client,
             #[cfg(feature = "cdp-backend")]
             render,
@@ -1346,6 +1358,8 @@ impl Crawler {
             graph: self.graph.clone(),
             client: self.client.clone(),
             spoof: self.spoof.clone(),
+            runner: self.runner.clone(),
+            fingerprinter: self.fingerprinter.clone(),
             #[cfg(feature = "cdp-backend")]
             render: self.render.clone(),
             #[cfg(feature = "cdp-backend")]
