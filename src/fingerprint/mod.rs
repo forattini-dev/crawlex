@@ -18,10 +18,13 @@
 
 use std::sync::Arc;
 
+pub mod coherence;
 pub mod detection;
 pub mod introspect;
 pub mod report;
 pub mod target;
+
+pub use coherence::compute_coherence;
 
 pub use detection::{Category, Confidence, Detection, Evidence, EvidenceSource, Tier, Vendor};
 pub use report::{Coherence, FingerprintReport, Tiers};
