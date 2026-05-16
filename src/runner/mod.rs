@@ -58,15 +58,40 @@ pub struct JobTimings {
 }
 
 /// Per-attempt input bundle passed by the `Crawler` to `JobRunner::run`.
-/// `SessionIdentity`, `ProxyLease`, `PolicyProfile`, and `JobBudgets` are
-/// placeholders here; slices #17 onward connect them to concrete types.
+/// Real fields after slice A3 — placeholders dropped (PRD #24).
 #[derive(Debug, Clone, Default)]
 pub struct SessionContext {
-    pub identity: SessionIdentityPlaceholder,
-    pub proxy: Option<ProxyLeasePlaceholder>,
-    pub session_state: SessionStatePlaceholder,
-    pub budgets: JobBudgetsPlaceholder,
-    pub policy: PolicyProfilePlaceholder,
+    pub identity: SessionIdentity,
+    pub proxy: Option<ProxyLease>,
+    pub session_state: crate::antibot::SessionState,
+    pub budgets: JobBudgets,
+    pub policy: crate::policy::PolicyProfile,
+}
+
+/// Per-session browser persona handle. Today this is a thin
+/// description (profile name + locale + session id) — the deeper
+/// unification of `ImpersonateClient + IdentityBundle + cookies` is
+/// out of scope per PRD #15. Slice A3 lands the seam.
+#[derive(Debug, Clone, Default)]
+pub struct SessionIdentity {
+    pub profile_name: String,
+    pub locale: Option<String>,
+    pub session_id: Option<String>,
+}
+
+/// Per-session proxy assignment held by the Crawler's proxy router.
+#[derive(Debug, Clone)]
+pub struct ProxyLease {
+    pub url: url::Url,
+    pub score: f32,
+}
+
+/// Per-attempt budgets the runner reads to fail-fast.
+#[derive(Debug, Clone, Default)]
+pub struct JobBudgets {
+    pub render_ms_left: Option<u64>,
+    pub total_ms_left: Option<u64>,
+    pub attempts_remaining: u32,
 }
 
 /// Runner advises; the `Crawler` decides (retry caps, host cooldowns,
@@ -100,23 +125,15 @@ pub enum JobError {
     Cancelled,
 }
 
-// Placeholder types — replaced with concrete shapes in later slices.
+// Remaining placeholders retained until B14 widens JobOutcome.
 
-#[derive(Debug, Clone, Default)]
-pub struct SessionIdentityPlaceholder;
-
-#[derive(Debug, Clone, Default)]
-pub struct ProxyLeasePlaceholder;
-
+/// Placeholder retained because `JobOutcome.new_session_state` uses it.
+/// Slice B14 widens the outcome to carry the real `antibot::SessionState`.
 #[derive(Debug, Clone, Default)]
 pub struct SessionStatePlaceholder;
 
-#[derive(Debug, Clone, Default)]
-pub struct JobBudgetsPlaceholder;
-
-#[derive(Debug, Clone, Default)]
-pub struct PolicyProfilePlaceholder;
-
+/// Same retention reason — `JobOutcome.signals` continues to carry
+/// placeholder Detections until B14 wires real Fingerprinter output.
 #[derive(Debug, Clone, Default)]
 pub struct ChallengeSignalPlaceholder;
 
