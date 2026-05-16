@@ -148,7 +148,15 @@ pub struct ChallengeSignalPlaceholder;
 pub struct JobRunner {
     fetcher: std::sync::Arc<dyn Fetcher>,
     extractor: Extractor,
+    #[allow(deprecated)]
     detector: ChallengeDetector,
+    /// Slice B14 (PRD #25): the unified `Fingerprinter` engine. When
+    /// set, `run` calls `analyze_hot` after a successful fetch and
+    /// merges the resulting antibot Detections into the retry
+    /// decision (replaces the deprecated `ChallengeDetector` path).
+    /// Optional today so existing tests that construct
+    /// `JobRunner::new(fetcher)` keep working.
+    fingerprinter: Option<std::sync::Arc<crate::fingerprint::Fingerprinter>>,
     /// Per-attempt lifecycle events are fired live through this sink
     /// (PRD #15 Q13). Optional so callers can run the runner in tests
     /// or in tools where the global NDJSON wire isn't relevant.
@@ -160,9 +168,22 @@ impl JobRunner {
         Self {
             fetcher,
             extractor: Extractor::new(),
+            #[allow(deprecated)]
             detector: ChallengeDetector::new(),
+            fingerprinter: None,
             events: None,
         }
+    }
+
+    /// Inject a `Fingerprinter` so the runner's antibot detection
+    /// uses the unified engine (Hot tier — AntibotMarker + BlockPattern
+    /// + the rest) rather than the deprecated `ChallengeDetector`.
+    pub fn with_fingerprinter(
+        mut self,
+        fingerprinter: std::sync::Arc<crate::fingerprint::Fingerprinter>,
+    ) -> Self {
+        self.fingerprinter = Some(fingerprinter);
+        self
     }
 
     /// Inject an `EventSink` so per-attempt lifecycle events fire live
@@ -209,7 +230,29 @@ impl JobRunner {
                 let final_url_owned = output.final_url().clone();
                 self.emit(crate::events::EventKind::FetchCompleted, Some(&final_url_owned));
                 let headers_cow = output.headers();
-                let signal = self.detector.detect(status, headers_cow.as_ref(), output.body());
+                // B14: Fingerprinter Hot tier is the new antibot
+                // detection path. Falls back to legacy ChallengeDetector
+                // when no Fingerprinter is injected so existing unit
+                // tests keep working.
+                let signal: Option<()> = if let Some(fp) = &self.fingerprinter {
+                    let ctx = crate::fingerprint::TargetContext::http_only(
+                        &final_url_owned,
+                        status,
+                        headers_cow.as_ref(),
+                        output.body(),
+                    );
+                    let report = fp.analyze_hot(&ctx);
+                    if !report.antibot.is_empty() {
+                        Some(())
+                    } else {
+                        None
+                    }
+                } else {
+                    #[allow(deprecated)]
+                    self.detector
+                        .detect(status, headers_cow.as_ref(), output.body())
+                        .map(|_| ())
+                };
                 if signal.is_some() {
                     self.emit(
                         crate::events::EventKind::ChallengeDetected,
