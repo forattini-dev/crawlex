@@ -113,7 +113,21 @@ pub fn extract_domain(line: &str) -> Option<String> {
 /// `None` for blanks, comments, single-label TLDs (`com`), and lines we
 /// can't interpret.
 fn parse_line(line: &str) -> Option<String> {
-    let trimmed = line.split('#').next().unwrap_or("").trim();
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('!') || trimmed.starts_with('[') {
+        // EasyList comment / header.
+        return None;
+    }
+    if trimmed.contains("##") || trimmed.contains("#@#") || trimmed.contains("#?#") {
+        // Cosmetic / element-hide rule — the part before `##` names a
+        // page, not a request target. Skip before treating `#` as a
+        // hosts-file comment.
+        return None;
+    }
+    let trimmed = trimmed.split('#').next().unwrap_or("").trim();
     if trimmed.is_empty() {
         return None;
     }
@@ -130,13 +144,6 @@ fn parse_line(line: &str) -> Option<String> {
     } else if trimmed.starts_with("0.0.0.0 ") || trimmed.starts_with("127.0.0.1 ") {
         // hosts-file format. Take field 2.
         trimmed.split_whitespace().nth(1).unwrap_or("")
-    } else if trimmed.starts_with('!') || trimmed.starts_with('[') {
-        // EasyList comment / header.
-        return None;
-    } else if trimmed.contains("##") || trimmed.contains("#@#") || trimmed.contains("#?#") {
-        // Cosmetic / element-hide rule — the part before `##` names a
-        // page, not a request target. Skip.
-        return None;
     } else {
         // Bare host (our baseline format) — accept domain chars and a
         // trailing `/path` fragment which we discard.

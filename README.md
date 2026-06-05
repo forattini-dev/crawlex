@@ -61,10 +61,10 @@ cargo install crawlex
 
 ## 🆕 Last 24h highlights
 
-- `1.0.4` release line is live across npm/crates/GitHub Releases, with docsify publishing through GitHub Pages.
+- `1.0.5` release line focuses on RedDB-only persistence, cleaner release gates and false-positive fixes after the crawler/storage refactor.
 - JS/TS hooks now run through the SDK bridge, so `defineHooks()` can drive the same lifecycle decisions as embedded Rust hooks.
 - NDJSON events now carry richer artifacts, Web Vitals, per-fetch timings, crawl-attempt telemetry and crawl-resolution summaries.
-- `crawlex-mini` was hardened: CDP-only paths are gated cleanly in no-browser builds.
+- The supported release artifact is the full `crawlex` binary with RedDB persistence enabled.
 - Large crawl efficiency grew: cache validation, prefetch discovery mode and best-first URL scoring are now available from CLI/config.
 - Render fallback grew: external CDP connection, GPU posture control, Shadow DOM flattening, overlay cleanup and last-resort fallback fetch are configurable.
 
@@ -203,10 +203,10 @@ for await (const ev of crawl({
     maxConcurrentRender: 2,
     maxDepth: 5,
     crtsh: true,                      // certificate-transparency seeding
-    storage: 'sqlite',
-    storagePath: './crawl.db',
-    queue: 'sqlite',
-    queuePath: './crawl.db',
+    storage: 'reddb',
+    storagePath: 'file://./state/crawl.rdb',
+    queue: 'reddb',
+    queuePath: 'file://./state/frontier.rdb',
     proxies: ['http://user:pass@proxy1:8080', 'http://user:pass@proxy2:8080'],
     proxyStrategy: 'health-weighted',
     proxyStickyPerHost: true,
@@ -310,8 +310,8 @@ crawlex stealth catalog show chrome-149-linux --json
 crawlex pages run \
   --seed https://docs.example.com \
   --method auto \
-  --queue sqlite --queue-path state/queue.db \
-  --storage sqlite --storage-path state/crawl.db \
+  --queue reddb --queue-path file://./state/frontier.rdb \
+  --storage reddb --storage-path file://./state/crawl.rdb \
   --cache-validate \
   --cache-max-age-secs 86400 \
   --prefetch \
@@ -371,8 +371,8 @@ This mode is for discovery passes: reuse fresh cache rows, harvest links cheaply
 - 🔌 External CDP endpoint support for managed/browser-farm Chrome
 - 🌑 Shadow DOM flattening + overlay / consent-popup cleanup
 - 🖥️ GPU policy: compatibility mode or stealth-friendly GPU surfaces
-- 🔁 Persistent queue: in-memory / SQLite / Redis backends
-- 💾 Storage: filesystem / SQLite / memory — opt-in per concern (artifact, state, challenge, telemetry, intel)
+- 🔁 Queue: RedDB-native durable frontier by default; memory remains only for isolated smokes/tests
+- 💾 Storage: RedDB for crawl state, telemetry and intel; filesystem remains available for large artifacts
 - 🧠 Smart cache validation: `ETag`, `Last-Modified`, `<head>` fingerprint
 - 🔄 Proxy rotator — health checks + sticky sessions + per-host affinity
 - 📊 Web Vitals + per-fetch network breakdown (DNS / TCP / TLS / TTFB / download)
@@ -397,9 +397,9 @@ This mode is for discovery passes: reuse fresh cache rows, harvest links cheaply
 - 🔌 SDK `crawl()` async iterator
 - 🧩 SDK `defineHooks()` bridge for JS/TS lifecycle hooks
 - 📚 docsify docs site (GitHub Pages)
-- 🧪 390+ lib tests, 27 fpjs compliance, TLS catalog roundtrip suite
+- 🧪 820+ lib tests, fpjs compliance, TLS catalog roundtrip suite
 - 🔐 Optional Lua hooks (`mlua`)
-- 🪶 Two binaries: `crawlex` (full) + `crawlex-mini` (HTTP-only, no Chromium)
+- 🪶 Single supported release binary: `crawlex` with HTTP impersonation, Chromium rendering and RedDB persistence
 
 </td>
 </tr>
@@ -508,14 +508,13 @@ flowchart LR
 | HTTP/2 | Vendored `h2` crate with pseudo-header order patch (`vendor/h2`) |
 | CDP | chromiumoxide-derived, embedded behind `cdp-backend` feature |
 | Async | tokio multi-thread |
-| Storage | rusqlite (SQLite WAL), DashMap (memory), filesystem layout |
+| Storage / Queue | RedDB embedded/client storage plus RedDB Queue frontier; DashMap memory only for isolated tests |
 | Discovery | hickory-resolver (DNS), reqwest (RDAP), texting_robots (robots.txt) |
 | Lua | mlua 0.10 (optional, `lua-hooks` feature) |
 | SDK | Node 20+, CommonJS, zero runtime deps |
 
-**Two binaries** ship from one source tree:
-- `crawlex` — **full** build with HTTP impersonation + Chromium rendering + stealth shim + persistent queue
-- `crawlex-mini` — **HTTP-only** worker, no Chromium dependency, same CLI surface (browser-only flags return `Error::RenderDisabled`)
+**Release binary:**
+- `crawlex` — full build with HTTP impersonation + Chromium rendering + stealth shim + RedDB persistence
 
 ---
 
@@ -527,8 +526,8 @@ flowchart LR
 | H2 pseudo-header order | ✅ patched h2 | ⚠️ Chromium default | ⚠️ Chromium default | ❌ |
 | 29-section JS leak coverage | ✅ | ⚠️ partial | ⚠️ via plugins | ❌ no JS |
 | Worker-scope stealth | ✅ auto-attach | ⚠️ manual | ⚠️ manual | ❌ |
-| HTTP-only path (no browser) | ✅ `crawlex-mini` | ❌ | ❌ | ✅ |
-| Persistent queue + resume | ✅ SQLite/Redis | ❌ external | ❌ external | ❌ |
+| HTTP-only path (no browser) | ✅ full binary policy path | ❌ | ❌ | ✅ |
+| RedDB telemetry + resume state | ✅ native | ❌ external | ❌ external | ❌ |
 | Discovery pipeline | ✅ 17 stages | ❌ | ❌ | ❌ |
 | Streaming NDJSON events | ✅ versioned | ❌ | ❌ | ❌ |
 | Rust embedding | ✅ | ❌ | ❌ | ⚠️ libcurl |
@@ -555,7 +554,7 @@ git clone https://github.com/forattini-dev/crawlex
 cd crawlex
 
 # Unit tests + offline shim compliance
-cargo test --lib                    # 390+ tests
+cargo test --lib                    # 820+ tests
 cargo test --test fpjs_compliance   # 27 cases
 cargo test --test tls_catalog_coverage --test tls_catalog_roundtrip
 

@@ -1,6 +1,6 @@
 [package]
 name = "crawlex"
-version = "1.0.4"
+version = "1.0.5"
 edition = "2021"
 rust-version = "1.91"
 description = "Stealth crawler with Chrome-perfect TLS/H2 fingerprint, render pool, hooks, persistent queue"
@@ -42,14 +42,6 @@ path = "src/lib.rs"
 name = "crawlex"
 path = "src/bin/full.rs"
 required-features = ["cli", "reddb-embedded", "cdp-backend", "chromium-fetcher"]
-
-# Mini build: HTTP-only worker, no Chromium, no browser deps. Same CLI
-# surface as `crawlex` — browser-dependent subcommands/flags return
-# `Error::RenderDisabled` with a stable message at runtime.
-[[bin]]
-name = "crawlex-mini"
-path = "src/bin/mini.rs"
-required-features = ["cli", "reddb-embedded"]
 
 [features]
 default = ["cli", "reddb-embedded", "cdp-backend", "chromium-fetcher"]

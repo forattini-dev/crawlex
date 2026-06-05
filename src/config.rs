@@ -947,8 +947,12 @@ impl Default for Config {
             rate_per_host_rps: None,
             retry_max: 3,
             retry_backoff: Duration::from_millis(500),
-            queue_backend: QueueBackend::InMemory,
-            storage_backend: StorageBackend::Memory,
+            queue_backend: QueueBackend::Reddb {
+                uri: "file://crawlex-queue.rdb".into(),
+            },
+            storage_backend: StorageBackend::Reddb {
+                uri: "file://crawlex-storage.rdb".into(),
+            },
             output: OutputConfig::default(),
             proxy: ProxyConfig::default(),
             locale: None,

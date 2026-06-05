@@ -26,11 +26,11 @@ pub struct Cli {
 ///   crawlex fingerprint run       www.stone.com.br --include-subdomains
 ///   crawlex fingerprint show      stone.com.br     --limit 30
 ///   crawlex fingerprint export    stone.com.br     --out stone.json --pretty
-///   crawlex graph       export    --storage-path crawlex.db --out graph.json
-///   crawlex queue       stats     --queue-path queue.sqlite
-///   crawlex queue       purge     --queue-path queue.sqlite
-///   crawlex queue       export    --queue-path queue.sqlite --out q.json
-///   crawlex sessions    list      --storage-path crawlex.db
+///   crawlex graph       export    --storage-path file://crawlex-storage.rdb --out graph.json
+///   crawlex queue       stats     --queue-path file://crawlex-queue.rdb
+///   crawlex queue       purge     --queue-path file://crawlex-queue.rdb
+///   crawlex queue       export    --queue-path file://crawlex-queue.rdb --out q.json
+///   crawlex sessions    list      --storage-path file://crawlex-storage.rdb
 ///   crawlex session     drop      --id abcd --storage-path crawlex.db
 ///   crawlex telemetry   show      --db crawlex.db
 ///   crawlex stealth     test

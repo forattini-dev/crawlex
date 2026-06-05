@@ -269,7 +269,7 @@ fn cmd_find_by_text(rest: &str, state: &mut ShellState) -> ShellOutput {
         Err(o) => return o,
     };
     let tree = parse_tree(body, charset_from(state.last_content_type.as_deref()));
-    let matches = tree.find_by_text(rest, TextMatch::contains().with_trim(true));
+    let matches = leaf_matches(tree.find_by_text(rest, TextMatch::contains().with_trim(true)));
     record_first(&matches, state, rest);
     pretty_handles(&matches)
 }
@@ -287,7 +287,7 @@ fn cmd_find_by_regex(rest: &str, state: &mut ShellState) -> ShellOutput {
         Err(e) => return ShellOutput::Err(format!("invalid regex: {e}")),
     };
     let tree = parse_tree(body, charset_from(state.last_content_type.as_deref()));
-    let matches = tree.find_by_regex(&re);
+    let matches = leaf_matches(tree.find_by_regex(&re));
     record_first(&matches, state, rest);
     pretty_handles(&matches)
 }
@@ -343,6 +343,28 @@ fn record_first(matches: &[ElementHandle<'_>], state: &mut ShellState, query: &s
         state.last_selection = Some(fingerprint(first));
         state.last_selection_query = Some(query.to_string());
     }
+}
+
+fn leaf_matches<'a>(matches: Vec<ElementHandle<'a>>) -> Vec<ElementHandle<'a>> {
+    matches
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            !matches.iter().any(|other| {
+                other.inner().id() != candidate.inner().id() && is_descendant_of(*other, *candidate)
+            })
+        })
+        .collect()
+}
+
+fn is_descendant_of(mut child: ElementHandle<'_>, ancestor: ElementHandle<'_>) -> bool {
+    while let Some(parent) = child.parent() {
+        if parent.inner().id() == ancestor.inner().id() {
+            return true;
+        }
+        child = parent;
+    }
+    false
 }
 
 fn pretty_handles(matches: &[ElementHandle<'_>]) -> ShellOutput {

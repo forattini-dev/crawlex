@@ -505,13 +505,13 @@ fn structural_integrity_reason(html: &str) -> Option<String> {
     if visible_len < 50 {
         signals.push("minimal_text");
     }
-    if content_elements == 0 {
+    if content_elements == 0 && visible_len < 20 {
         signals.push("no_content_elements");
     }
     if script_count > 0 && content_elements == 0 && visible_len < 100 {
         signals.push("script_heavy_shell");
     }
-    if signals.len() >= 2 || (signals.len() == 1 && len < 5_000) {
+    if signals.len() >= 2 {
         Some(format!(
             "Structural: {} ({len} bytes, {visible_len} chars visible)",
             signals.join(", ")

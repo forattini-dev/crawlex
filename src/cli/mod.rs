@@ -2032,7 +2032,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         },
     };
 
-    let queue_backend = match c.queue.as_deref().unwrap_or("inmemory") {
+    let queue_backend = match c.queue.as_deref().unwrap_or("reddb") {
         "reddb" | "red" => QueueBackend::Reddb {
             uri: crate::config::normalize_reddb_uri(
                 c.queue_path
@@ -2053,7 +2053,7 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         }
     };
 
-    let storage_backend = match c.storage.as_deref().unwrap_or("memory") {
+    let storage_backend = match c.storage.as_deref().unwrap_or("reddb") {
         "reddb" | "red" => StorageBackend::Reddb {
             uri: crate::config::normalize_reddb_uri(
                 c.storage_path
@@ -2752,6 +2752,55 @@ async fn maybe_spawn_raffel_proxy(
     tracing::info!(proxy = handle.proxy_url(), "launched local raffel proxy");
     c.proxy.push(handle.proxy_url().to_string());
     Ok(Some(handle))
+}
+
+#[cfg(test)]
+mod backend_default_tests {
+    use super::{args, build_config_from_args};
+    use crate::config::{QueueBackend, StorageBackend};
+    use clap::Parser;
+
+    fn parse_pages_run(argv: &[&str]) -> args::CrawlArgs {
+        let cli = args::Cli::parse_from(argv);
+        let args::Command::Pages(args::PagesVerb::Run(crawl)) = cli.command else {
+            panic!("expected pages run command");
+        };
+        crawl
+    }
+
+    #[test]
+    fn pages_run_defaults_to_reddb_queue_and_storage_drivers() {
+        let crawl = parse_pages_run(&["crawlex", "pages", "run", "--seed", "https://example.com"]);
+        let cfg = build_config_from_args(&crawl).unwrap();
+
+        match cfg.queue_backend {
+            QueueBackend::Reddb { ref uri } => assert_eq!(uri, "file://crawlex-queue.rdb"),
+            other => panic!("queue should default to RedDB, got {other:?}"),
+        }
+        match cfg.storage_backend {
+            StorageBackend::Reddb { ref uri } => assert_eq!(uri, "file://crawlex-storage.rdb"),
+            other => panic!("storage should default to RedDB, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pages_run_still_allows_explicit_memory_for_isolated_smokes() {
+        let crawl = parse_pages_run(&[
+            "crawlex",
+            "pages",
+            "run",
+            "--seed",
+            "https://example.com",
+            "--queue",
+            "memory",
+            "--storage",
+            "memory",
+        ]);
+        let cfg = build_config_from_args(&crawl).unwrap();
+
+        assert!(matches!(cfg.queue_backend, QueueBackend::InMemory));
+        assert!(matches!(cfg.storage_backend, StorageBackend::Memory));
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Full `crawlex` binary: HTTP spoof + Chromium render engines enabled.
 //!
-//! Requires `cli`, `sqlite`, `cdp-backend` features (all default).
+//! Requires `cli`, `reddb-embedded`, `cdp-backend` features (all default).
 //! Ships with `chromium-fetcher` so a fresh system downloads a pinned
 //! Chromium-for-Testing on first run — no external Chrome dependency.
 
@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
 fn main() {
     eprintln!(
         "crawlex (full) requires the `cli` and `cdp-backend` features; \
-         rebuild with default features or use `crawlex-mini` for HTTP-only."
+         rebuild with default features."
     );
     std::process::exit(2);
 }

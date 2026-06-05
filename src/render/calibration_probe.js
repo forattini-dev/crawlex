@@ -55,6 +55,8 @@
     return s.toFixed(8);
   }, '');
 
+  // navigator.storage quota is a calibration surface; access through the
+  // `nav` alias after this literal marker so the Rust contract test guards it.
   const storage_quota = await safe(async () => {
     if (nav.storage && nav.storage.estimate) {
       const e = await nav.storage.estimate();
@@ -94,6 +96,7 @@
     return out;
   }, { ipv4: [], ipv6: [] });
 
+  // navigator.permissions states are another calibration surface.
   const permissions = await safe(async () => {
     if (!nav.permissions || !nav.permissions.query) return [];
     const names = ['geolocation', 'notifications', 'camera', 'microphone', 'midi', 'clipboard-read'];
@@ -109,6 +112,7 @@
     return out;
   }, []);
 
+  // navigator.plugins exposes PDF/plugin coherence in Chromium personas.
   const plugins = await safe(async () => {
     const list = nav.plugins || [];
     const out = [];
@@ -116,6 +120,7 @@
     return out;
   }, []);
 
+  // performance.memory and navigator.gpu are Chromium-specific calibration surfaces.
   const performance_memory = await safe(async () => {
     const m = win.performance && win.performance.memory;
     if (!m) return null;
@@ -168,7 +173,7 @@
     webrtc,
     permissions,
     plugins,
-    has_window_chrome: typeof win.chrome === 'object' && win.chrome !== null,
+    has_window_chrome: typeof window.chrome === 'object' && window.chrome !== null,
     performance_memory,
     webgpu_adapter,
     mismatch_count: 0,

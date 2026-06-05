@@ -37,8 +37,8 @@ export type EventKind =
 
 /**
  * Canonical per-URL lifecycle status (slice 1). Mirrors
- * `crawlex::Status` on the Rust side. Written to the SQLite
- * `pages.crawl_status` column and shipped on `BaseEnvelope.status`.
+ * `crawlex::Status` on the Rust side. Written to persisted crawl
+ * status rows and shipped on `BaseEnvelope.status`.
  */
 export type UrlStatus =
   | 'queued'
@@ -50,8 +50,7 @@ export type UrlStatus =
 
 /**
  * Canonical per-job terminal label (slice 1). Mirrors
- * `crawlex::TerminalReason`. Written to the SQLite
- * `crawl_stats.terminal_reason` column.
+ * `crawlex::TerminalReason`. Written to persisted crawl telemetry.
  */
 export type TerminalReason =
   | 'completed'
@@ -215,7 +214,7 @@ export interface DecisionMadeData {
 /**
  * Mirrors `src/events/envelope.rs::FetchCompletedData`. Carries the
  * per-fetch network breakdown so a stream consumer can act on timings
- * without round-tripping through the SQLite `page_metrics` table.
+ * without round-tripping through persisted page metrics.
  */
 export interface FetchCompletedData {
   final_url: string;
@@ -299,8 +298,8 @@ export interface ArtifactSavedData {
    * Where the artifact landed:
    * - Filesystem backend: path relative to the storage root
    *   (e.g. `artifacts/<session>/<stem>.png`).
-   * - SQLite backend: `cas:<sha256>` URI pointing at the
-   *   content-addressed blob store (`<dbfile>.blobs/<shard>/<sha256>`).
+   * - RedDB/file-backed artifact stores may return stable `cas:<sha256>`
+   *   style URIs for content-addressed payloads.
    * - Memory backend / non-persisting sinks: omitted.
    */
   path?: string;
@@ -452,9 +451,9 @@ export interface CrawlArgs {
   blockResource?: string;
 
   // ─── Storage / queue ─────────────────────────────────────────────
-  storage?: 'memory' | 'filesystem' | 'sqlite' | string;
+  storage?: 'memory' | 'filesystem' | 'reddb' | string;
   storagePath?: string;
-  queue?: 'memory' | 'sqlite' | 'redis' | string;
+  queue?: 'reddb' | 'memory' | 'redis' | string;
   queuePath?: string;
   queueRedisUrl?: string;
 
