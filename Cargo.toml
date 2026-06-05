@@ -41,7 +41,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "crawlex"
 path = "src/bin/full.rs"
-required-features = ["cli", "reddb-embedded", "cdp-backend"]
+required-features = ["cli", "reddb-embedded", "cdp-backend", "chromium-fetcher"]
 
 # Mini build: HTTP-only worker, no Chromium, no browser deps. Same CLI
 # surface as `crawlex` — browser-dependent subcommands/flags return

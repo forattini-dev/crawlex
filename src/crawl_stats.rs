@@ -22,6 +22,73 @@ impl AttemptEngine {
     }
 }
 
+/// Operator-safe identity dimensions for measuring proxy/fingerprint health.
+///
+/// This stores logical provider/profile/session identifiers and observed exit IP
+/// only; proxy credentials and raw proxy URLs stay out of this shape so it is
+/// safe to serialize into crawl events and local storage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessIdentity {
+    pub target_host: String,
+    pub endpoint_class: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticky_identity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_ip: Option<String>,
+    pub persona_id: String,
+    pub tls_profile_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers_profile_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ua_hash: Option<String>,
+}
+
+impl AccessIdentity {
+    pub fn new(
+        target_host: impl Into<String>,
+        endpoint_class: impl Into<String>,
+        persona_id: impl Into<String>,
+        tls_profile_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_host: target_host.into(),
+            endpoint_class: endpoint_class.into(),
+            proxy_provider: None,
+            proxy_profile_id: None,
+            sticky_identity_id: None,
+            exit_ip: None,
+            persona_id: persona_id.into(),
+            tls_profile_name: tls_profile_name.into(),
+            headers_profile_hash: None,
+            ua_hash: None,
+        }
+    }
+
+    /// Stable, human-auditable grouping key for reputation rollups. We keep it
+    /// readable for operational debugging; fields are already redacted/safe.
+    pub fn access_identity_key(&self) -> String {
+        [
+            self.target_host.as_str(),
+            self.endpoint_class.as_str(),
+            self.proxy_provider.as_deref().unwrap_or("direct"),
+            self.proxy_profile_id.as_deref().unwrap_or("default"),
+            self.sticky_identity_id.as_deref().unwrap_or("non_sticky"),
+            self.exit_ip.as_deref().unwrap_or("unknown_exit_ip"),
+            self.persona_id.as_str(),
+            self.tls_profile_name.as_str(),
+            self.headers_profile_hash
+                .as_deref()
+                .unwrap_or("unknown_headers"),
+            self.ua_hash.as_deref().unwrap_or("unknown_ua"),
+        ]
+        .join("|")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlAttemptRecord {
     pub crawl_id: u64,
@@ -50,6 +117,10 @@ pub struct CrawlAttemptRecord {
     pub latency_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_identity_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_identity: Option<AccessIdentity>,
     pub observed_at: i64,
 }
 
@@ -84,8 +155,16 @@ impl CrawlAttemptRecord {
             level,
             latency_ms,
             error,
+            access_identity_key: None,
+            access_identity: None,
             observed_at: now_unix(),
         }
+    }
+
+    pub fn with_access_identity(mut self, identity: AccessIdentity) -> Self {
+        self.access_identity_key = Some(identity.access_identity_key());
+        self.access_identity = Some(identity);
+        self
     }
 }
 
@@ -178,5 +257,80 @@ mod tests {
         assert!(!json.contains("user"));
         assert!(!json.contains("pass"));
         assert!(json.contains("socks5h://%5BREDACTED%5D@proxy.example.test:31113"));
+    }
+
+    #[test]
+    fn access_identity_key_separates_sticky_proxy_and_fingerprint() {
+        let mut identity = AccessIdentity::new(
+            "www.drogariasaopaulo.com.br",
+            "vtex_api",
+            "pixel",
+            "chrome_99.0.4844.73_android12-pixel6",
+        );
+        identity.proxy_provider = Some("packetstream".into());
+        identity.proxy_profile_id = Some("packetstream-default".into());
+        identity.sticky_identity_id =
+            Some("packetstream:www.drogariasaopaulo.com.br:vtex_api:pixel".into());
+        identity.exit_ip = Some("192.0.2.10".into());
+        identity.headers_profile_hash = Some("headers-a".into());
+        identity.ua_hash = Some("ua-a".into());
+
+        let base = identity.access_identity_key();
+        assert!(base.contains("www.drogariasaopaulo.com.br"));
+        assert!(base.contains("192.0.2.10"));
+        assert!(base.contains("chrome_99.0.4844.73_android12-pixel6"));
+
+        let mut changed_ip = identity.clone();
+        changed_ip.exit_ip = Some("192.0.2.11".into());
+        assert_ne!(base, changed_ip.access_identity_key());
+
+        let mut changed_tls = identity.clone();
+        changed_tls.tls_profile_name = "chrome_116.0.5845.180_win10".into();
+        assert_ne!(base, changed_tls.access_identity_key());
+    }
+
+    #[test]
+    fn attempt_json_carries_access_identity_without_proxy_credentials() {
+        let proxy: Url = "socks5h://user:pass@proxy.example.test:31113"
+            .parse()
+            .unwrap();
+        let mut identity = AccessIdentity::new(
+            "www.drogariasaopaulo.com.br",
+            "vtex_api",
+            "pixel",
+            "chrome_99.0.4844.73_android12-pixel6",
+        );
+        identity.proxy_provider = Some("packetstream".into());
+        identity.proxy_profile_id = Some("packetstream-default".into());
+        identity.sticky_identity_id =
+            Some("packetstream:www.drogariasaopaulo.com.br:vtex_api:pixel".into());
+        identity.exit_ip = Some("192.0.2.10".into());
+
+        let attempt = CrawlAttemptRecord::new(
+            1,
+            "https://www.drogariasaopaulo.com.br/api/catalog_system/pub/products/search/paracetamol"
+                .parse()
+                .unwrap(),
+            1,
+            AttemptEngine::HttpSpoof,
+            Some(proxy.clone()),
+            Some(proxy),
+            Some(206),
+            false,
+            None,
+            None,
+            None,
+            42,
+            None,
+        )
+        .with_access_identity(identity);
+
+        let json = serde_json::to_string(&attempt).unwrap();
+        assert!(json.contains("access_identity_key"));
+        assert!(json.contains("sticky_identity_id"));
+        assert!(json.contains("chrome_99.0.4844.73_android12-pixel6"));
+        assert!(json.contains("192.0.2.10"));
+        assert!(!json.contains("user"));
+        assert!(!json.contains("pass"));
     }
 }

@@ -1,4 +1,3 @@
-#[cfg(feature = "cdp-backend")]
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::config::{Config, QueueBackend, StorageBackend};
-use crate::crawl_stats::{AttemptEngine, CrawlAttemptRecord, CrawlStats};
+use crate::crawl_stats::{AccessIdentity, AttemptEngine, CrawlAttemptRecord, CrawlStats};
 use crate::discovery::{
     assets::{classify_url, classify_with_mime, AssetKind},
     DiscoveryGraph,
@@ -142,6 +141,54 @@ fn effective_crawl_id(job: &Job) -> u64 {
     } else {
         job.crawl_id
     }
+}
+
+fn classify_endpoint_for_access(url: &Url) -> String {
+    let path = url.path();
+    if path.contains("/api/catalog_system/pub/products/search") {
+        "vtex_api".to_string()
+    } else if path.contains("/search") || url.query_pairs().any(|(key, _)| key == "w" || key == "q")
+    {
+        "html_search".to_string()
+    } else if path.ends_with("sitemap.xml") || path.contains("sitemap") {
+        "sitemap".to_string()
+    } else if path.contains("/p") || path.contains("/produto") || path.contains("/product") {
+        "product_page".to_string()
+    } else {
+        "page".to_string()
+    }
+}
+
+fn proxy_provider_id(proxy: &Url) -> Option<String> {
+    let host = proxy.host_str()?;
+    let provider = if host.contains("packetstream") {
+        "packetstream"
+    } else if host.contains("brightdata") || host.contains("brd.superproxy") {
+        "brightdata"
+    } else if host.contains("oxylabs") {
+        "oxylabs"
+    } else if host.contains("iproyal") {
+        "iproyal"
+    } else {
+        host
+    };
+    Some(provider.to_string())
+}
+
+fn proxy_profile_id(proxy: &Url) -> String {
+    let host = proxy.host_str().unwrap_or("unknown_proxy");
+    match proxy.port() {
+        Some(port) => format!("{}://{}:{}", proxy.scheme(), host, port),
+        None => format!("{}://{}", proxy.scheme(), host),
+    }
+}
+
+fn short_sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl Crawler {
@@ -347,7 +394,61 @@ impl Crawler {
             .unwrap_or(1)
     }
 
+    fn build_access_identity(&self, url: &Url, proxy_effective: Option<&Url>) -> AccessIdentity {
+        let profile = self.client.profile();
+        let (browser, major, os) = profile.parts();
+        let tls_profile_name = profile
+            .tls()
+            .map(|fp| fp.name.to_string())
+            .unwrap_or_else(|| format!("unsupported_{browser:?}_{major}_{os:?}"));
+        let persona_id = format!("{browser:?}_{major}_{os:?}").to_ascii_lowercase();
+        let target_host = url.host_str().unwrap_or("unknown_host").to_string();
+        let endpoint_class = classify_endpoint_for_access(url);
+        let mut identity = AccessIdentity::new(
+            target_host.clone(),
+            endpoint_class.clone(),
+            persona_id,
+            tls_profile_name,
+        );
+
+        if let Some(proxy) = proxy_effective {
+            identity.proxy_provider = proxy_provider_id(proxy);
+            identity.proxy_profile_id = Some(proxy_profile_id(proxy));
+            if self.config.proxy.sticky_per_host {
+                identity.sticky_identity_id = Some(format!(
+                    "{}:{}:{}:{}",
+                    identity.proxy_provider.as_deref().unwrap_or("proxy"),
+                    target_host,
+                    endpoint_class,
+                    identity.persona_id
+                ));
+            }
+            identity.exit_ip = proxy
+                .host_str()
+                .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+                .map(|ip| ip.to_string());
+        }
+
+        let bundle = self.client.identity_bundle();
+        identity.ua_hash = Some(short_sha256_hex(bundle.ua.as_bytes()));
+        identity.headers_profile_hash = Some(short_sha256_hex(
+            format!(
+                "{}|{}|{}|{}",
+                bundle.ua, bundle.sec_ch_ua, bundle.accept_language, bundle.ua_platform
+            )
+            .as_bytes(),
+        ));
+        identity
+    }
+
     async fn record_crawl_attempt(&self, attempt: CrawlAttemptRecord) {
+        let attempt = if attempt.access_identity.is_some() {
+            attempt
+        } else {
+            let access_identity =
+                self.build_access_identity(&attempt.url, attempt.proxy_effective.as_ref());
+            attempt.with_access_identity(access_identity)
+        };
         self.crawl_attempts
             .entry(attempt.crawl_id)
             .or_default()

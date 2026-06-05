@@ -102,8 +102,9 @@ async fn bootstrap_storage_schema(db: &Reddb) -> Result<()> {
         format!("CREATE DOCUMENT IF NOT EXISTS {TECH_FINGERPRINT_COLLECTION}"),
         format!("CREATE DOCUMENT IF NOT EXISTS {HOST_TECH_COLLECTION}"),
         "CREATE TABLE IF NOT EXISTS crawlex_pages".to_string(),
-        "CREATE TABLE IF NOT EXISTS crawlex_crawl_attempts".to_string(),
-        "CREATE TABLE IF NOT EXISTS crawlex_telemetry_events".to_string(),
+        format!("CREATE DOCUMENT IF NOT EXISTS {CRAWL_STATS_COLLECTION}"),
+        format!("CREATE DOCUMENT IF NOT EXISTS {CRAWL_ATTEMPT_COLLECTION}"),
+        format!("CREATE DOCUMENT IF NOT EXISTS {TELEMETRY_COLLECTION}"),
         "CREATE DOCUMENT IF NOT EXISTS crawlex_sessions".to_string(),
         "CREATE DOCUMENT IF NOT EXISTS crawlex_challenges".to_string(),
         "CREATE DOCUMENT IF NOT EXISTS crawlex_intel".to_string(),
@@ -114,6 +115,112 @@ async fn bootstrap_storage_schema(db: &Reddb) -> Result<()> {
         let _ = db.query(&statement).await;
     }
     Ok(())
+}
+
+fn crawl_attempt_document(attempt: &crate::crawl_stats::CrawlAttemptRecord) -> Result<JsonValue> {
+    let attempt_json = serde_json::to_string(attempt)
+        .map_err(|e| Error::Storage(format!("RedDB crawl attempt json failed: {e}")))?;
+    let mut entries = vec![
+        ("crawl_id", JsonValue::number(attempt.crawl_id as f64)),
+        ("url", JsonValue::string(attempt.url.to_string())),
+        (
+            "attempt_index",
+            JsonValue::number(attempt.attempt_index as f64),
+        ),
+        ("engine", JsonValue::string(attempt.engine.as_str())),
+        (
+            "success",
+            JsonValue::bool(!attempt.blocked && attempt.error.is_none()),
+        ),
+        ("blocked", JsonValue::bool(attempt.blocked)),
+        (
+            "status",
+            attempt
+                .status
+                .map(|v| JsonValue::number(v as f64))
+                .unwrap_or_else(JsonValue::null),
+        ),
+        ("latency_ms", JsonValue::number(attempt.latency_ms as f64)),
+        ("observed_at", JsonValue::number(attempt.observed_at as f64)),
+        ("attempt_json", JsonValue::string(attempt_json)),
+    ];
+
+    if let Some(identity) = &attempt.access_identity {
+        entries.extend([
+            (
+                "access_identity_key",
+                JsonValue::string(
+                    attempt
+                        .access_identity_key
+                        .clone()
+                        .unwrap_or_else(|| identity.access_identity_key()),
+                ),
+            ),
+            (
+                "target_host",
+                JsonValue::string(identity.target_host.clone()),
+            ),
+            (
+                "endpoint_class",
+                JsonValue::string(identity.endpoint_class.clone()),
+            ),
+            (
+                "proxy_provider",
+                identity
+                    .proxy_provider
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+            (
+                "proxy_profile_id",
+                identity
+                    .proxy_profile_id
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+            (
+                "sticky_identity_id",
+                identity
+                    .sticky_identity_id
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+            (
+                "exit_ip",
+                identity
+                    .exit_ip
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+            ("persona_id", JsonValue::string(identity.persona_id.clone())),
+            (
+                "tls_profile_name",
+                JsonValue::string(identity.tls_profile_name.clone()),
+            ),
+            (
+                "headers_profile_hash",
+                identity
+                    .headers_profile_hash
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+            (
+                "ua_hash",
+                identity
+                    .ua_hash
+                    .clone()
+                    .map(JsonValue::string)
+                    .unwrap_or_else(JsonValue::null),
+            ),
+        ]);
+    }
+
+    Ok(JsonValue::object(entries))
 }
 
 #[async_trait::async_trait]
@@ -467,18 +574,8 @@ impl TelemetryStorage for ReddbStorage {
         &self,
         attempt: &crate::crawl_stats::CrawlAttemptRecord,
     ) -> Result<()> {
-        self.insert_json(
-            CRAWL_ATTEMPT_COLLECTION,
-            JsonValue::object([
-                ("crawl_id", JsonValue::number(attempt.crawl_id as f64)),
-                ("url", JsonValue::string(attempt.url.to_string())),
-                (
-                    "attempt_json",
-                    JsonValue::string(serde_json::to_string(attempt).unwrap_or_default()),
-                ),
-            ]),
-        )
-        .await
+        self.insert_json(CRAWL_ATTEMPT_COLLECTION, crawl_attempt_document(attempt)?)
+            .await
     }
 
     async fn record_crawl_stats(&self, stats: &crate::crawl_stats::CrawlStats) -> Result<()> {
@@ -667,4 +764,86 @@ fn reject_unsupported_red_wss(uri: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crawl_stats::{AccessIdentity, AttemptEngine, CrawlAttemptRecord};
+
+    fn object_value<'a>(doc: &'a JsonValue, key: &str) -> Option<&'a JsonValue> {
+        doc.as_object()?
+            .iter()
+            .find_map(|(k, v)| if k == key { Some(v) } else { None })
+    }
+
+    #[test]
+    fn crawl_attempt_document_exposes_access_identity_for_reddb_rollups() {
+        let mut identity = AccessIdentity::new(
+            "www.drogariasaopaulo.com.br",
+            "vtex_api",
+            "pixel",
+            "chrome_99.0.4844.73_android12-pixel6",
+        );
+        identity.proxy_provider = Some("packetstream".into());
+        identity.proxy_profile_id = Some("packetstream-default".into());
+        identity.sticky_identity_id =
+            Some("packetstream:www.drogariasaopaulo.com.br:vtex_api:pixel".into());
+        identity.exit_ip = Some("192.0.2.10".into());
+        identity.headers_profile_hash = Some("headers-a".into());
+        identity.ua_hash = Some("ua-a".into());
+
+        let attempt = CrawlAttemptRecord::new(
+            7,
+            "https://www.drogariasaopaulo.com.br/api/catalog_system/pub/products/search/paracetamol"
+                .parse()
+                .unwrap(),
+            1,
+            AttemptEngine::HttpSpoof,
+            None,
+            None,
+            Some(206),
+            false,
+            None,
+            None,
+            None,
+            42,
+            None,
+        )
+        .with_access_identity(identity);
+
+        let doc = crawl_attempt_document(&attempt).unwrap();
+        assert!(matches!(
+            object_value(&doc, "access_identity_key"),
+            Some(JsonValue::String(value)) if value.contains("packetstream")
+        ));
+        assert_eq!(
+            object_value(&doc, "target_host"),
+            Some(&JsonValue::String("www.drogariasaopaulo.com.br".into()))
+        );
+        assert_eq!(
+            object_value(&doc, "endpoint_class"),
+            Some(&JsonValue::String("vtex_api".into()))
+        );
+        assert_eq!(
+            object_value(&doc, "sticky_identity_id"),
+            Some(&JsonValue::String(
+                "packetstream:www.drogariasaopaulo.com.br:vtex_api:pixel".into()
+            ))
+        );
+        assert_eq!(
+            object_value(&doc, "exit_ip"),
+            Some(&JsonValue::String("192.0.2.10".into()))
+        );
+        assert_eq!(
+            object_value(&doc, "tls_profile_name"),
+            Some(&JsonValue::String(
+                "chrome_99.0.4844.73_android12-pixel6".into()
+            ))
+        );
+
+        let json = doc.to_json_string();
+        assert!(!json.contains("user:pass"));
+        assert!(!json.contains("password"));
+    }
 }

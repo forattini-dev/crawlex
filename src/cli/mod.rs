@@ -2033,9 +2033,6 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
     };
 
     let queue_backend = match c.queue.as_deref().unwrap_or("inmemory") {
-        "sqlite" => QueueBackend::Sqlite {
-            path: c.queue_path.clone().unwrap_or_else(|| "queue.db".into()),
-        },
         "reddb" | "red" => QueueBackend::Reddb {
             uri: crate::config::normalize_reddb_uri(
                 c.queue_path
@@ -2045,16 +2042,18 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         },
         "redis" => {
             return Err(crate::Error::Config(
-                "redis queue backend not implemented — use `reddb`, `sqlite`, or `inmemory`".into(),
+                "redis queue backend not implemented — use `reddb`/`red` or `inmemory`".into(),
             ));
         }
-        _ => QueueBackend::InMemory,
+        "inmemory" | "memory" => QueueBackend::InMemory,
+        _ => {
+            return Err(crate::Error::Config(
+                "unsupported queue backend; use `reddb`/`red` or `inmemory`".into(),
+            ));
+        }
     };
 
     let storage_backend = match c.storage.as_deref().unwrap_or("memory") {
-        "sqlite" => StorageBackend::Sqlite {
-            path: c.storage_path.clone().unwrap_or_else(|| "crawl.db".into()),
-        },
         "reddb" | "red" => StorageBackend::Reddb {
             uri: crate::config::normalize_reddb_uri(
                 c.storage_path
@@ -2065,7 +2064,12 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         "filesystem" => StorageBackend::Filesystem {
             root: c.storage_path.clone().unwrap_or_else(|| "crawl-out".into()),
         },
-        _ => StorageBackend::Memory,
+        "memory" | "inmemory" => StorageBackend::Memory,
+        _ => {
+            return Err(crate::Error::Config(
+                "unsupported storage backend; use `reddb`/`red`, `memory`, or `filesystem`".into(),
+            ));
+        }
     };
 
     let strategy = match c.proxy_strategy.as_deref().unwrap_or("round-robin") {
