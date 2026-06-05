@@ -2660,8 +2660,14 @@ impl TelemetryStorage for SqliteStorage {
             url: attempt.url.to_string(),
             attempt_index: attempt.attempt_index as i64,
             engine: attempt.engine.as_str().to_string(),
-            proxy_requested: attempt.proxy_requested.as_ref().map(ToString::to_string),
-            proxy_effective: attempt.proxy_effective.as_ref().map(ToString::to_string),
+            proxy_requested: attempt
+                .proxy_requested
+                .as_ref()
+                .map(crate::crawl_stats::redact_url_credentials),
+            proxy_effective: attempt
+                .proxy_effective
+                .as_ref()
+                .map(crate::crawl_stats::redact_url_credentials),
             status: attempt.status.map(|v| v as i64),
             blocked: if attempt.blocked { 1 } else { 0 },
             block_reason: attempt.block_reason.clone(),

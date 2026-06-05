@@ -377,9 +377,20 @@ impl Crawler {
             .map(|(_, attempts)| attempts)
             .unwrap_or_default();
         let mut stats = CrawlStats::new(crawl_id, url);
+        let effective_success = success
+            && attempts
+                .last()
+                .map(|attempt| {
+                    !attempt.blocked
+                        && attempt
+                            .status
+                            .map(|status| (200..400).contains(&status))
+                            .unwrap_or(false)
+                })
+                .unwrap_or(success);
         stats.attempts = attempts;
         stats.resolved_by = resolved_by;
-        stats.success = success;
+        stats.success = effective_success;
         stats.fallback_fetch_used = fallback_fetch_used;
         self.events.emit(
             &Event::of(EventKind::CrawlResolved)
@@ -1688,7 +1699,7 @@ impl Crawler {
                     "session_action": action.as_str(),
                     "session_state_before": current.as_str(),
                     "session_state_after": next.as_str(),
-                    "proxy": signal.proxy.as_ref().map(|p| p.to_string()),
+                    "proxy": signal.proxy.as_ref().map(crate::crawl_stats::redact_url_credentials),
                     "status_code": signal.metadata.get("status_code").and_then(|v| v.as_u64()),
                     "title": title,
                     "widget_present": signal.metadata.get("widget_present").and_then(|v| v.as_bool()).unwrap_or(matches!(signal.level, crate::antibot::ChallengeLevel::WidgetPresent)),
