@@ -203,7 +203,7 @@ mod tests {
         let a = mgr.register("dup", BackendKind::Render);
         a.jar.set("k", "v1");
         let b = mgr.register("dup", BackendKind::Stealth); // backend ignored
-        // Existing entry preserved, including backend and jar contents.
+                                                           // Existing entry preserved, including backend and jar contents.
         assert_eq!(b.backend, BackendKind::Render);
         assert_eq!(b.jar.get("k").as_deref(), Some("v1"));
         assert_eq!(mgr.len(), 1);

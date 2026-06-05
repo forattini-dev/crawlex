@@ -107,9 +107,7 @@ impl From<ChallengeVendor> for crate::fingerprint::detection::Vendor {
         match v {
             ChallengeVendor::CloudflareJsChallenge => Vendor::Cloudflare,
             ChallengeVendor::CloudflareTurnstile => Vendor::CloudflareTurnstile,
-            ChallengeVendor::Recaptcha | ChallengeVendor::RecaptchaEnterprise => {
-                Vendor::Recaptcha
-            }
+            ChallengeVendor::Recaptcha | ChallengeVendor::RecaptchaEnterprise => Vendor::Recaptcha,
             ChallengeVendor::HCaptcha => Vendor::HCaptcha,
             ChallengeVendor::DataDome => Vendor::DataDome,
             ChallengeVendor::PerimeterX => Vendor::PerimeterX,

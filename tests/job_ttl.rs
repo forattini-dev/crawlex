@@ -173,14 +173,8 @@ async fn record_job_terminal_without_retention_leaves_expiry_null() {
 
     let path = db.clone();
     tokio::task::spawn_blocking(move || {
-        record_job_terminal_blocking(
-            &path,
-            7,
-            TerminalReason::CancelledByUser,
-            None,
-            now_secs(),
-        )
-        .unwrap();
+        record_job_terminal_blocking(&path, 7, TerminalReason::CancelledByUser, None, now_secs())
+            .unwrap();
     })
     .await
     .unwrap();
@@ -194,7 +188,10 @@ async fn record_job_terminal_without_retention_leaves_expiry_null() {
         )
         .unwrap();
     assert_eq!(reason, "cancelled_by_user");
-    assert!(stats_exp.is_none(), "expected NULL expires_at, got {stats_exp:?}");
+    assert!(
+        stats_exp.is_none(),
+        "expected NULL expires_at, got {stats_exp:?}"
+    );
     let page_exp: Option<i64> = conn
         .query_row(
             "SELECT result_expires_at FROM pages WHERE url = ?1",

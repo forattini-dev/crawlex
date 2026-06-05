@@ -118,8 +118,7 @@ fn glob_to_regex(pat: &str) -> String {
                 out.push_str("[^/]");
                 i += 1;
             }
-            b'.' | b'+' | b'(' | b')' | b'|' | b'^' | b'$' | b'{' | b'}' | b'[' | b']'
-            | b'\\' => {
+            b'.' | b'+' | b'(' | b')' | b'|' | b'^' | b'$' | b'{' | b'}' | b'[' | b']' | b'\\' => {
                 out.push('\\');
                 out.push(c as char);
                 i += 1;

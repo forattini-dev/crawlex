@@ -59,7 +59,11 @@ impl TreeHandle {
 pub fn parse_tree(bytes: &[u8], charset: Option<&str>) -> TreeHandle {
     let (source, encoding) = decode(bytes, charset);
     let html = scraper::Html::parse_document(&source);
-    TreeHandle { html, source, encoding }
+    TreeHandle {
+        html,
+        source,
+        encoding,
+    }
 }
 
 /// Streaming rewrite over bytes. Wraps `lol_html::rewrite_str`-style
@@ -110,7 +114,10 @@ fn bom_encoding(bytes: &[u8]) -> Option<&'static Encoding> {
 // the first 1024 bytes. Conservative — anything weird returns None.
 fn sniff_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
     let head = &bytes[..bytes.len().min(1024)];
-    let lower: String = head.iter().map(|b| b.to_ascii_lowercase() as char).collect();
+    let lower: String = head
+        .iter()
+        .map(|b| b.to_ascii_lowercase() as char)
+        .collect();
     let idx = lower.find("charset")?;
     let rest = &lower[idx + "charset".len()..];
     let rest = rest.trim_start_matches([' ', '=', '"', '\'']);
@@ -165,8 +172,8 @@ mod tests {
     fn parse_tree_sjis_via_meta_sniff() {
         // <meta charset> tells the parser; bytes are shift_jis-encoded
         // "日本" (4 bytes: 93 fa 96 7b).
-        let mut bytes: Vec<u8> = b"<html><head><meta charset=\"shift_jis\"></head><body><p>"
-            .to_vec();
+        let mut bytes: Vec<u8> =
+            b"<html><head><meta charset=\"shift_jis\"></head><body><p>".to_vec();
         bytes.extend_from_slice(&[0x93, 0xFA, 0x96, 0x7B]);
         bytes.extend_from_slice(b"</p></body></html>");
         let h = parse_tree(&bytes, None);
@@ -209,9 +216,7 @@ mod tests {
         let err = stream_rewrite(
             input,
             Settings {
-                element_content_handlers: vec![element!("x", |_el| {
-                    Err("boom".into())
-                })],
+                element_content_handlers: vec![element!("x", |_el| { Err("boom".into()) })],
                 ..Settings::default()
             },
         )

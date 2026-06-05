@@ -179,7 +179,10 @@ impl ReddbReplay {
         } else {
             ReddbOnDisk::default()
         };
-        Ok(Self { path, inner: RwLock::new(inner) })
+        Ok(Self {
+            path,
+            inner: RwLock::new(inner),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -215,8 +218,8 @@ impl Replay for ReddbReplay {
         };
         let mut g = self.inner.write();
         g.entries.insert(key, entry);
-        let bytes = serde_json::to_vec(&*g)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let bytes =
+            serde_json::to_vec(&*g).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_atomic(&self.path, &bytes)
     }
 }
@@ -310,9 +313,7 @@ mod tests {
     use super::*;
     use crate::scraping::request::Request;
     use crate::scraping::session::{BackendKind, SessionManager};
-    use crate::scraping::spider::{
-        ParseYield, Spider, SpiderConfig, SpiderRunner,
-    };
+    use crate::scraping::spider::{ParseYield, Spider, SpiderConfig, SpiderRunner};
     use std::sync::Mutex;
     use tempfile::tempdir;
 
@@ -398,7 +399,10 @@ mod tests {
     }
     impl CountingFetcher {
         fn new() -> Self {
-            Self { responses: HashMap::new(), hits: Mutex::new(0) }
+            Self {
+                responses: HashMap::new(),
+                hits: Mutex::new(0),
+            }
         }
         fn with(mut self, url: &str, status: u16, body: &str) -> Self {
             self.responses
@@ -430,7 +434,10 @@ mod tests {
     struct SimpleSpider;
     impl Spider for SimpleSpider {
         fn start_urls(&self) -> Vec<String> {
-            vec!["https://fixture.test/a".into(), "https://fixture.test/b".into()]
+            vec![
+                "https://fixture.test/a".into(),
+                "https://fixture.test/b".into(),
+            ]
         }
         fn parse(&self, resp: &Response) -> Vec<ParseYield> {
             vec![ParseYield::item(serde_json::json!({
@@ -482,8 +489,7 @@ mod tests {
     #[test]
     fn reddb_replay_integration_records_then_replays() {
         let dir = tempdir().unwrap();
-        let store: Arc<dyn Replay> =
-            Arc::new(ReddbReplay::open(dir.path(), "spider-x").unwrap());
+        let store: Arc<dyn Replay> = Arc::new(ReddbReplay::open(dir.path(), "spider-x").unwrap());
 
         let inner = CountingFetcher::new().with("https://fixture.test/a", 200, "A");
         let wrapped = ReplayingFetcher::new(inner, Arc::clone(&store));

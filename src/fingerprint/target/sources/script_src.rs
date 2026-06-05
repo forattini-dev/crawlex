@@ -6,9 +6,7 @@
 
 use scraper::{Html, Selector};
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -26,24 +24,69 @@ impl ScriptSrcSource {
 /// Substring match against the script src URL lowercased.
 const HOST_TABLE: &[(&str, u8, Category, Vendor)] = &[
     // Tag managers
-    ("googletagmanager.com", 10, Category::TagManager, Vendor::Gtm),
-    ("assets.adobedtm.com", 10, Category::TagManager, Vendor::AdobeLaunch),
+    (
+        "googletagmanager.com",
+        10,
+        Category::TagManager,
+        Vendor::Gtm,
+    ),
+    (
+        "assets.adobedtm.com",
+        10,
+        Category::TagManager,
+        Vendor::AdobeLaunch,
+    ),
     ("tags.tiqcdn.com", 10, Category::TagManager, Vendor::Tealium),
     // Analytics
-    ("google-analytics.com", 10, Category::Analytics, Vendor::GoogleAnalytics),
-    ("googletagmanager.com/gtag", 8, Category::Analytics, Vendor::GoogleAnalytics),
-    ("adobedc.net", 10, Category::Analytics, Vendor::AdobeAnalytics),
+    (
+        "google-analytics.com",
+        10,
+        Category::Analytics,
+        Vendor::GoogleAnalytics,
+    ),
+    (
+        "googletagmanager.com/gtag",
+        8,
+        Category::Analytics,
+        Vendor::GoogleAnalytics,
+    ),
+    (
+        "adobedc.net",
+        10,
+        Category::Analytics,
+        Vendor::AdobeAnalytics,
+    ),
     ("cdn.segment.com", 10, Category::Analytics, Vendor::Segment),
     ("cdn.mxpnl.com", 10, Category::Analytics, Vendor::Mixpanel),
     ("static.hotjar.com", 10, Category::Analytics, Vendor::Hotjar),
     ("plausible.io", 10, Category::Analytics, Vendor::Plausible),
     // A/B testing
-    ("cdn.optimizely.com", 10, Category::AbTesting, Vendor::Optimizely),
-    ("dev.visualwebsiteoptimizer.com", 10, Category::AbTesting, Vendor::Vwo),
-    ("googleoptimize.com", 10, Category::AbTesting, Vendor::GoogleOptimize),
+    (
+        "cdn.optimizely.com",
+        10,
+        Category::AbTesting,
+        Vendor::Optimizely,
+    ),
+    (
+        "dev.visualwebsiteoptimizer.com",
+        10,
+        Category::AbTesting,
+        Vendor::Vwo,
+    ),
+    (
+        "googleoptimize.com",
+        10,
+        Category::AbTesting,
+        Vendor::GoogleOptimize,
+    ),
     // Chat / support
     ("widget.intercom.io", 10, Category::Chat, Vendor::Intercom),
-    ("static.intercomcdn.com", 10, Category::Chat, Vendor::Intercom),
+    (
+        "static.intercomcdn.com",
+        10,
+        Category::Chat,
+        Vendor::Intercom,
+    ),
     ("static.zdassets.com", 10, Category::Chat, Vendor::Zendesk),
     ("js.driftt.com", 10, Category::Chat, Vendor::Drift),
     ("code.jivosite.com", 10, Category::Chat, Vendor::JivoChat),
@@ -51,7 +94,12 @@ const HOST_TABLE: &[(&str, u8, Category, Vendor)] = &[
     ("cdn.auth0.com", 10, Category::Auth, Vendor::Auth0),
     // Payment widgets
     ("js.stripe.com", 10, Category::Payment, Vendor::Stripe),
-    ("checkoutshopper-live.adyen.com", 10, Category::Payment, Vendor::Adyen),
+    (
+        "checkoutshopper-live.adyen.com",
+        10,
+        Category::Payment,
+        Vendor::Adyen,
+    ),
     ("paypalobjects.com", 10, Category::Payment, Vendor::Paypal),
 ];
 
@@ -72,7 +120,8 @@ impl Source for ScriptSrcSource {
         let doc = Html::parse_document(body_str);
         let sel = Selector::parse("script[src]").unwrap();
 
-        let mut seen: std::collections::HashSet<(Category, Vendor)> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<(Category, Vendor)> =
+            std::collections::HashSet::new();
         let mut out: Vec<Detection> = Vec::new();
 
         for script in doc.select(&sel) {

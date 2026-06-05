@@ -51,7 +51,10 @@ pub struct AdaptiveOptions {
 
 impl AdaptiveOptions {
     pub fn new(identifier: impl Into<String>) -> Self {
-        Self { identifier: identifier.into(), threshold: DEFAULT_THRESHOLD }
+        Self {
+            identifier: identifier.into(),
+            threshold: DEFAULT_THRESHOLD,
+        }
     }
     pub fn with_threshold(mut self, t: f32) -> Self {
         self.threshold = t;
@@ -109,7 +112,10 @@ fn adaptive_resolve<'a>(
                     "adaptive store save failed",
                 );
             }
-            Some(AdaptiveMatch { handle: first, confidence: None })
+            Some(AdaptiveMatch {
+                handle: first,
+                confidence: None,
+            })
         }
         Some(saved_fp) => {
             // Try direct candidates first.
@@ -122,7 +128,10 @@ fn adaptive_resolve<'a>(
             }
             if let Some((h, s)) = best_direct {
                 if s >= opts.threshold {
-                    return Some(AdaptiveMatch { handle: h, confidence: None });
+                    return Some(AdaptiveMatch {
+                        handle: h,
+                        confidence: None,
+                    });
                 }
             }
             // Relocate: walk all elements and pick the highest score
@@ -162,7 +171,10 @@ fn relocate<'a>(
             tag = %h.name(),
             "adaptive relocation succeeded",
         );
-        Some(AdaptiveMatch { handle: h, confidence: Some(s) })
+        Some(AdaptiveMatch {
+            handle: h,
+            confidence: Some(s),
+        })
     } else {
         None
     }
@@ -253,7 +265,8 @@ mod tests {
         let store = AdaptiveStore::open(dir.path(), "spider1").unwrap();
         let tree = parse_tree(BEFORE, None);
         let opts = AdaptiveOptions::new("title");
-        tree.css_adaptive("h1.title", &store, "example.com", &opts).unwrap();
+        tree.css_adaptive("h1.title", &store, "example.com", &opts)
+            .unwrap();
         let again = tree
             .css_adaptive("h1.title", &store, "example.com", &opts)
             .unwrap();
@@ -268,16 +281,22 @@ mod tests {
         {
             let t = parse_tree(BEFORE, None);
             let opts = AdaptiveOptions::new("title");
-            t.css_adaptive("h1.title", &store, "shop.example", &opts).unwrap();
+            t.css_adaptive("h1.title", &store, "shop.example", &opts)
+                .unwrap();
         }
         // Query mutated DOM where original selector misses.
         let t2 = parse_tree(AFTER, None);
-        assert!(t2.css("h1.title").is_empty(), "selector should miss on mutated DOM");
+        assert!(
+            t2.css("h1.title").is_empty(),
+            "selector should miss on mutated DOM"
+        );
         let opts = AdaptiveOptions::new("title");
         let m = t2
             .css_adaptive("h1.title", &store, "shop.example", &opts)
             .expect("relocation finds twin");
-        let conf = m.adaptive_confidence().expect("relocated => some confidence");
+        let conf = m
+            .adaptive_confidence()
+            .expect("relocated => some confidence");
         assert!(conf >= 0.2, "confidence {} below threshold", conf);
         assert_eq!(m.handle().name(), "h1");
         assert_eq!(m.handle().text(), "Acme Widget");
@@ -290,7 +309,8 @@ mod tests {
         {
             let t = parse_tree(BEFORE, None);
             let opts = AdaptiveOptions::new("title");
-            t.css_adaptive("h1.title", &store, "shop.example", &opts).unwrap();
+            t.css_adaptive("h1.title", &store, "shop.example", &opts)
+                .unwrap();
         }
         let t2 = parse_tree(AFTER, None);
         // Impossibly high threshold => no relocation.
@@ -306,7 +326,8 @@ mod tests {
         {
             let t = parse_tree(BEFORE, None);
             let opts = AdaptiveOptions::new("title-x");
-            t.xpath_adaptive("//h1[@class='title']", &store, "ex.com", &opts).unwrap();
+            t.xpath_adaptive("//h1[@class='title']", &store, "ex.com", &opts)
+                .unwrap();
         }
         let t2 = parse_tree(AFTER, None);
         assert!(t2.xpath("//h1[@class='title']").is_empty());
@@ -350,7 +371,11 @@ mod tests {
         let anchor = rows[0];
         let hits = anchor.find_similar(None);
         // Two other rows match; decorative elements (h1, p, a, td) must not.
-        assert!(hits.iter().all(|h| h.name() == "tr"), "non-row leaked in: {:?}", hits.iter().map(|h| h.name()).collect::<Vec<_>>());
+        assert!(
+            hits.iter().all(|h| h.name() == "tr"),
+            "non-row leaked in: {:?}",
+            hits.iter().map(|h| h.name()).collect::<Vec<_>>()
+        );
         let tr_hits: Vec<_> = hits.iter().filter(|h| h.name() == "tr").collect();
         assert_eq!(tr_hits.len(), 2);
     }
@@ -369,8 +394,11 @@ mod tests {
         let t = parse_tree(TABLE, None);
         let anchor = t.css("tr.row").into_iter().next().unwrap();
         let strict = anchor.find_similar(Some(0.999));
-        assert!(strict.is_empty(), "0.999 should reject near-twins: {:?}",
-            strict.iter().map(|h| h.text()).collect::<Vec<_>>());
+        assert!(
+            strict.is_empty(),
+            "0.999 should reject near-twins: {:?}",
+            strict.iter().map(|h| h.text()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

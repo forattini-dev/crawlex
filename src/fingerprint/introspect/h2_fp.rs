@@ -51,8 +51,14 @@ mod tests {
 
     #[test]
     fn h2_fingerprint_order_independent() {
-        let p1 = &[(SETTINGS_HEADER_TABLE_SIZE, 65536), (SETTINGS_INITIAL_WINDOW_SIZE, 6291456)];
-        let p2 = &[(SETTINGS_INITIAL_WINDOW_SIZE, 6291456), (SETTINGS_HEADER_TABLE_SIZE, 65536)];
+        let p1 = &[
+            (SETTINGS_HEADER_TABLE_SIZE, 65536),
+            (SETTINGS_INITIAL_WINDOW_SIZE, 6291456),
+        ];
+        let p2 = &[
+            (SETTINGS_INITIAL_WINDOW_SIZE, 6291456),
+            (SETTINGS_HEADER_TABLE_SIZE, 65536),
+        ];
         assert_eq!(
             compute_h2_settings_fingerprint(p1),
             compute_h2_settings_fingerprint(p2)

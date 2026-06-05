@@ -51,6 +51,8 @@ pub mod identity;
 pub mod impersonate;
 #[cfg(feature = "sqlite")]
 pub mod intel;
+#[cfg(feature = "cli")]
+pub mod mcp;
 pub mod metrics;
 pub mod metrics_server;
 pub mod parser;
@@ -67,11 +69,9 @@ pub mod robots;
 pub mod runner;
 pub mod scheduler;
 pub mod scraping;
-#[cfg(feature = "cli")]
-pub mod mcp;
+pub mod script;
 #[cfg(feature = "cli")]
 pub mod shell;
-pub mod script;
 pub mod status;
 pub mod storage;
 pub mod url_util;

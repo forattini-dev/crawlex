@@ -6,9 +6,7 @@
 //! `Antibot::Unknown` detection — `BlockPattern` in B6 will provide
 //! the deeper variant; this source is the cheap heuristic.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;

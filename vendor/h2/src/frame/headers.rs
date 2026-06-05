@@ -706,7 +706,7 @@ impl Iterator for Iter {
                 return Some(Method(method));
             }
 
-            // minibrowser S.1 patch: emit :authority before :scheme to match
+            // crawlex S.1 patch: emit :authority before :scheme to match
             // Chrome 149 pseudo-header order (m,a,s,p) for Akamai H2 fingerprint.
             if let Some(authority) = pseudo.authority.take() {
                 return Some(Authority(authority));

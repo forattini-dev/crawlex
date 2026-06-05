@@ -31,7 +31,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn golden_path() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.join("tests").join("fixtures").join("runner_ndjson_golden.txt")
+    dir.join("tests")
+        .join("fixtures")
+        .join("runner_ndjson_golden.txt")
 }
 
 fn deterministic_cfg(queue_path: String, storage_path: String) -> Config {

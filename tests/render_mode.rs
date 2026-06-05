@@ -17,11 +17,7 @@ use serde_json::Value;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn http_only_cfg(
-    queue_path: String,
-    storage_path: String,
-    render_mode: RenderMode,
-) -> Config {
+fn http_only_cfg(queue_path: String, storage_path: String, render_mode: RenderMode) -> Config {
     Config {
         max_concurrent_http: 4,
         max_concurrent_render: 0,
@@ -126,9 +122,7 @@ fn render_mode_always_forces_render_pool_capacity() {
     config.render_mode = RenderMode::Always;
     // Mirror the wiring done in `cli::run_crawl` — bumping the pool
     // up to at least one slot so the render path is reachable.
-    if matches!(config.render_mode, RenderMode::Always)
-        && config.max_concurrent_render == 0
-    {
+    if matches!(config.render_mode, RenderMode::Always) && config.max_concurrent_render == 0 {
         config.max_concurrent_render = 1;
     }
     assert_eq!(config.max_concurrent_render, 1);

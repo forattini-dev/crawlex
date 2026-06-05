@@ -1,4 +1,6 @@
 pub mod inmemory;
+#[cfg(feature = "reddb-embedded")]
+pub mod reddb;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 

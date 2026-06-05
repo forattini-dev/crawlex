@@ -5,9 +5,7 @@
 //! `<noscript>` challenge heuristics, and platform markers
 //! (Next.js, Magento). Body sample capped at 16 KiB to bound cost.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -29,17 +27,83 @@ const BODY_SAMPLE_CAP: usize = 16 * 1024;
 /// `AntibotMarkerSource` in B5 — that source owns the
 /// "what antibot vendor is this?" question now.
 const PLATFORM_TABLE: &[(&str, u8, Category, Vendor, &str)] = &[
-    ("__NEXT_DATA__", 10, Category::Frontend, Vendor::NextJs, "body marker __NEXT_DATA__"),
-    ("__NUXT__", 10, Category::Frontend, Vendor::Nuxt, "body marker __NUXT__"),
-    ("data-react", 6, Category::Frontend, Vendor::React, "body marker data-react*"),
-    ("ng-version=", 10, Category::Frontend, Vendor::Angular, "body marker ng-version="),
-    ("Shopify.theme", 10, Category::Ecommerce, Vendor::Shopify, "body marker Shopify.theme"),
-    ("Magento", 6, Category::Ecommerce, Vendor::Magento, "body marker 'Magento'"),
-    ("/skin/frontend/", 8, Category::Ecommerce, Vendor::Magento, "body marker /skin/frontend/"),
-    ("VTEX", 8, Category::Ecommerce, Vendor::Vtex, "body marker 'VTEX'"),
-    ("wp-content", 6, Category::Cms, Vendor::Wordpress, "body marker /wp-content/"),
-    ("/wp-includes/", 8, Category::Cms, Vendor::Wordpress, "body marker /wp-includes/"),
-    ("Drupal.settings", 10, Category::Cms, Vendor::Drupal, "body marker Drupal.settings"),
+    (
+        "__NEXT_DATA__",
+        10,
+        Category::Frontend,
+        Vendor::NextJs,
+        "body marker __NEXT_DATA__",
+    ),
+    (
+        "__NUXT__",
+        10,
+        Category::Frontend,
+        Vendor::Nuxt,
+        "body marker __NUXT__",
+    ),
+    (
+        "data-react",
+        6,
+        Category::Frontend,
+        Vendor::React,
+        "body marker data-react*",
+    ),
+    (
+        "ng-version=",
+        10,
+        Category::Frontend,
+        Vendor::Angular,
+        "body marker ng-version=",
+    ),
+    (
+        "Shopify.theme",
+        10,
+        Category::Ecommerce,
+        Vendor::Shopify,
+        "body marker Shopify.theme",
+    ),
+    (
+        "Magento",
+        6,
+        Category::Ecommerce,
+        Vendor::Magento,
+        "body marker 'Magento'",
+    ),
+    (
+        "/skin/frontend/",
+        8,
+        Category::Ecommerce,
+        Vendor::Magento,
+        "body marker /skin/frontend/",
+    ),
+    (
+        "VTEX",
+        8,
+        Category::Ecommerce,
+        Vendor::Vtex,
+        "body marker 'VTEX'",
+    ),
+    (
+        "wp-content",
+        6,
+        Category::Cms,
+        Vendor::Wordpress,
+        "body marker /wp-content/",
+    ),
+    (
+        "/wp-includes/",
+        8,
+        Category::Cms,
+        Vendor::Wordpress,
+        "body marker /wp-includes/",
+    ),
+    (
+        "Drupal.settings",
+        10,
+        Category::Cms,
+        Vendor::Drupal,
+        "body marker Drupal.settings",
+    ),
 ];
 
 impl Source for BodyMarkerSource {

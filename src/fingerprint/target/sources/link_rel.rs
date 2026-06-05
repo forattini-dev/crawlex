@@ -8,9 +8,7 @@
 
 use scraper::{Html, Selector};
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -28,7 +26,12 @@ impl LinkRelSource {
 /// Used for preconnect / dns-prefetch href values.
 const HOST_TABLE: &[(&str, u8, Category, Vendor)] = &[
     ("googletagmanager.com", 6, Category::TagManager, Vendor::Gtm),
-    ("google-analytics.com", 6, Category::Analytics, Vendor::GoogleAnalytics),
+    (
+        "google-analytics.com",
+        6,
+        Category::Analytics,
+        Vendor::GoogleAnalytics,
+    ),
     ("cdn.shopify.com", 6, Category::Ecommerce, Vendor::Shopify),
     ("cloudflare.com", 4, Category::Cdn, Vendor::Cloudflare),
     ("akamaihd.net", 4, Category::Cdn, Vendor::Akamai),
@@ -56,7 +59,8 @@ impl Source for LinkRelSource {
         let doc = Html::parse_document(body_str);
         let sel = Selector::parse("link[rel][href]").unwrap();
 
-        let mut seen: std::collections::HashSet<(Category, Vendor)> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<(Category, Vendor)> =
+            std::collections::HashSet::new();
         let mut out: Vec<Detection> = Vec::new();
 
         for link in doc.select(&sel) {
@@ -116,7 +120,8 @@ mod tests {
     fn detects_dns_prefetch_cloudflare() {
         let h = HeaderMap::new();
         let u: Url = "https://example.com/".parse().unwrap();
-        let body = br#"<html><head><link rel="dns-prefetch" href="//cdnjs.cloudflare.com"></head></html>"#;
+        let body =
+            br#"<html><head><link rel="dns-prefetch" href="//cdnjs.cloudflare.com"></head></html>"#;
         let dets = LinkRelSource::new().analyze(&ctx_with(&h, &u, body));
         assert!(dets.iter().any(|d| d.vendor == Vendor::Cloudflare));
     }

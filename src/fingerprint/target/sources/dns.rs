@@ -6,9 +6,7 @@
 //! CDN evidence. Plumbed via `crate::discovery::dns` — this source
 //! consumes the existing DNS client's output rather than reimplementing.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;

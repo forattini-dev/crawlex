@@ -15,11 +15,7 @@ use sha2::{Digest, Sha256};
 ///   - `cipher_hash` is sha256 over sorted ciphers (truncated to 12 hex chars)
 ///   - `ext_hash` is sha256 over sorted extensions (truncated to 12 hex chars)
 pub fn compute_ja4(ciphers: &[u16], extensions: &[u16]) -> String {
-    let mut sorted_ciphers: Vec<u16> = ciphers
-        .iter()
-        .copied()
-        .filter(|c| !is_grease(*c))
-        .collect();
+    let mut sorted_ciphers: Vec<u16> = ciphers.iter().copied().filter(|c| !is_grease(*c)).collect();
     sorted_ciphers.sort_unstable();
     let mut sorted_exts: Vec<u16> = extensions
         .iter()
@@ -68,7 +64,7 @@ mod tests {
         // count fields
         assert!(&s[4..6] == "03"); // 3 ciphers
         assert!(&s[6..8] == "03"); // 3 extensions
-        // separator
+                                   // separator
         assert!(s.contains('_'));
     }
 

@@ -1,11 +1,13 @@
 pub mod adaptive;
 pub mod artifact;
 pub mod challenge;
+#[cfg(feature = "sqlite")]
+pub mod cursor;
 pub mod filesystem;
 pub mod intel;
 pub mod memory;
-#[cfg(feature = "sqlite")]
-pub mod cursor;
+#[cfg(feature = "reddb-embedded")]
+pub mod reddb;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod state;

@@ -82,12 +82,7 @@ async fn main() {
                     success.links.len(),
                     wall.as_secs_f64() * 1000.0
                 );
-                visited.push((
-                    url_str,
-                    success.status as usize,
-                    success.body_bytes,
-                    wall,
-                ));
+                visited.push((url_str, success.status as usize, success.body_bytes, wall));
                 // Enqueue same-host children.
                 for raw in &success.links {
                     if let Ok(u) = raw.parse::<url::Url>() {
@@ -98,11 +93,7 @@ async fn main() {
                 }
             }
             (_, Some(err)) => {
-                println!(
-                    "[{:>2}] ERR {:?}   {url_str}",
-                    visited.len() + 1,
-                    err
-                );
+                println!("[{:>2}] ERR {:?}   {url_str}", visited.len() + 1, err);
                 visited.push((url_str, 0, 0, wall));
             }
             _ => {}
@@ -120,7 +111,11 @@ async fn main() {
     println!(
         "total fetch   : {:.2}s  (avg {:.0}ms/page)",
         total_wall.as_secs_f64(),
-        if visited.is_empty() { 0.0 } else { total_wall.as_secs_f64() * 1000.0 / visited.len() as f64 }
+        if visited.is_empty() {
+            0.0
+        } else {
+            total_wall.as_secs_f64() * 1000.0 / visited.len() as f64
+        }
     );
     let event_count = events.take().len();
     println!("events fired  : {event_count}");

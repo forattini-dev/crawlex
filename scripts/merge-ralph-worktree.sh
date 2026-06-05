@@ -7,7 +7,7 @@ WORKTREE=${1:?worktree path}
 BRANCH=${2:?branch name}
 GHN=${3:?gh issue number}
 
-MAIN=/home/cyber/Work/FF/minibrowser
+MAIN=/home/cyber/Work/FF/crawlex
 cd "$MAIN"
 
 if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then

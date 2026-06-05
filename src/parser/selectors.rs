@@ -52,7 +52,10 @@ impl TextMatch {
         Self::default()
     }
     pub fn exact() -> Self {
-        Self { exact: true, ..Self::default() }
+        Self {
+            exact: true,
+            ..Self::default()
+        }
     }
     pub fn with_case_insensitive(mut self, v: bool) -> Self {
         self.case_insensitive = v;
@@ -68,7 +71,11 @@ impl TextMatch {
         if self.case_insensitive {
             let h = h.to_lowercase();
             let n = needle.to_lowercase();
-            if self.exact { h == n } else { h.contains(&n) }
+            if self.exact {
+                h == n
+            } else {
+                h.contains(&n)
+            }
         } else if self.exact {
             h == needle
         } else {
@@ -365,7 +372,11 @@ fn parse_xpath(expr: &str) -> Option<Path> {
         return None;
     }
 
-    Some(Path { absolute, steps, terminal })
+    Some(Path {
+        absolute,
+        steps,
+        terminal,
+    })
 }
 
 fn parse_step(input: &str) -> Option<(Step, &str)> {
@@ -394,7 +405,14 @@ fn parse_step(input: &str) -> Option<(Step, &str)> {
         }
     }
 
-    Some((Step { axis, name, predicates }, s))
+    Some((
+        Step {
+            axis,
+            name,
+            predicates,
+        },
+        s,
+    ))
 }
 
 fn parse_axis(input: &str) -> (Axis, &str) {
@@ -721,11 +739,7 @@ fn escape_attr_value(v: &str) -> String {
     v.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn css_chain_matches_target<'a>(
-    root: ElementRef<'a>,
-    sel: &str,
-    target: ElementRef<'a>,
-) -> bool {
+fn css_chain_matches_target<'a>(root: ElementRef<'a>, sel: &str, target: ElementRef<'a>) -> bool {
     let parsed = match Selector::parse(sel) {
         Ok(s) => s,
         Err(_) => return false,
@@ -1062,8 +1076,11 @@ mod tests {
         let html = br#"<div><p>  hello  </p><p>hello world</p></div>"#;
         let t = parse_tree(html, None);
         let opts = super::super::TextMatch::exact().with_trim(true);
-        let ps: Vec<_> = t.find_by_text("hello", opts).into_iter()
-            .filter(|h| h.name() == "p").collect();
+        let ps: Vec<_> = t
+            .find_by_text("hello", opts)
+            .into_iter()
+            .filter(|h| h.name() == "p")
+            .collect();
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].text().trim(), "hello");
     }
@@ -1072,8 +1089,11 @@ mod tests {
     fn find_by_text_case_insensitive() {
         let t = parse_tree(PAGE, None);
         let opts = super::super::TextMatch::contains().with_case_insensitive(true);
-        let hits: Vec<_> = t.find_by_text("ALPHA", opts).into_iter()
-            .filter(|h| h.name() == "li").collect();
+        let hits: Vec<_> = t
+            .find_by_text("ALPHA", opts)
+            .into_iter()
+            .filter(|h| h.name() == "li")
+            .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text(), "alpha");
     }
@@ -1082,8 +1102,11 @@ mod tests {
     fn find_by_text_unicode() {
         let html = "<ul><li>日本</li><li>Tokyo</li><li>日本語</li></ul>".as_bytes();
         let t = parse_tree(html, None);
-        let hits: Vec<_> = t.find_by_text("日本", super::super::TextMatch::contains())
-            .into_iter().filter(|h| h.name() == "li").collect();
+        let hits: Vec<_> = t
+            .find_by_text("日本", super::super::TextMatch::contains())
+            .into_iter()
+            .filter(|h| h.name() == "li")
+            .collect();
         assert_eq!(hits.len(), 2);
     }
 
@@ -1091,8 +1114,11 @@ mod tests {
     fn find_by_text_nested_concatenates() {
         let html = b"<div><p>price <em>$<b>42</b></em></p></div>";
         let t = parse_tree(html, None);
-        let hits: Vec<_> = t.find_by_text("$42", super::super::TextMatch::contains())
-            .into_iter().filter(|h| h.name() == "p").collect();
+        let hits: Vec<_> = t
+            .find_by_text("$42", super::super::TextMatch::contains())
+            .into_iter()
+            .filter(|h| h.name() == "p")
+            .collect();
         assert_eq!(hits.len(), 1);
     }
 
@@ -1100,8 +1126,11 @@ mod tests {
     fn find_by_regex_basic() {
         let t = parse_tree(PAGE, None);
         let re = regex::Regex::new(r"^(alpha|beta)$").unwrap();
-        let hits: Vec<_> = t.find_by_regex(&re).into_iter()
-            .filter(|h| h.name() == "li").collect();
+        let hits: Vec<_> = t
+            .find_by_regex(&re)
+            .into_iter()
+            .filter(|h| h.name() == "li")
+            .collect();
         assert_eq!(hits.len(), 2);
     }
 
@@ -1110,8 +1139,11 @@ mod tests {
         let html = b"<ul><li>SKU-001</li><li>SKU-002</li><li>nope</li></ul>";
         let t = parse_tree(html, None);
         let re = regex::Regex::new(r"^SKU-(\d+)$").unwrap();
-        let hits: Vec<_> = t.find_by_regex(&re).into_iter()
-            .filter(|h| h.name() == "li").collect();
+        let hits: Vec<_> = t
+            .find_by_regex(&re)
+            .into_iter()
+            .filter(|h| h.name() == "li")
+            .collect();
         assert_eq!(hits.len(), 2);
         // Re-run captures against the matched text to verify the regex
         // surface is the standard `regex::Regex` (no wrapper).
@@ -1151,8 +1183,11 @@ mod tests {
         let html = br#"<div id="a"><p>hello</p></div><div id="b"><p>hello</p></div>"#;
         let t = parse_tree(html, None);
         let a = t.css("#a").into_iter().next().unwrap();
-        let hits: Vec<_> = a.find_by_text("hello", super::super::TextMatch::contains())
-            .into_iter().filter(|h| h.name() == "p").collect();
+        let hits: Vec<_> = a
+            .find_by_text("hello", super::super::TextMatch::contains())
+            .into_iter()
+            .filter(|h| h.name() == "p")
+            .collect();
         assert_eq!(hits.len(), 1);
     }
 
@@ -1221,7 +1256,11 @@ mod tests {
         let html = br#"<html><body><div><button data-testid="submit-btn">go</button>
             <button>nope</button></div></body></html>"#;
         let t = parse_tree(html, None);
-        let target = t.css("[data-testid=\"submit-btn\"]").into_iter().next().unwrap();
+        let target = t
+            .css("[data-testid=\"submit-btn\"]")
+            .into_iter()
+            .next()
+            .unwrap();
         let sel = target.generate_selector(SelectorKind::Css);
         assert_eq!(sel, "[data-testid=\"submit-btn\"]");
         round_trip_css(html, "[data-testid=\"submit-btn\"]");
@@ -1229,7 +1268,9 @@ mod tests {
 
     #[test]
     fn generate_css_aria_label_anchor() {
-        let html = r#"<html><body><nav><a aria-label="Open menu">≡</a><a>x</a></nav></body></html>"#.as_bytes();
+        let html =
+            r#"<html><body><nav><a aria-label="Open menu">≡</a><a>x</a></nav></body></html>"#
+                .as_bytes();
         let t = parse_tree(html, None);
         let target = t.css("a[aria-label]").into_iter().next().unwrap();
         let sel = target.generate_selector(SelectorKind::Css);
@@ -1257,7 +1298,11 @@ mod tests {
         let hits = t.css(&sel);
         assert_eq!(hits.len(), 1, "selector `{}` was ambiguous", sel);
         assert_eq!(hits[0].text(), "c");
-        assert!(sel.contains(":nth-of-type"), "expected nth-of-type fallback, got: {}", sel);
+        assert!(
+            sel.contains(":nth-of-type"),
+            "expected nth-of-type fallback, got: {}",
+            sel
+        );
     }
 
     #[test]
@@ -1299,7 +1344,11 @@ mod tests {
     fn generate_xpath_data_testid() {
         let html = br#"<html><body><button data-testid="submit-btn">go</button></body></html>"#;
         let t = parse_tree(html, None);
-        let target = t.css("[data-testid=\"submit-btn\"]").into_iter().next().unwrap();
+        let target = t
+            .css("[data-testid=\"submit-btn\"]")
+            .into_iter()
+            .next()
+            .unwrap();
         let expr = target.generate_selector(SelectorKind::Xpath);
         assert_eq!(expr, "//*[@data-testid='submit-btn']");
         round_trip_xpath(html, "[data-testid=\"submit-btn\"]");

@@ -41,9 +41,8 @@ pub async fn probe(endpoint: &str) -> std::result::Result<ProbeOk, String> {
     if trimmed.is_empty() {
         return Err("external CDP url is empty".to_string());
     }
-    let probe_url = version_url_for(trimmed).map_err(|e| {
-        format!("external CDP url is not a valid endpoint (`{trimmed}`): {e}")
-    })?;
+    let probe_url = version_url_for(trimmed)
+        .map_err(|e| format!("external CDP url is not a valid endpoint (`{trimmed}`): {e}"))?;
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
         .build()

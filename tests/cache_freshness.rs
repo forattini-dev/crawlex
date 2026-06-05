@@ -8,7 +8,10 @@ use crawlex::storage::ArtifactStorage;
 use http::HeaderMap;
 use url::Url;
 
-async fn seed(url: &str, last_modified: Option<&str>) -> (tempfile::TempDir, crawlex::storage::PageCacheMetadata) {
+async fn seed(
+    url: &str,
+    last_modified: Option<&str>,
+) -> (tempfile::TempDir, crawlex::storage::PageCacheMetadata) {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("freshness.db");
     let sq = crawlex::storage::sqlite::SqliteStorage::open(&db_path).unwrap();
@@ -17,9 +20,16 @@ async fn seed(url: &str, last_modified: Option<&str>) -> (tempfile::TempDir, cra
     if let Some(lm) = last_modified {
         headers.insert("last-modified", lm.parse().unwrap());
     }
-    sq.save_raw_response(&parsed, &parsed, 200, &headers, &Bytes::from_static(b"<html></html>"), false)
-        .await
-        .unwrap();
+    sq.save_raw_response(
+        &parsed,
+        &parsed,
+        200,
+        &headers,
+        &Bytes::from_static(b"<html></html>"),
+        false,
+    )
+    .await
+    .unwrap();
     let mut meta = None;
     for _ in 0..50 {
         if let Some(m) = sq.page_cache_metadata(&parsed).await.unwrap() {

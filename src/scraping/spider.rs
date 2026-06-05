@@ -118,10 +118,7 @@ pub trait Spider: Send + Sync {
     /// Optional override: how to build the seed Requests. Default wraps
     /// each `start_urls()` entry as a GET with no session.
     fn start_requests(&self) -> Vec<Request> {
-        self.start_urls()
-            .into_iter()
-            .map(Request::new)
-            .collect()
+        self.start_urls().into_iter().map(Request::new).collect()
     }
     /// Optional identifier extractor for `ItemScraped` events. Default
     /// looks for an `id` / `url` string field in the JSON payload.
@@ -542,7 +539,10 @@ mod tests {
         assert_eq!(out.items.len(), 2);
         assert!(!out.paused);
         let urls: Vec<_> = fetcher.log.lock().unwrap().clone();
-        assert_eq!(urls, vec!["https://example.test/", "https://example.test/next"]);
+        assert_eq!(
+            urls,
+            vec!["https://example.test/", "https://example.test/next"]
+        );
     }
 
     #[test]
@@ -560,9 +560,10 @@ mod tests {
                 ]
             }
         }
-        let fetcher = MapFetcher::new()
-            .with("https://x.test/", 200, "")
-            .with("https://x.test/a", 200, "");
+        let fetcher =
+            MapFetcher::new()
+                .with("https://x.test/", 200, "")
+                .with("https://x.test/a", 200, "");
         let mut runner = SpiderRunner::new(SpiderConfig::default(), mgr());
         runner.seed(&DupSpider, None);
         runner.run(&DupSpider, &fetcher);
@@ -652,7 +653,10 @@ mod tests {
         let phase2 = r2.run(&CountSpider, &fetcher);
         assert!(!phase2.paused);
         let total = phase1.items.len() + phase2.items.len();
-        assert_eq!(total, 5, "every URL 0..=4 should emit exactly one item across resume");
+        assert_eq!(
+            total, 5,
+            "every URL 0..=4 should emit exactly one item across resume"
+        );
     }
 
     #[test]
@@ -686,7 +690,10 @@ mod tests {
         runner.last_fetch_per_host.insert("x.test".into(), now);
         // Immediately after: full delay still owed.
         let later = now + Duration::from_millis(100);
-        assert_eq!(runner.delay_for("x.test", later), Duration::from_millis(400));
+        assert_eq!(
+            runner.delay_for("x.test", later),
+            Duration::from_millis(400)
+        );
         // After delay elapsed: no wait owed.
         let much_later = now + Duration::from_millis(600);
         assert_eq!(runner.delay_for("x.test", much_later), Duration::ZERO);
@@ -696,7 +703,11 @@ mod tests {
     fn robots_disallow_skips_fetch() {
         let robots = Arc::new(RobotsCache::new(Duration::from_secs(60)));
         robots
-            .store("blocked.test", Some("User-agent: *\nDisallow: /\n"), "crawlex")
+            .store(
+                "blocked.test",
+                Some("User-agent: *\nDisallow: /\n"),
+                "crawlex",
+            )
             .unwrap();
         struct BlockedSpider;
         impl Spider for BlockedSpider {
@@ -812,7 +823,11 @@ mod tests {
     fn robots_off_lets_everything_through() {
         let robots = Arc::new(RobotsCache::new(Duration::from_secs(60)));
         robots
-            .store("blocked.test", Some("User-agent: *\nDisallow: /\n"), "crawlex")
+            .store(
+                "blocked.test",
+                Some("User-agent: *\nDisallow: /\n"),
+                "crawlex",
+            )
             .unwrap();
         struct S;
         impl Spider for S {

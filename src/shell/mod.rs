@@ -28,9 +28,7 @@ use url::Url;
 
 use crate::error::{Error, Result};
 use crate::impersonate::{ImpersonateClient, Profile, Response};
-use crate::parser::{
-    fingerprint, parse_tree, ElementHandle, Fingerprint, TextMatch,
-};
+use crate::parser::{fingerprint, parse_tree, ElementHandle, Fingerprint, TextMatch};
 use crate::storage::adaptive::AdaptiveStore;
 
 /// Network-facing seam — abstracted so unit tests inject canned HTML.
@@ -108,7 +106,6 @@ impl ShellState {
             last_selection_query: None,
         }
     }
-
 }
 
 impl Default for ShellState {
@@ -316,9 +313,7 @@ fn cmd_save(rest: &str, state: &mut ShellState, store: &AdaptiveStore) -> ShellO
 
 fn cmd_open(state: &ShellState) -> ShellOutput {
     let Some(body) = state.last_body.as_ref() else {
-        return ShellOutput::Err(
-            "no response in the session — run `.fetch <url>` first.".into(),
-        );
+        return ShellOutput::Err("no response in the session — run `.fetch <url>` first.".into());
     };
     let path = match write_tmp_html(body) {
         Ok(p) => p,
@@ -360,7 +355,11 @@ fn pretty_handles(matches: &[ElementHandle<'_>]) -> ShellOutput {
         // Trim outerHTML so a huge `<body>` match doesn't drown the prompt.
         let html = h.html();
         let snippet: String = html.chars().take(200).collect();
-        let suffix = if html.len() > snippet.len() { "…" } else { "" };
+        let suffix = if html.len() > snippet.len() {
+            "…"
+        } else {
+            ""
+        };
         out.push(format!("  [{i}] <{}> {}{}", h.name(), snippet, suffix));
     }
     ShellOutput::Lines(out)
@@ -422,8 +421,7 @@ impl ShellOptions {
             return PathBuf::from(dir).join("crawlex").join("shell_history");
         }
         if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home)
-                .join(".local/share/crawlex/shell_history");
+            return PathBuf::from(home).join(".local/share/crawlex/shell_history");
         }
         PathBuf::from("./.crawlex/shell_history")
     }
@@ -454,10 +452,7 @@ pub async fn run_interactive(opts: ShellOptions) -> Result<()> {
         write!(stdout, "crawlex> ").ok();
         stdout.flush().ok();
         line.clear();
-        let n = stdin
-            .lock()
-            .read_line(&mut line)
-            .map_err(Error::Io)?;
+        let n = stdin.lock().read_line(&mut line).map_err(Error::Io)?;
         if n == 0 {
             // EOF — same as `.exit`.
             let _ = writeln!(stdout);
@@ -527,7 +522,9 @@ mod tests {
     }
     impl StubFetcher {
         fn new() -> Self {
-            Self { pages: Mutex::new(HashMap::new()) }
+            Self {
+                pages: Mutex::new(HashMap::new()),
+            }
         }
         fn insert(&self, url: &str, html: &str) {
             let parsed = Url::parse(url).unwrap();
@@ -675,5 +672,4 @@ mod tests {
         let got = read_history(&path);
         assert_eq!(got, vec![".fetch https://example.com/", ".css p"]);
     }
-
 }

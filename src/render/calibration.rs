@@ -215,8 +215,8 @@ pub fn parse_probe(json: &str) -> std::result::Result<EffectiveFingerprint, Stri
     if trimmed.is_empty() {
         return Err("calibration probe returned empty body".to_string());
     }
-    let mut fp: EffectiveFingerprint = serde_json::from_str(trimmed)
-        .map_err(|e| format!("calibration probe JSON parse: {e}"))?;
+    let mut fp: EffectiveFingerprint =
+        serde_json::from_str(trimmed).map_err(|e| format!("calibration probe JSON parse: {e}"))?;
     if fp.policy.is_empty() {
         fp.policy = "report-only".to_string();
     }
@@ -402,12 +402,7 @@ pub fn classify_mismatches(
     if let Some(major) = expected.browser_major.as_deref() {
         let major = major.trim();
         if !major.is_empty() {
-            let observed_major = fp
-                .browser_version
-                .split('.')
-                .next()
-                .unwrap_or("")
-                .trim();
+            let observed_major = fp.browser_version.split('.').next().unwrap_or("").trim();
             if !observed_major.is_empty() && observed_major != major {
                 out.push(Mismatch {
                     category: MismatchCategory::BrowserVersion,
@@ -980,7 +975,10 @@ mod tests {
     #[test]
     fn policy_parse_round_trips() {
         assert_eq!(MismatchPolicy::parse("adapt"), Some(MismatchPolicy::Adapt));
-        assert_eq!(MismatchPolicy::parse("Strict"), Some(MismatchPolicy::Strict));
+        assert_eq!(
+            MismatchPolicy::parse("Strict"),
+            Some(MismatchPolicy::Strict)
+        );
         assert_eq!(MismatchPolicy::parse("nope"), None);
         assert_eq!(MismatchPolicy::default(), MismatchPolicy::Adapt);
         assert_eq!(MismatchPolicy::Strict.as_str(), "strict");
@@ -1100,7 +1098,9 @@ mod tests {
             ..Default::default()
         };
         let m = classify_mismatches(&fp, &exp);
-        assert!(m.iter().any(|x| x.category == MismatchCategory::StorageProfile));
+        assert!(m
+            .iter()
+            .any(|x| x.category == MismatchCategory::StorageProfile));
     }
 
     #[test]

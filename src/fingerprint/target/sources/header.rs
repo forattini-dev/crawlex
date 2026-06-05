@@ -6,9 +6,7 @@
 //! Source impl so the engine + types + report shapes get exercised
 //! end-to-end before deeper sources land.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -28,7 +26,13 @@ impl HeaderSource {
 /// strong but not exclusive. Weight 4 = supporting evidence.
 const HEADER_TABLE: &[(&str, u8, Category, Vendor, &str)] = &[
     // Cloudflare
-    ("cf-ray", 10, Category::Cdn, Vendor::Cloudflare, "header cf-ray"),
+    (
+        "cf-ray",
+        10,
+        Category::Cdn,
+        Vendor::Cloudflare,
+        "header cf-ray",
+    ),
     (
         "cf-cache-status",
         8,
@@ -36,25 +40,103 @@ const HEADER_TABLE: &[(&str, u8, Category, Vendor, &str)] = &[
         Vendor::Cloudflare,
         "header cf-cache-status",
     ),
-    ("cf-connecting-ip", 8, Category::Cdn, Vendor::Cloudflare, "header cf-connecting-ip"),
+    (
+        "cf-connecting-ip",
+        8,
+        Category::Cdn,
+        Vendor::Cloudflare,
+        "header cf-connecting-ip",
+    ),
     // Akamai
-    ("x-akamai-transformed", 10, Category::Cdn, Vendor::Akamai, "header x-akamai-transformed"),
-    ("x-akamai-request-id", 10, Category::Cdn, Vendor::Akamai, "header x-akamai-request-id"),
-    ("akamai-grn", 10, Category::Cdn, Vendor::Akamai, "header akamai-grn"),
+    (
+        "x-akamai-transformed",
+        10,
+        Category::Cdn,
+        Vendor::Akamai,
+        "header x-akamai-transformed",
+    ),
+    (
+        "x-akamai-request-id",
+        10,
+        Category::Cdn,
+        Vendor::Akamai,
+        "header x-akamai-request-id",
+    ),
+    (
+        "akamai-grn",
+        10,
+        Category::Cdn,
+        Vendor::Akamai,
+        "header akamai-grn",
+    ),
     // Fastly
-    ("x-served-by", 6, Category::Cache, Vendor::Fastly, "header x-served-by"),
-    ("x-fastly-request-id", 10, Category::Cdn, Vendor::Fastly, "header x-fastly-request-id"),
+    (
+        "x-served-by",
+        6,
+        Category::Cache,
+        Vendor::Fastly,
+        "header x-served-by",
+    ),
+    (
+        "x-fastly-request-id",
+        10,
+        Category::Cdn,
+        Vendor::Fastly,
+        "header x-fastly-request-id",
+    ),
     // CloudFront
-    ("x-amz-cf-id", 10, Category::Cdn, Vendor::CloudFront, "header x-amz-cf-id"),
-    ("x-amz-cf-pop", 10, Category::Cdn, Vendor::CloudFront, "header x-amz-cf-pop"),
+    (
+        "x-amz-cf-id",
+        10,
+        Category::Cdn,
+        Vendor::CloudFront,
+        "header x-amz-cf-id",
+    ),
+    (
+        "x-amz-cf-pop",
+        10,
+        Category::Cdn,
+        Vendor::CloudFront,
+        "header x-amz-cf-pop",
+    ),
     // Vercel / Netlify
-    ("x-vercel-cache", 10, Category::Cdn, Vendor::Vercel, "header x-vercel-cache"),
-    ("x-vercel-id", 10, Category::Cdn, Vendor::Vercel, "header x-vercel-id"),
-    ("x-nf-request-id", 10, Category::Cdn, Vendor::Netlify, "header x-nf-request-id"),
+    (
+        "x-vercel-cache",
+        10,
+        Category::Cdn,
+        Vendor::Vercel,
+        "header x-vercel-cache",
+    ),
+    (
+        "x-vercel-id",
+        10,
+        Category::Cdn,
+        Vendor::Vercel,
+        "header x-vercel-id",
+    ),
+    (
+        "x-nf-request-id",
+        10,
+        Category::Cdn,
+        Vendor::Netlify,
+        "header x-nf-request-id",
+    ),
     // Bunny
-    ("server: bunnycdn", 10, Category::Cdn, Vendor::Bunny, "server header BunnyCDN"),
+    (
+        "server: bunnycdn",
+        10,
+        Category::Cdn,
+        Vendor::Bunny,
+        "server header BunnyCDN",
+    ),
     // Varnish (cache)
-    ("via: varnish", 8, Category::Cache, Vendor::Varnish, "via header varnish"),
+    (
+        "via: varnish",
+        8,
+        Category::Cache,
+        Vendor::Varnish,
+        "via header varnish",
+    ),
 ];
 
 /// Server header value → vendor table. Compared case-insensitively
@@ -169,7 +251,9 @@ mod tests {
         let (h, u) = ctx_with(vec![("cf-ray", "8a3abc-LAX")]);
         let ctx = build_ctx(&h, &u, b"");
         let dets = HeaderSource::new().analyze(&ctx);
-        assert!(dets.iter().any(|d| d.vendor == Vendor::Cloudflare && d.confidence == Confidence::High));
+        assert!(dets
+            .iter()
+            .any(|d| d.vendor == Vendor::Cloudflare && d.confidence == Confidence::High));
     }
 
     #[test]

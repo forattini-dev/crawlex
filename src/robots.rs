@@ -213,10 +213,8 @@ impl RobotsCache {
         let signal = txt
             .map(|t| parse_content_signal(t, user_agent))
             .unwrap_or_default();
-        self.inner.insert(
-            host.to_string(),
-            (Instant::now(), Arc::new(robot), signal),
-        );
+        self.inner
+            .insert(host.to_string(), (Instant::now(), Arc::new(robot), signal));
         Ok(())
     }
 }

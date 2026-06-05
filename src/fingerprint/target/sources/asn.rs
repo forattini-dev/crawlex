@@ -4,9 +4,7 @@
 //! Cloudflare's AS13335 are "behind Cloudflare" regardless of HTTP
 //! headers. Plumbs via `crate::discovery::rdap` — consumes its output.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -29,7 +27,12 @@ impl AsnSource {
             (16509, "amazon", Category::DnsHosting, Vendor::Aws),
             (15169, "google", Category::DnsHosting, Vendor::Gcp),
             (8075, "microsoft", Category::DnsHosting, Vendor::Azure),
-            (14061, "digitalocean", Category::DnsHosting, Vendor::DigitalOcean),
+            (
+                14061,
+                "digitalocean",
+                Category::DnsHosting,
+                Vendor::DigitalOcean,
+            ),
             (24940, "hetzner", Category::DnsHosting, Vendor::Hetzner),
             (16276, "ovh", Category::DnsHosting, Vendor::Ovh),
         ];

@@ -189,8 +189,7 @@ fn parse_argv(toks: &[String]) -> Result<ParsedCurl, String> {
                     if name_t.eq_ignore_ascii_case("cookie") {
                         req.cookie = Some(value_t.to_string());
                     } else {
-                        req.headers
-                            .push((name_t.to_string(), value_t.to_string()));
+                        req.headers.push((name_t.to_string(), value_t.to_string()));
                     }
                 } else {
                     warnings.push(format!("ignored malformed -H value `{}`", v));
@@ -241,15 +240,23 @@ fn parse_argv(toks: &[String]) -> Result<ParsedCurl, String> {
                 // Encode as Basic auth header so the converted request is
                 // self-contained.
                 use base64::Engine as _;
-                let encoded =
-                    base64::engine::general_purpose::STANDARD.encode(v.as_bytes());
+                let encoded = base64::engine::general_purpose::STANDARD.encode(v.as_bytes());
                 req.headers
                     .push(("Authorization".into(), format!("Basic {}", encoded)));
             }
             // Common no-arg flags that we can silently accept (devtools
             // sometimes emits them).
-            "-k" | "--insecure" | "-s" | "--silent" | "-i" | "--include" | "-v" | "--verbose"
-            | "-#" | "--progress-bar" | "--no-progress-meter" => { /* no-op */ }
+            "-k"
+            | "--insecure"
+            | "-s"
+            | "--silent"
+            | "-i"
+            | "--include"
+            | "-v"
+            | "--verbose"
+            | "-#"
+            | "--progress-bar"
+            | "--no-progress-meter" => { /* no-op */ }
             // Common flags with a single value we accept but ignore.
             "-o" | "--output" | "--max-time" | "--connect-timeout" | "--retry"
             | "--retry-delay" | "--retry-max-time" | "--resolve" | "--cacert" | "--cert"
@@ -280,8 +287,7 @@ fn parse_argv(toks: &[String]) -> Result<ParsedCurl, String> {
         i += 1;
     }
 
-    req.url = url_from_positional
-        .ok_or_else(|| "no URL found in curl command".to_string())?;
+    req.url = url_from_positional.ok_or_else(|| "no URL found in curl command".to_string())?;
     Ok(ParsedCurl {
         request: req,
         warnings,
@@ -344,7 +350,11 @@ fn render_toml(req: &CurlRequest) -> String {
     out.push_str(&format!("url = {}\n", toml_escape(&req.url)));
     out.push_str(&format!(
         "follow_redirects = {}\n",
-        if req.follow_redirects { "true" } else { "false" }
+        if req.follow_redirects {
+            "true"
+        } else {
+            "false"
+        }
     ));
     out.push_str(&format!(
         "compressed = {}\n",
@@ -381,22 +391,20 @@ fn render_json(req: &CurlRequest) -> String {
     let headers: Vec<serde_json::Value> = req
         .headers
         .iter()
-        .map(|(k, v)| {
-            serde_json::json!({"name": k, "value": v})
-        })
+        .map(|(k, v)| serde_json::json!({"name": k, "value": v}))
         .collect();
     let mut obj = serde_json::Map::new();
-    obj.insert("method".into(), serde_json::Value::String(req.method.clone()));
+    obj.insert(
+        "method".into(),
+        serde_json::Value::String(req.method.clone()),
+    );
     obj.insert("url".into(), serde_json::Value::String(req.url.clone()));
     obj.insert("headers".into(), serde_json::Value::Array(headers));
     obj.insert(
         "follow_redirects".into(),
         serde_json::Value::Bool(req.follow_redirects),
     );
-    obj.insert(
-        "compressed".into(),
-        serde_json::Value::Bool(req.compressed),
-    );
+    obj.insert("compressed".into(), serde_json::Value::Bool(req.compressed));
     if let Some(c) = &req.cookie {
         obj.insert("cookie".into(), serde_json::Value::String(c.clone()));
     }
@@ -406,8 +414,7 @@ fn render_json(req: &CurlRequest) -> String {
     if let Some(p) = &req.proxy {
         obj.insert("proxy".into(), serde_json::Value::String(p.clone()));
     }
-    serde_json::to_string_pretty(&serde_json::Value::Object(obj))
-        .unwrap_or_else(|_| "{}".into())
+    serde_json::to_string_pretty(&serde_json::Value::Object(obj)).unwrap_or_else(|_| "{}".into())
 }
 
 fn js_escape(s: &str) -> String {
@@ -453,7 +460,11 @@ fn render_node(req: &CurlRequest) -> String {
     }
     out.push_str(&format!(
         "  followRedirects: {},\n",
-        if req.follow_redirects { "true" } else { "false" }
+        if req.follow_redirects {
+            "true"
+        } else {
+            "false"
+        }
     ));
     out.push_str(&format!(
         "  compressed: {},\n",
@@ -470,10 +481,7 @@ mod tests {
     #[test]
     fn tokenize_simple() {
         let toks = tokenize("curl https://example.com -H 'x: 1'").unwrap();
-        assert_eq!(
-            toks,
-            vec!["curl", "https://example.com", "-H", "x: 1"]
-        );
+        assert_eq!(toks, vec!["curl", "https://example.com", "-H", "x: 1"]);
     }
 
     #[test]
@@ -513,10 +521,7 @@ mod tests {
             p.request.headers,
             vec![
                 ("accept".to_string(), "application/json".to_string()),
-                (
-                    "accept-language".to_string(),
-                    "en-US,en;q=0.9".to_string()
-                ),
+                ("accept-language".to_string(), "en-US,en;q=0.9".to_string()),
             ]
         );
         assert_eq!(p.request.cookie.as_deref(), Some("sid=abc; theme=dark"));

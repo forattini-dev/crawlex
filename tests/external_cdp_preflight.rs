@@ -87,9 +87,7 @@ async fn probe_rejects_endpoint_without_websocket_debugger_url() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/json/version"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"Browser": "Other/1.0"})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"Browser": "Other/1.0"})))
         .mount(&server)
         .await;
 

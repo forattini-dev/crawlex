@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::impersonate::profiles::BrowserOs;
 use crate::impersonate::Profile;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +111,7 @@ pub struct IdentityBundle {
     #[serde(default = "default_fonts_json")]
     pub fonts_json: String,
 
-    /// `navigator.mediaDevices.enumerateDevices()` surface counts. 
+    /// `navigator.mediaDevices.enumerateDevices()` surface counts.
     /// research: a single mic / single speaker response is itself a
     /// tell — real laptops expose built-in + headset + virtual. These
     /// drive the §23 shim. See leak #45.
@@ -414,7 +415,34 @@ impl IdentityBundle {
     }
 
     pub fn profile(&self) -> Profile {
-        Profile::from_detected_major(self.ua_major)
+        let os = self.browser_os();
+        Profile::for_chrome(self.ua_major as u16)
+            .os(os)
+            .build()
+            .unwrap_or_else(|_| Profile::from_detected_major(self.ua_major))
+    }
+
+    /// OS implied by the coherent HTTP identity fields.
+    ///
+    /// This is intentionally derived from the bundle, not from the host
+    /// running Crawlex. The spoof stack uses it to pick the matching TLS
+    /// catalog row so BoringSSL's ClientHello stays aligned with UA/UA-CH.
+    pub fn browser_os(&self) -> BrowserOs {
+        let platform = self.ua_platform.trim_matches('"');
+        if platform.eq_ignore_ascii_case("Windows") {
+            BrowserOs::Windows
+        } else if platform.eq_ignore_ascii_case("macOS") {
+            BrowserOs::MacOs
+        } else if platform.eq_ignore_ascii_case("Android") || self.ua.contains("Android") {
+            BrowserOs::Android
+        } else if platform.eq_ignore_ascii_case("Linux")
+            || self.ua.contains("Linux")
+            || self.ua.contains("X11")
+        {
+            BrowserOs::Linux
+        } else {
+            BrowserOs::Linux
+        }
     }
 
     /// Build the effective crawl identity from config-level knobs. This is
@@ -704,9 +732,47 @@ pub struct SessionIdentity {
     pub bundle_id: String,
     pub created_at_unix: i64,
     pub last_used_unix: i64,
-    /// Antibot contamination state, updated as challenges are observed.
     /// Default `Clean`; transitions monotonically via
     /// [`crate::antibot::SessionState::after_challenge`].
     #[serde(default)]
     pub state: crate::antibot::SessionState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::impersonate::catalog::BrowserOs;
+
+    #[test]
+    fn persona_profile_preserves_windows_os_for_tls_catalog() {
+        let bundle = IdentityBundle::from_profile_with_overrides(
+            Profile::for_chrome(149).build().unwrap(),
+            Some(1),
+            None,
+            None,
+            None,
+            7,
+        )
+        .expect("windows persona builds");
+
+        assert_eq!(bundle.browser_os(), BrowserOs::Windows);
+        assert_eq!(bundle.profile().parts().2, BrowserOs::Windows);
+    }
+
+    #[test]
+    fn persona_profile_preserves_android_os_for_tls_catalog() {
+        let bundle = IdentityBundle::from_profile_with_overrides(
+            Profile::for_chrome(149).build().unwrap(),
+            Some(4),
+            None,
+            None,
+            None,
+            7,
+        )
+        .expect("android persona builds");
+
+        assert!(bundle.is_mobile());
+        assert_eq!(bundle.browser_os(), BrowserOs::Android);
+        assert_eq!(bundle.profile().parts().2, BrowserOs::Android);
+    }
 }

@@ -15,9 +15,7 @@
 //!   - Cookie-level: vendor antibot cookie set (covered by CookieSource;
 //!     this source amplifies confidence when both fire)
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -173,7 +171,10 @@ mod tests {
         let body = b"<html><head><title>Access Denied</title></head><body></body></html>";
         let dets = BlockPatternSource::new().analyze(&ctx_with(&h, &u, 200, body));
         assert!(dets.iter().any(|d| {
-            d.evidence[0].detail.to_ascii_lowercase().contains("access denied")
+            d.evidence[0]
+                .detail
+                .to_ascii_lowercase()
+                .contains("access denied")
         }));
     }
 
@@ -208,8 +209,7 @@ mod tests {
 
     #[test]
     fn extract_title_handles_attrs_and_whitespace() {
-        let body =
-            b"<html><head><title  class=\"x\">  Bot Detected  </title></head></html>";
+        let body = b"<html><head><title  class=\"x\">  Bot Detected  </title></head></html>";
         let t = extract_title(body).unwrap();
         assert_eq!(t, "Bot Detected");
     }

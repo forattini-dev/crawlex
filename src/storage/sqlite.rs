@@ -407,7 +407,9 @@ pub fn list_pages_with_status_paged_blocking(
             overflow = true;
             break;
         }
-        let rowid: i64 = r.get(0).map_err(|e| Error::Storage(format!("rowid: {e}")))?;
+        let rowid: i64 = r
+            .get(0)
+            .map_err(|e| Error::Storage(format!("rowid: {e}")))?;
         let url: String = r.get(1).map_err(|e| Error::Storage(format!("url: {e}")))?;
         let final_url: String = r
             .get(2)
@@ -428,10 +430,7 @@ pub fn list_pages_with_status_paged_blocking(
     }
 
     let next_cursor = if overflow {
-        Some(
-            PageCursor::new(last_rowid, filter.map(|s| s.as_str().to_string()))
-                .encode(),
-        )
+        Some(PageCursor::new(last_rowid, filter.map(|s| s.as_str().to_string())).encode())
     } else {
         None
     };
@@ -1121,8 +1120,7 @@ impl SqliteStorage {
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )
             .map_err(|e| Error::Storage(format!("pages list open: {e}")))?;
-            let base =
-                "SELECT url, final_url, status, crawl_status FROM pages".to_string();
+            let base = "SELECT url, final_url, status, crawl_status FROM pages".to_string();
             let (sql, params): (String, Vec<rusqlite::types::Value>) = match filter {
                 Some(s) => (
                     format!("{base} WHERE crawl_status = ?1"),

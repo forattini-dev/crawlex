@@ -41,7 +41,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "crawlex"
 path = "src/bin/full.rs"
-required-features = ["cli", "sqlite", "cdp-backend"]
+required-features = ["cli", "reddb-embedded", "cdp-backend"]
 
 # Mini build: HTTP-only worker, no Chromium, no browser deps. Same CLI
 # surface as `crawlex` — browser-dependent subcommands/flags return
@@ -49,12 +49,13 @@ required-features = ["cli", "sqlite", "cdp-backend"]
 [[bin]]
 name = "crawlex-mini"
 path = "src/bin/mini.rs"
-required-features = ["cli", "sqlite"]
+required-features = ["cli", "reddb-embedded"]
 
 [features]
-default = ["cli", "sqlite", "cdp-backend", "chromium-fetcher"]
+default = ["cli", "reddb-embedded", "cdp-backend", "chromium-fetcher"]
 cli = ["dep:clap"]
 sqlite = ["dep:rusqlite"]
+reddb-embedded = ["dep:reddb-client"]
 # `chromium-fetcher` implies the browser backend — baixar Chromium sem
 # um CDP client nunca faz sentido.
 chromium-fetcher = [
@@ -141,6 +142,7 @@ growable-bloom-filter = "2"
 # Optional backends
 clap = { version = "4", features = ["derive", "env"], optional = true }
 rusqlite = { version = "0.39", features = ["bundled"], optional = true }
+reddb-client = { package = "reddb-io-client", path = "../../reddb.io/reddb/crates/reddb-client", default-features = false, features = ["embedded"], optional = true }
 # `prometheus` crate isn't used — `src/metrics_server.rs` hand-rolls the
 # exposition format directly. Kept as a feature flag in case we ever want
 # the full registry-based expand-on-counter contract from the upstream

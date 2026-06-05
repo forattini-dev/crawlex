@@ -6,9 +6,7 @@
 //! (`AhrefsBot`, `SemrushBot`, `MJ12bot`) often run Cloudflare's
 //! bot-management list — low-confidence evidence.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;

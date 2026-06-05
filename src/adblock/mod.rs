@@ -163,7 +163,11 @@ pub fn default_override_path() -> PathBuf {
     let base = std::env::var("XDG_CONFIG_HOME")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".config"))
+        })
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("crawlex").join("blocklist.txt")
 }

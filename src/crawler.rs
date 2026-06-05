@@ -66,6 +66,10 @@ pub struct Crawler {
     render_requested: AtomicBool,
     proxy_router: Arc<ProxyRouter>,
     next_id: Arc<AtomicU64>,
+    /// Number of jobs admitted to the run loop. Used to enforce the
+    /// operator-facing `--max-pages` cap before discovery can keep extending
+    /// the queue forever.
+    pages_admitted: Arc<AtomicU64>,
     /// Hosts we've already run one-shot per-host probes against
     /// (favicon/dns/well-known/pwa/wayback).
     host_probed: Arc<dashmap::DashSet<String>>,
@@ -144,6 +148,14 @@ impl Crawler {
     pub fn new(config: Config) -> Result<Self> {
         let queue: Arc<dyn JobQueue> = match &config.queue_backend {
             QueueBackend::InMemory => Arc::new(InMemoryQueue::new()),
+            #[cfg(feature = "reddb-embedded")]
+            QueueBackend::Reddb { uri } => {
+                Arc::new(crate::queue::reddb::ReddbQueue::open_uri_blocking(uri)?)
+            }
+            #[cfg(not(feature = "reddb-embedded"))]
+            QueueBackend::Reddb { .. } => {
+                return Err(Error::Config("reddb-embedded feature disabled".into()));
+            }
             #[cfg(feature = "sqlite")]
             QueueBackend::Sqlite { path } => {
                 let q = crate::queue::sqlite::SqliteQueue::open(path)?;
@@ -157,6 +169,14 @@ impl Crawler {
         };
         let storage: Arc<dyn Storage> = match &config.storage_backend {
             StorageBackend::Memory => Arc::new(MemoryStorage::new()),
+            #[cfg(feature = "reddb-embedded")]
+            StorageBackend::Reddb { uri } => {
+                Arc::new(crate::storage::reddb::ReddbStorage::open_uri_blocking(uri)?)
+            }
+            #[cfg(not(feature = "reddb-embedded"))]
+            StorageBackend::Reddb { .. } => {
+                return Err(Error::Config("reddb-embedded feature disabled".into()));
+            }
             #[cfg(feature = "sqlite")]
             StorageBackend::Sqlite { path } => Arc::new(
                 crate::storage::sqlite::SqliteStorage::open_with_content_store(
@@ -202,7 +222,7 @@ impl Crawler {
         client_mut.set_max_redirects(config.max_redirects);
         client_mut.set_cookies_enabled(config.cookies_enabled);
         client_mut.set_http_limits(config.http_limits.clone());
-        client_mut.set_identity_bundle(identity_bundle);
+        client_mut.set_identity_bundle(identity_bundle)?;
         let client = Arc::new(client_mut);
         let config_arc = Arc::new(config);
         #[cfg(feature = "cdp-backend")]
@@ -246,6 +266,7 @@ impl Crawler {
             render_requested: AtomicBool::new(false),
             proxy_router,
             next_id: Arc::new(AtomicU64::new(1)),
+            pages_admitted: Arc::new(AtomicU64::new(0)),
             host_probed: Arc::new(dashmap::DashSet::new()),
             host_facts: Arc::new(dashmap::DashMap::new()),
             host_open_ports: Arc::new(dashmap::DashMap::new()),
@@ -1142,6 +1163,21 @@ impl Crawler {
         //      track handle lifetimes manually.
         let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
         loop {
+            if let Some(max_pages) = self.config.max_pages {
+                if self.pages_admitted.load(Ordering::Acquire) >= max_pages {
+                    self.events.emit(
+                        &Event::of(EventKind::DecisionMade)
+                            .with_run(self.run_id)
+                            .with_why("max_pages:limit_reached".to_string())
+                            .with_data(&serde_json::json!({
+                                "decision": "end_run",
+                                "limit": max_pages,
+                                "pages_admitted": self.pages_admitted.load(Ordering::Relaxed),
+                            })),
+                    );
+                    break;
+                }
+            }
             let Some(job) = self.queue.pop().await? else {
                 let pending = self.queue.pending_count().await.unwrap_or(0);
                 if tasks.is_empty() && pending == 0 {
@@ -1170,6 +1206,27 @@ impl Crawler {
                 continue;
             };
 
+            if let Some(max_pages) = self.config.max_pages {
+                let admitted = self.pages_admitted.fetch_add(1, Ordering::AcqRel) + 1;
+                if admitted > max_pages {
+                    self.pages_admitted.fetch_sub(1, Ordering::AcqRel);
+                    self.queue.complete(job.id).await?;
+                    self.events.emit(
+                        &Event::of(EventKind::DecisionMade)
+                            .with_run(self.run_id)
+                            .with_url(job.url.as_str())
+                            .with_why("max_pages:limit_reached".to_string())
+                            .with_data(&serde_json::json!({
+                                "decision": "drop",
+                                "limit": max_pages,
+                                "pages_admitted": max_pages,
+                                "job_id": job.id,
+                            })),
+                    );
+                    break;
+                }
+            }
+
             let permit = sem.clone().acquire_owned().await.unwrap();
             let this = self.clone_refs();
             tasks.spawn(async move {
@@ -1191,7 +1248,22 @@ impl Crawler {
                             "attempts": attempts,
                         })),
                 );
-                match this.process_job(job).await {
+                let job_result = if let Some(timeout_secs) = this.config.job_max_runtime_secs {
+                    match tokio::time::timeout(
+                        Duration::from_secs(timeout_secs.max(1)),
+                        this.process_job(job),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => Err(Error::RequestTimeout {
+                            timeout_ms: u128::from(timeout_secs.max(1)) * 1000,
+                        }),
+                    }
+                } else {
+                    this.process_job(job).await
+                };
+                match job_result {
                     Ok(disposition) => {
                         if let Err(e) = this.apply_job_disposition(job_id, disposition).await {
                             warn!(?e, job_id, "apply job disposition failed");
@@ -1214,7 +1286,9 @@ impl Crawler {
                                 })),
                         );
                         let disposition = if let Error::RenderDisabled(_) = e {
-                            JobDisposition::FailedPermanent { error: err_msg }
+                            JobDisposition::FailedPermanent {
+                            error: err_msg.clone(),
+                        }
                         } else {
                             let host = job_for_policy.url.host_str().unwrap_or("").to_string();
                             let p_ctx = crate::policy::PolicyContext {
@@ -1266,6 +1340,29 @@ impl Crawler {
                                     ),
                                 },
                             }
+                        };
+                        let disposition = match disposition {
+                            JobDisposition::Retry { reason, after } => {
+                                let next_attempt = attempts.saturating_add(1);
+                                if next_attempt > this.config.retry_max {
+                                    JobDisposition::FailedPermanent {
+                                        error: format!(
+                                            "retry limit exceeded after {attempts} attempts: {reason}"
+                                        ),
+                                    }
+                                } else {
+                                    let mut retry_job = job_for_policy.clone();
+                                    retry_job.attempts = next_attempt;
+                                    retry_job.last_error = Some(err_msg.clone());
+                                    let min_delay = this.config.retry_backoff;
+                                    JobDisposition::Requeue {
+                                        job: retry_job,
+                                        delay: after.max(min_delay),
+                                        reason,
+                                    }
+                                }
+                            }
+                            other => other,
                         };
                         if let Err(fe) = this.apply_job_disposition(job_id, disposition).await {
                             warn!(?fe, job_id, "apply job disposition failed");
@@ -1368,6 +1465,7 @@ impl Crawler {
             render_requested: AtomicBool::new(self.render_requested.load(Ordering::Relaxed)),
             proxy_router: self.proxy_router.clone(),
             next_id: self.next_id.clone(),
+            pages_admitted: self.pages_admitted.clone(),
             host_probed: self.host_probed.clone(),
             host_facts: self.host_facts.clone(),
             host_open_ports: self.host_open_ports.clone(),
@@ -2303,12 +2401,7 @@ impl Crawler {
                 let collect_net_timings = self.config.collect_net_timings || prefetch_observability;
                 let fetch = self
                     .spoof
-                    .fetch_with(
-                        &job.url,
-                        dest,
-                        proxy_for_job.as_ref(),
-                        collect_net_timings,
-                    )
+                    .fetch_with(&job.url, dest, proxy_for_job.as_ref(), collect_net_timings)
                     .await;
                 let resp = match fetch {
                     Ok(r) => r,
@@ -2697,7 +2790,8 @@ impl Crawler {
                 let html_for_parse = html;
                 let mut links = tokio::task::spawn_blocking(move || {
                     let doc = scraper::Html::parse_document(&html_for_parse);
-                    crate::runner::Extractor::new().extract_links_from_document(&url_for_parse, &doc)
+                    crate::runner::Extractor::new()
+                        .extract_links_from_document(&url_for_parse, &doc)
                 })
                 .await
                 .map_err(|e| Error::Other(anyhow::anyhow!("prefetch html parse join: {e}")))?;
@@ -2809,8 +2903,8 @@ impl Crawler {
                     &doc,
                     &target_root,
                 );
-                let links =
-                    crate::runner::Extractor::new().extract_links_from_document(&url_for_parse, &doc);
+                let links = crate::runner::Extractor::new()
+                    .extract_links_from_document(&url_for_parse, &doc);
                 (asset_refs, links, tech_report)
             })
             .await

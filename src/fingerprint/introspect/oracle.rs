@@ -102,13 +102,7 @@ mod tests {
 
     #[test]
     fn matches_none_when_no_comparison_possible() {
-        let r = OracleReport::matches(
-            "https://tls.peet.ws/api/all",
-            None,
-            None,
-            None,
-            None,
-        );
+        let r = OracleReport::matches("https://tls.peet.ws/api/all", None, None, None, None);
         assert!(r.matches_live.is_none());
     }
 

@@ -228,10 +228,14 @@ fn opt_string_similarity(a: &Option<String>, b: &Option<String>) -> f32 {
             }
             // URLs / hrefs: compare token sets so a `?utm=...` rewrite
             // still scores high.
-            let ta: HashSet<&str> = x.split(|c: char| !c.is_alphanumeric())
-                .filter(|s| !s.is_empty()).collect();
-            let tb: HashSet<&str> = y.split(|c: char| !c.is_alphanumeric())
-                .filter(|s| !s.is_empty()).collect();
+            let ta: HashSet<&str> = x
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let tb: HashSet<&str> = y
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|s| !s.is_empty())
+                .collect();
             jaccard_refs(&ta, &tb)
         }
         _ => 0.0,
@@ -244,7 +248,11 @@ fn jaccard_set<T: Ord>(a: &BTreeSet<T>, b: &BTreeSet<T>) -> f32 {
     }
     let inter = a.intersection(b).count() as f32;
     let union = a.union(b).count() as f32;
-    if union == 0.0 { 1.0 } else { inter / union }
+    if union == 0.0 {
+        1.0
+    } else {
+        inter / union
+    }
 }
 
 fn jaccard_refs<T: Eq + Hash>(a: &HashSet<T>, b: &HashSet<T>) -> f32 {
@@ -253,7 +261,11 @@ fn jaccard_refs<T: Eq + Hash>(a: &HashSet<T>, b: &HashSet<T>) -> f32 {
     }
     let inter = a.intersection(b).count() as f32;
     let union = a.union(b).count() as f32;
-    if union == 0.0 { 1.0 } else { inter / union }
+    if union == 0.0 {
+        1.0
+    } else {
+        inter / union
+    }
 }
 
 fn jaccard_kv(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> f32 {
@@ -307,7 +319,11 @@ fn parent_chain_similarity(a: &[String], b: &[String]) -> f32 {
 fn sibling_similarity(a: usize, b: usize) -> f32 {
     let lo = a.min(b) as f32;
     let hi = a.max(b) as f32;
-    if hi == 0.0 { 1.0 } else { lo / hi }
+    if hi == 0.0 {
+        1.0
+    } else {
+        lo / hi
+    }
 }
 
 #[cfg(test)]
@@ -356,7 +372,12 @@ mod tests {
             "#same",
         );
         let s = score(&a, &b);
-        assert!(s <= TAG_MISMATCH_CAP + 1e-6, "score {} not capped at {}", s, TAG_MISMATCH_CAP);
+        assert!(
+            s <= TAG_MISMATCH_CAP + 1e-6,
+            "score {} not capped at {}",
+            s,
+            TAG_MISMATCH_CAP
+        );
     }
 
     #[test]
@@ -375,15 +396,26 @@ mod tests {
         let s01 = score(&f0, &f1);
         // f0 vs f2: different class, different text → lower.
         let s02 = score(&f0, &f2);
-        assert!(s01 > s02, "expected sibling-like pair to outrank dissimilar pair ({} vs {})", s01, s02);
-        assert!(s01 >= 0.5, "near-identical lis should score >=0.5, got {}", s01);
+        assert!(
+            s01 > s02,
+            "expected sibling-like pair to outrank dissimilar pair ({} vs {})",
+            s01,
+            s02
+        );
+        assert!(
+            s01 >= 0.5,
+            "near-identical lis should score >=0.5, got {}",
+            s01
+        );
     }
 
     // ---------- property tests ----------
 
     fn random_html(seed: u64) -> Vec<u8> {
         // Tiny LCG → deterministic varied HTML fragments.
-        let mut x = seed.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        let mut x = seed
+            .wrapping_mul(2862933555777941757)
+            .wrapping_add(3037000493);
         let mut next = || {
             x = x.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
             x
@@ -411,11 +443,20 @@ mod tests {
             let fa = fingerprint(&a);
             let fb = fingerprint(&b);
             let saa = score(&fa, &fa);
-            assert!((saa - 1.0).abs() < 1e-6, "seed={seed} reflexive failed: {saa}");
+            assert!(
+                (saa - 1.0).abs() < 1e-6,
+                "seed={seed} reflexive failed: {saa}"
+            );
             let sab = score(&fa, &fb);
             let sba = score(&fb, &fa);
-            assert!((sab - sba).abs() < 1e-6, "seed={seed} not symmetric: {sab} vs {sba}");
-            assert!((0.0..=1.0).contains(&sab), "seed={seed} out of range: {sab}");
+            assert!(
+                (sab - sba).abs() < 1e-6,
+                "seed={seed} not symmetric: {sab} vs {sba}"
+            );
+            assert!(
+                (0.0..=1.0).contains(&sab),
+                "seed={seed} out of range: {sab}"
+            );
         }
     }
 
@@ -524,7 +565,13 @@ mod tests {
                 if s >= RECALL_THRESHOLD {
                     hits += 1;
                 } else {
-                    eprintln!("pair {} below threshold: {} ({} → {})", i + 1, s, fb.tag, fa.tag);
+                    eprintln!(
+                        "pair {} below threshold: {} ({} → {})",
+                        i + 1,
+                        s,
+                        fb.tag,
+                        fa.tag
+                    );
                 }
             } else {
                 // Cross-tag pair: confirm cap actually kicks in.
@@ -543,9 +590,15 @@ mod tests {
     #[test]
     fn href_token_similarity_handles_querystring_drift() {
         let a = Fingerprint {
-            tag: "a".into(), id: None, classes: BTreeSet::new(),
-            href: Some("/cat/shoes".into()), other_attrs: BTreeMap::new(),
-            text_hash: 0, text_tokens: vec![], parent_chain: vec![], sibling_index: 1,
+            tag: "a".into(),
+            id: None,
+            classes: BTreeSet::new(),
+            href: Some("/cat/shoes".into()),
+            other_attrs: BTreeMap::new(),
+            text_hash: 0,
+            text_tokens: vec![],
+            parent_chain: vec![],
+            sibling_index: 1,
         };
         let b = Fingerprint {
             href: Some("/cat/shoes?utm=foo".into()),

@@ -12,7 +12,9 @@ use crawlex::runner::ChallengeDetector;
 use http::{HeaderMap, HeaderValue};
 
 fn should_escalate(status: u16, headers: &HeaderMap, body: &[u8]) -> bool {
-    ChallengeDetector::new().detect(status, headers, body).is_some()
+    ChallengeDetector::new()
+        .detect(status, headers, body)
+        .is_some()
 }
 
 fn html_headers() -> HeaderMap {

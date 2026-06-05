@@ -1,0 +1,278 @@
+{
+  "profiles": {
+    "dsp-vtex-default-sticky": {
+      "target": "drogariasaopaulo_vtex_api",
+      "proxy": {
+        "provider": "packetstream",
+        "mode": "sticky",
+        "protocol": "socks5h",
+        "country": null
+      },
+      "hardware": {
+        "device_type": "desktop",
+        "os": "windows",
+        "browser": "chrome",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept_language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "timezone": "America/Sao_Paulo",
+        "name": "windows-chrome-124-ptbr",
+        "viewport": [
+          1366,
+          768
+        ],
+        "sec_ch_ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "sec_ch_ua_mobile": "?0",
+        "sec_ch_ua_platform": "\"Windows\"",
+        "accept": "application/json,text/plain,*/*"
+      },
+      "session": {
+        "mode": "shared",
+        "cookie_policy": "memory",
+        "connection_reuse": true,
+        "max_requests_per_session": 120,
+        "max_session_age_seconds": 7200
+      },
+      "rate_limit": {
+        "min_delay_seconds": 3.0,
+        "jitter_seconds": 0.8,
+        "max_retries": 0,
+        "backoff_base_seconds": 2.0,
+        "circuit_breaker_threshold": 3,
+        "circuit_breaker_cooldown_seconds": 900
+      },
+      "allowed_endpoint_types": [
+        "vtex_api"
+      ],
+      "identity_pool": "dsp-vtex-efficient",
+      "identity_role": "primary",
+      "identity_weight": 100,
+      "sticky_identity_id": "dsp-vtex-win-desktop-a",
+      "notes": "Primary efficient identity: Windows desktop Chrome, sticky shared PacketStream session. 4/4 OK in latest fingerprint comparison."
+    },
+    "dsp-vtex-default-rotating": {
+      "target": "drogariasaopaulo_vtex_api",
+      "proxy": {
+        "provider": "packetstream",
+        "mode": "rotating",
+        "protocol": "socks5h",
+        "country": null
+      },
+      "hardware": {
+        "device_type": "desktop",
+        "os": "windows",
+        "browser": "chrome",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept_language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "timezone": "America/Sao_Paulo",
+        "name": "windows-chrome-124-ptbr",
+        "viewport": [
+          1366,
+          768
+        ],
+        "sec_ch_ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "sec_ch_ua_mobile": "?0",
+        "sec_ch_ua_platform": "\"Windows\"",
+        "accept": "application/json,text/plain,*/*"
+      },
+      "session": {
+        "mode": "isolated",
+        "cookie_policy": "discard",
+        "connection_reuse": false,
+        "max_requests_per_session": 1,
+        "max_session_age_seconds": 120
+      },
+      "rate_limit": {
+        "min_delay_seconds": 3.0,
+        "jitter_seconds": 0.4,
+        "max_retries": 1,
+        "backoff_base_seconds": 2.0,
+        "circuit_breaker_threshold": 5,
+        "circuit_breaker_cooldown_seconds": 600
+      },
+      "allowed_endpoint_types": [
+        "vtex_api"
+      ],
+      "identity_pool": "dsp-vtex-chaos-benchmark",
+      "identity_role": "benchmark",
+      "identity_weight": 1,
+      "sticky_identity_id": "dsp-vtex-rotating-benchmark",
+      "notes": "Benchmark-only: per-request rotating identity is intentionally excluded from production defaults."
+    },
+    "dsp-html-default-sticky": {
+      "target": "drogariasaopaulo_html",
+      "proxy": {
+        "provider": "packetstream",
+        "mode": "sticky",
+        "protocol": "socks5h",
+        "country": null
+      },
+      "hardware": {
+        "device_type": "desktop",
+        "os": "windows",
+        "browser": "chrome",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept_language": "pt-BR,pt;q=0.9,en;q=0.5",
+        "timezone": "America/Sao_Paulo",
+        "name": "windows-chrome-124-ptbr-html",
+        "sec_ch_ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "sec_ch_ua_mobile": "?0",
+        "sec_ch_ua_platform": "\"Windows\"",
+        "viewport": [
+          1366,
+          768
+        ],
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+      },
+      "session": {
+        "mode": "shared",
+        "cookie_policy": "memory",
+        "connection_reuse": true,
+        "max_requests_per_session": 20,
+        "max_session_age_seconds": 1800
+      },
+      "rate_limit": {
+        "min_delay_seconds": 8.0,
+        "jitter_seconds": 2.0,
+        "max_retries": 0,
+        "backoff_base_seconds": 5.0,
+        "circuit_breaker_threshold": 1,
+        "circuit_breaker_cooldown_seconds": 1800
+      },
+      "allowed_endpoint_types": [
+        "html"
+      ],
+      "require_product_links": true,
+      "identity_pool": "dsp-html-fallback",
+      "identity_role": "fallback",
+      "identity_weight": 20,
+      "sticky_identity_id": "dsp-html-win-desktop-a",
+      "notes": "HTML fallback/enrichment only; aggressive circuit breaker because CloudFront blocks are common."
+    },
+    "dsp-vtex-mobile-sticky": {
+      "target": "drogariasaopaulo_vtex_api",
+      "proxy": {
+        "provider": "packetstream",
+        "mode": "sticky",
+        "protocol": "socks5h",
+        "country": null
+      },
+      "hardware": {
+        "name": "android-chrome-124-ptbr",
+        "device_type": "mobile",
+        "os": "android",
+        "browser": "chrome",
+        "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "accept_language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "timezone": "America/Sao_Paulo",
+        "viewport": [
+          393,
+          873
+        ],
+        "sec_ch_ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "sec_ch_ua_mobile": "?1",
+        "sec_ch_ua_platform": "\"Android\"",
+        "accept": "application/json,text/plain,*/*"
+      },
+      "session": {
+        "mode": "shared",
+        "cookie_policy": "memory",
+        "connection_reuse": true,
+        "max_requests_per_session": 120,
+        "max_session_age_seconds": 7200
+      },
+      "rate_limit": {
+        "min_delay_seconds": 3.2,
+        "jitter_seconds": 0.9,
+        "max_retries": 0,
+        "backoff_base_seconds": 2.0,
+        "circuit_breaker_threshold": 3,
+        "circuit_breaker_cooldown_seconds": 900
+      },
+      "allowed_endpoint_types": [
+        "vtex_api"
+      ],
+      "identity_pool": "dsp-vtex-efficient",
+      "identity_role": "primary",
+      "identity_weight": 95,
+      "sticky_identity_id": "dsp-vtex-android-mobile-b",
+      "notes": "Second efficient identity: Android Chrome mobile, sticky shared PacketStream session. 4/4 OK in latest fingerprint comparison."
+    },
+    "dsp-vtex-linux-sticky": {
+      "target": "drogariasaopaulo_vtex_api",
+      "proxy": {
+        "provider": "packetstream",
+        "mode": "sticky",
+        "protocol": "socks5h",
+        "country": null
+      },
+      "hardware": {
+        "name": "linux-chrome-124-ptbr",
+        "device_type": "desktop",
+        "os": "linux",
+        "browser": "chrome",
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept_language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "timezone": "America/Sao_Paulo",
+        "viewport": [
+          1366,
+          768
+        ],
+        "sec_ch_ua": "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"",
+        "sec_ch_ua_mobile": "?0",
+        "sec_ch_ua_platform": "\"Linux\"",
+        "accept": "application/json,text/plain,*/*"
+      },
+      "session": {
+        "mode": "shared",
+        "cookie_policy": "memory",
+        "connection_reuse": true,
+        "max_requests_per_session": 50,
+        "max_session_age_seconds": 1800
+      },
+      "rate_limit": {
+        "min_delay_seconds": 3.0,
+        "jitter_seconds": 0.4,
+        "max_retries": 0,
+        "backoff_base_seconds": 2.0,
+        "circuit_breaker_threshold": 3,
+        "circuit_breaker_cooldown_seconds": 900
+      },
+      "allowed_endpoint_types": [
+        "vtex_api"
+      ],
+      "identity_pool": "dsp-vtex-efficient",
+      "identity_role": "benchmark",
+      "identity_weight": 10,
+      "sticky_identity_id": "dsp-vtex-linux-desktop-benchmark",
+      "notes": "Benchmark-only identity; latest comparison hit CloudFront 403/circuit breaker."
+    }
+  },
+  "identity_pools": {
+    "dsp-vtex-efficient": {
+      "description": "High-efficiency stable identities for DSP VTEX API. Variation is across coherent sticky identities, not random IP/header rotation.",
+      "default_roles": [
+        "primary"
+      ],
+      "fallback_roles": [
+        "primary",
+        "fallback"
+      ],
+      "production_default": true,
+      "do_not_include_roles": [
+        "benchmark",
+        "disabled"
+      ],
+      "recommended_order": [
+        "dsp-vtex-default-sticky",
+        "dsp-vtex-mobile-sticky"
+      ]
+    },
+    "dsp-html-fallback": {
+      "description": "HTML fallback only; use browser client later if HTML becomes necessary.",
+      "default_roles": [
+        "fallback"
+      ],
+      "production_default": false
+    }
+  }
+}

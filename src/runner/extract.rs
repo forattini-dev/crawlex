@@ -48,7 +48,9 @@ mod tests {
     fn resolves_relative_anchor() {
         let html = r#"<html><body><a href="/about">about</a></body></html>"#;
         let links = Extractor::new().extract_links(&base(), html);
-        assert!(links.iter().any(|u| u.as_str() == "https://example.com/about"));
+        assert!(links
+            .iter()
+            .any(|u| u.as_str() == "https://example.com/about"));
     }
 
     #[test]

@@ -708,7 +708,8 @@ pub struct RenderPool {
     /// `None` until preflight runs (or when no external endpoint is
     /// configured). Read by `ensure_browser` to decide whether to
     /// attach identity hints to the connection URL.
-    cdp_capabilities: parking_lot::RwLock<Option<crate::render::cdp_capabilities::EndpointCapabilities>>,
+    cdp_capabilities:
+        parking_lot::RwLock<Option<crate::render::cdp_capabilities::EndpointCapabilities>>,
     /// Slice 32 — per-session calibrated browser fingerprints for the
     /// external CDP provider. Cache key (`CalibrationKey`) folds in
     /// every input that legitimately changes the live identity, so a
@@ -718,8 +719,7 @@ pub struct RenderPool {
     /// Slice 32 — local `__crawlex_calibrate` HTTP origin. Lazily
     /// bound on first calibration so stock-Chrome runs don't pay the
     /// listener cost.
-    calibration_origin:
-        tokio::sync::OnceCell<crate::render::calibration::CalibrationOrigin>,
+    calibration_origin: tokio::sync::OnceCell<crate::render::calibration::CalibrationOrigin>,
 }
 
 impl RenderPool {
@@ -777,9 +777,7 @@ impl RenderPool {
     /// Slice 32 — read-only handle to the calibration cache. Exposed so
     /// telemetry/tests can introspect it without needing to re-run the
     /// probe.
-    pub fn calibration_cache(
-        &self,
-    ) -> &Arc<crate::render::calibration::CalibrationCache> {
+    pub fn calibration_cache(&self) -> &Arc<crate::render::calibration::CalibrationCache> {
         &self.calibration_cache
     }
 
@@ -807,9 +805,7 @@ impl RenderPool {
             .get_or_try_init(|| async {
                 crate::render::calibration::serve_calibration_origin()
                     .await
-                    .map_err(|e| {
-                        Error::Render(format!("calibration origin: {e}"))
-                    })
+                    .map_err(|e| Error::Render(format!("calibration origin: {e}")))
             })
             .await?;
         let calibrate_url = origin.calibrate_url();
@@ -831,11 +827,13 @@ impl RenderPool {
             .await
             .map_err(|e| Error::Render(format!("calibration evaluate: {e}")))?;
         let json = match res.value() {
-            Some(v) => v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string()),
+            Some(v) => v
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string()),
             None => return Err(Error::Render("calibration probe returned no value".into())),
         };
-        let mut fp = crate::render::calibration::parse_probe(&json)
-            .map_err(Error::Render)?;
+        let mut fp = crate::render::calibration::parse_probe(&json).map_err(Error::Render)?;
         fp.mismatch_count = crate::render::calibration::count_mismatches(
             &fp,
             self.config.locale.as_deref(),
@@ -873,8 +871,7 @@ impl RenderPool {
         );
         // Optional full report — opt-in only, never on by default.
         if std::env::var("CRAWLEX_CALIBRATION_REPORT").as_deref() == Ok("full") {
-            let report =
-                crate::render::calibration::CalibrationCache::format_full_report(&fp);
+            let report = crate::render::calibration::CalibrationCache::format_full_report(&fp);
             tracing::info!(
                 event = "calibration.report",
                 fingerprint_id = fingerprint_id.as_str(),
@@ -889,9 +886,7 @@ impl RenderPool {
     /// session to look like, so classification can flag divergences.
     /// Only axes the operator actually pinned are populated; absent
     /// fields are not checked.
-    fn expected_identity_for_session(
-        &self,
-    ) -> crate::render::calibration::ExpectedIdentity {
+    fn expected_identity_for_session(&self) -> crate::render::calibration::ExpectedIdentity {
         let bundle = self.bundle();
         let platform = match bundle.ua_platform.trim_matches('"') {
             "" => None,
@@ -932,11 +927,7 @@ impl RenderPool {
             None => format!("{session_id}|<default>"),
         };
         crate::render::calibration::CalibrationKey {
-            endpoint: self
-                .config
-                .external_cdp_url
-                .clone()
-                .unwrap_or_default(),
+            endpoint: self.config.external_cdp_url.clone().unwrap_or_default(),
             seed: bundle.canvas_audio_seed.to_string(),
             proxy: proxy.map(|u| u.to_string()).unwrap_or_default(),
             locale: self.config.locale.clone().unwrap_or_default(),
@@ -1291,10 +1282,7 @@ impl RenderPool {
     /// Slice 36 — single-provider preflight, extracted so the fallback
     /// loop can drive both `Stock` and `Cdp` paths through a common
     /// signature.
-    async fn preflight_for_provider(
-        &self,
-        p: crate::config::BrowserProvider,
-    ) -> Result<String> {
+    async fn preflight_for_provider(&self, p: crate::config::BrowserProvider) -> Result<String> {
         use crate::config::BrowserProvider;
         match p {
             BrowserProvider::Cdp => {
@@ -1303,11 +1291,12 @@ impl RenderPool {
                         "external CDP preflight failed: external_cdp_url not configured".into(),
                     )
                 })?;
-                let probe = crate::render::cdp_probe::probe(endpoint).await.map_err(
-                    |msg| Error::Render(format!("external CDP preflight failed: {msg}")),
-                )?;
-                let caps =
-                    crate::render::cdp_capabilities::EndpointCapabilities::detect(&probe);
+                let probe = crate::render::cdp_probe::probe(endpoint)
+                    .await
+                    .map_err(|msg| {
+                        Error::Render(format!("external CDP preflight failed: {msg}"))
+                    })?;
+                let caps = crate::render::cdp_capabilities::EndpointCapabilities::detect(&probe);
                 tracing::info!(
                     event = "provider.selected",
                     provider = BrowserProvider::Cdp.as_str(),
@@ -3360,10 +3349,8 @@ impl RenderPool {
                         crate::render::calibration::classify_mismatches(&fp, &expected);
                     if !mismatches.is_empty() {
                         let policy = self.config.mismatch_policy;
-                        let report = crate::render::calibration::MismatchReport::new(
-                            policy,
-                            &mismatches,
-                        );
+                        let report =
+                            crate::render::calibration::MismatchReport::new(policy, &mismatches);
                         let payload = serde_json::to_string(&report).unwrap_or_else(|_| {
                             format!(
                                 "{{\"policy\":\"{}\",\"critical\":{},\"unreconciled_critical\":{}}}",
@@ -3425,7 +3412,10 @@ impl RenderPool {
                         }
                     }
                 }
-                Err(e) => tracing::warn!(?e, "calibration failed; continuing to target without cached fingerprint"),
+                Err(e) => tracing::warn!(
+                    ?e,
+                    "calibration failed; continuing to target without cached fingerprint"
+                ),
             }
         }
         // Slice 35 — persistent external CDP mode must not write into

@@ -6,9 +6,7 @@
 //! plumbing — full JA3S / JA4S hash computation lands when the TLS
 //! observation widens to expose ServerHello bytes.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;

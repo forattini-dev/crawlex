@@ -5,9 +5,7 @@
 //! picks up `__cf_bm` immediately surfaces "this host gates traffic
 //! with Cloudflare Bot Management" even if no challenge fired.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -26,42 +24,198 @@ impl CookieSource {
 /// case-sensitive per RFC 6265 spec, and vendor names are stable).
 const COOKIE_TABLE: &[(&str, u8, Category, Vendor, &str)] = &[
     // Cloudflare
-    ("__cf_bm", 10, Category::Antibot, Vendor::CloudflareBotManagement, "cookie __cf_bm"),
-    ("__cfruid", 8, Category::Cdn, Vendor::Cloudflare, "cookie __cfruid"),
-    ("__cflb", 8, Category::Cdn, Vendor::Cloudflare, "cookie __cflb"),
-    ("cf_clearance", 10, Category::Antibot, Vendor::Cloudflare, "cookie cf_clearance"),
-    ("__cf_chl", 10, Category::Antibot, Vendor::Cloudflare, "cookie __cf_chl_*"),
+    (
+        "__cf_bm",
+        10,
+        Category::Antibot,
+        Vendor::CloudflareBotManagement,
+        "cookie __cf_bm",
+    ),
+    (
+        "__cfruid",
+        8,
+        Category::Cdn,
+        Vendor::Cloudflare,
+        "cookie __cfruid",
+    ),
+    (
+        "__cflb",
+        8,
+        Category::Cdn,
+        Vendor::Cloudflare,
+        "cookie __cflb",
+    ),
+    (
+        "cf_clearance",
+        10,
+        Category::Antibot,
+        Vendor::Cloudflare,
+        "cookie cf_clearance",
+    ),
+    (
+        "__cf_chl",
+        10,
+        Category::Antibot,
+        Vendor::Cloudflare,
+        "cookie __cf_chl_*",
+    ),
     // DataDome
-    ("_dd_s", 10, Category::Antibot, Vendor::DataDome, "cookie _dd_s"),
-    ("datadome", 10, Category::Antibot, Vendor::DataDome, "cookie datadome"),
+    (
+        "_dd_s",
+        10,
+        Category::Antibot,
+        Vendor::DataDome,
+        "cookie _dd_s",
+    ),
+    (
+        "datadome",
+        10,
+        Category::Antibot,
+        Vendor::DataDome,
+        "cookie datadome",
+    ),
     // PerimeterX
-    ("_px", 10, Category::Antibot, Vendor::PerimeterX, "cookie _px*"),
-    ("_pxhd", 10, Category::Antibot, Vendor::PerimeterX, "cookie _pxhd"),
-    ("_pxff_", 8, Category::Antibot, Vendor::PerimeterX, "cookie _pxff_*"),
+    (
+        "_px",
+        10,
+        Category::Antibot,
+        Vendor::PerimeterX,
+        "cookie _px*",
+    ),
+    (
+        "_pxhd",
+        10,
+        Category::Antibot,
+        Vendor::PerimeterX,
+        "cookie _pxhd",
+    ),
+    (
+        "_pxff_",
+        8,
+        Category::Antibot,
+        Vendor::PerimeterX,
+        "cookie _pxff_*",
+    ),
     // Imperva / Incapsula
-    ("incap_ses_", 10, Category::Antibot, Vendor::Imperva, "cookie incap_ses_*"),
-    ("visid_incap_", 10, Category::Antibot, Vendor::Imperva, "cookie visid_incap_*"),
-    ("nlbi_", 6, Category::Antibot, Vendor::Imperva, "cookie nlbi_*"),
+    (
+        "incap_ses_",
+        10,
+        Category::Antibot,
+        Vendor::Imperva,
+        "cookie incap_ses_*",
+    ),
+    (
+        "visid_incap_",
+        10,
+        Category::Antibot,
+        Vendor::Imperva,
+        "cookie visid_incap_*",
+    ),
+    (
+        "nlbi_",
+        6,
+        Category::Antibot,
+        Vendor::Imperva,
+        "cookie nlbi_*",
+    ),
     // Akamai
-    ("BMSC", 10, Category::Antibot, Vendor::AkamaiBotManager, "cookie BMSC"),
-    ("ak_bmsc", 10, Category::Antibot, Vendor::AkamaiBotManager, "cookie ak_bmsc"),
-    ("bm_sv", 10, Category::Antibot, Vendor::AkamaiBotManager, "cookie bm_sv"),
-    ("bm_sz", 10, Category::Antibot, Vendor::AkamaiBotManager, "cookie bm_sz"),
+    (
+        "BMSC",
+        10,
+        Category::Antibot,
+        Vendor::AkamaiBotManager,
+        "cookie BMSC",
+    ),
+    (
+        "ak_bmsc",
+        10,
+        Category::Antibot,
+        Vendor::AkamaiBotManager,
+        "cookie ak_bmsc",
+    ),
+    (
+        "bm_sv",
+        10,
+        Category::Antibot,
+        Vendor::AkamaiBotManager,
+        "cookie bm_sv",
+    ),
+    (
+        "bm_sz",
+        10,
+        Category::Antibot,
+        Vendor::AkamaiBotManager,
+        "cookie bm_sz",
+    ),
     // Shape Security / F5
-    ("TS01", 6, Category::Antibot, Vendor::ShapeSecurity, "cookie TS01*"),
+    (
+        "TS01",
+        6,
+        Category::Antibot,
+        Vendor::ShapeSecurity,
+        "cookie TS01*",
+    ),
     // F5 BIG-IP
-    ("BIGipServer", 8, Category::ReverseProxyLb, Vendor::F5BigIp, "cookie BIGipServer*"),
+    (
+        "BIGipServer",
+        8,
+        Category::ReverseProxyLb,
+        Vendor::F5BigIp,
+        "cookie BIGipServer*",
+    ),
     // Magento / ecommerce sessions (cookie patterns)
-    ("PHPSESSID", 4, Category::Backend, Vendor::Php, "cookie PHPSESSID"),
+    (
+        "PHPSESSID",
+        4,
+        Category::Backend,
+        Vendor::Php,
+        "cookie PHPSESSID",
+    ),
     // Shopify
-    ("_shopify_y", 8, Category::Ecommerce, Vendor::Shopify, "cookie _shopify_y"),
-    ("_shopify_s", 8, Category::Ecommerce, Vendor::Shopify, "cookie _shopify_s"),
+    (
+        "_shopify_y",
+        8,
+        Category::Ecommerce,
+        Vendor::Shopify,
+        "cookie _shopify_y",
+    ),
+    (
+        "_shopify_s",
+        8,
+        Category::Ecommerce,
+        Vendor::Shopify,
+        "cookie _shopify_s",
+    ),
     // VTEX
-    ("VtexFingerPrint", 10, Category::Ecommerce, Vendor::Vtex, "cookie VtexFingerPrint"),
-    ("VtexWorkspace", 10, Category::Ecommerce, Vendor::Vtex, "cookie VtexWorkspace"),
+    (
+        "VtexFingerPrint",
+        10,
+        Category::Ecommerce,
+        Vendor::Vtex,
+        "cookie VtexFingerPrint",
+    ),
+    (
+        "VtexWorkspace",
+        10,
+        Category::Ecommerce,
+        Vendor::Vtex,
+        "cookie VtexWorkspace",
+    ),
     // WordPress
-    ("wordpress_logged_in_", 8, Category::Cms, Vendor::Wordpress, "cookie wordpress_logged_in_*"),
-    ("wp-settings-", 6, Category::Cms, Vendor::Wordpress, "cookie wp-settings-*"),
+    (
+        "wordpress_logged_in_",
+        8,
+        Category::Cms,
+        Vendor::Wordpress,
+        "cookie wordpress_logged_in_*",
+    ),
+    (
+        "wp-settings-",
+        6,
+        Category::Cms,
+        Vendor::Wordpress,
+        "cookie wp-settings-*",
+    ),
 ];
 
 impl Source for CookieSource {
@@ -123,9 +277,9 @@ mod tests {
         let h = headers_with(&["__cf_bm=xxx; Path=/; HttpOnly"]);
         let u: Url = "https://example.com/".parse().unwrap();
         let dets = CookieSource::new().analyze(&build_ctx(&h, &u));
-        assert!(dets
-            .iter()
-            .any(|d| d.vendor == Vendor::CloudflareBotManagement && d.category == Category::Antibot));
+        assert!(dets.iter().any(
+            |d| d.vendor == Vendor::CloudflareBotManagement && d.category == Category::Antibot
+        ));
     }
 
     #[test]

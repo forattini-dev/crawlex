@@ -749,9 +749,7 @@ mod tests {
     fn calibration_overrides_reflected_in_shim() {
         let b = IdentityBundle::from_chromium(131, 42);
         let overrides = CalibrationOverrides {
-            user_agent: Some(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) Chrome/149.0".into(),
-            ),
+            user_agent: Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) Chrome/149.0".into()),
             platform: Some("MacIntel".into()),
             locale: Some("pt-PT".into()),
             languages_json: Some(r#"["pt-PT","pt","en"]"#.into()),
@@ -768,10 +766,7 @@ mod tests {
         let js = render_shim_from_bundle_with_calibration(&b, Some(&overrides));
         assert!(!js.contains("{{"), "unsubstituted token leaked");
         // UA + derived app_version (UA without `Mozilla/` prefix).
-        assert!(
-            js.contains("Chrome/149.0"),
-            "calibrated UA missing"
-        );
+        assert!(js.contains("Chrome/149.0"), "calibrated UA missing");
         // Platform + UA-CH platform token.
         assert!(js.contains("MacIntel"), "calibrated platform missing");
         // Locale, languages, timezone, tz offset.
@@ -822,8 +817,7 @@ mod tests {
             webgl_unmasked_renderer: Some("Apple M2".into()),
             ..Default::default()
         };
-        let calibrated =
-            render_worker_shim_from_bundle_with_calibration(&b, Some(&overrides));
+        let calibrated = render_worker_shim_from_bundle_with_calibration(&b, Some(&overrides));
         assert!(calibrated.contains("Asia/Tokyo"));
         assert!(calibrated.contains("Apple Inc."));
         // Worker variant still has DOM-only sections stripped.

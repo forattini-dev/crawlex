@@ -13,9 +13,7 @@
 //! `runner::ChallengeDetector` becomes `#[deprecated]` and forwards
 //! to this source in B14.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -33,14 +31,44 @@ const BODY_SAMPLE_CAP: usize = 16 * 1024;
 const SMALL_HTML_THRESHOLD: usize = 2048;
 
 const VENDOR_SIGNATURES: &[(&str, u8, Vendor, &str)] = &[
-    ("cf-chl-bypass", 10, Vendor::Cloudflare, "body marker 'cf-chl-bypass'"),
-    ("Just a moment", 8, Vendor::Cloudflare, "body marker 'Just a moment'"),
-    ("/cdn-cgi/challenge-platform/", 10, Vendor::Cloudflare, "body marker '/cdn-cgi/challenge-platform/'"),
+    (
+        "cf-chl-bypass",
+        10,
+        Vendor::Cloudflare,
+        "body marker 'cf-chl-bypass'",
+    ),
+    (
+        "Just a moment",
+        8,
+        Vendor::Cloudflare,
+        "body marker 'Just a moment'",
+    ),
+    (
+        "/cdn-cgi/challenge-platform/",
+        10,
+        Vendor::Cloudflare,
+        "body marker '/cdn-cgi/challenge-platform/'",
+    ),
     ("DataDome", 10, Vendor::DataDome, "body marker 'DataDome'"),
-    ("PerimeterX", 10, Vendor::PerimeterX, "body marker 'PerimeterX'"),
-    ("_Incapsula_", 10, Vendor::Imperva, "body marker '_Incapsula_'"),
+    (
+        "PerimeterX",
+        10,
+        Vendor::PerimeterX,
+        "body marker 'PerimeterX'",
+    ),
+    (
+        "_Incapsula_",
+        10,
+        Vendor::Imperva,
+        "body marker '_Incapsula_'",
+    ),
     ("Imperva", 8, Vendor::Imperva, "body marker 'Imperva'"),
-    ("distilnetworks", 10, Vendor::DistilNetworks, "body marker 'distilnetworks'"),
+    (
+        "distilnetworks",
+        10,
+        Vendor::DistilNetworks,
+        "body marker 'distilnetworks'",
+    ),
 ];
 
 impl Source for AntibotMarkerSource {
@@ -149,7 +177,8 @@ mod tests {
     fn detects_cloudflare_via_chl_bypass() {
         let h = empty_headers();
         let u: Url = "https://example.com/".parse().unwrap();
-        let dets = AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"... cf-chl-bypass ..."));
+        let dets =
+            AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"... cf-chl-bypass ..."));
         assert!(dets.iter().any(|d| d.vendor == Vendor::Cloudflare));
     }
 
@@ -157,7 +186,12 @@ mod tests {
     fn detects_cloudflare_via_just_a_moment() {
         let h = empty_headers();
         let u: Url = "https://example.com/".parse().unwrap();
-        let dets = AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 503, b"<html>Just a moment...</html>"));
+        let dets = AntibotMarkerSource::new().analyze(&ctx_with(
+            &h,
+            &u,
+            503,
+            b"<html>Just a moment...</html>",
+        ));
         assert!(dets.iter().any(|d| d.vendor == Vendor::Cloudflare));
     }
 
@@ -173,7 +207,8 @@ mod tests {
     fn detects_perimeterx() {
         let h = empty_headers();
         let u: Url = "https://example.com/".parse().unwrap();
-        let dets = AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"PerimeterX challenge"));
+        let dets =
+            AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"PerimeterX challenge"));
         assert!(dets.iter().any(|d| d.vendor == Vendor::PerimeterX));
     }
 
@@ -189,7 +224,8 @@ mod tests {
     fn detects_distil() {
         let h = empty_headers();
         let u: Url = "https://example.com/".parse().unwrap();
-        let dets = AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"distilnetworks tag"));
+        let dets =
+            AntibotMarkerSource::new().analyze(&ctx_with(&h, &u, 403, b"distilnetworks tag"));
         assert!(dets.iter().any(|d| d.vendor == Vendor::DistilNetworks));
     }
 

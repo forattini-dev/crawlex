@@ -57,17 +57,15 @@ impl AdaptiveStore {
         } else {
             OnDisk::default()
         };
-        Ok(Self { path, inner: RwLock::new(inner) })
+        Ok(Self {
+            path,
+            inner: RwLock::new(inner),
+        })
     }
 
     /// Upsert a fingerprint. Persists immediately so a crashed spider
     /// keeps its learning between runs.
-    pub fn save(
-        &self,
-        domain: &str,
-        identifier: &str,
-        fingerprint: Fingerprint,
-    ) -> io::Result<()> {
+    pub fn save(&self, domain: &str, identifier: &str, fingerprint: Fingerprint) -> io::Result<()> {
         let key = make_key(domain, identifier);
         let mut g = self.inner.write();
         g.entries.insert(key, fingerprint);
@@ -95,14 +93,20 @@ fn make_key(domain: &str, identifier: &str) -> String {
 fn sanitise(spider_id: &str) -> String {
     spider_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 fn write_atomic(path: &Path, data: &OnDisk) -> io::Result<()> {
     let tmp = path.with_extension("adaptive.json.tmp");
-    let bytes = serde_json::to_vec(data)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        serde_json::to_vec(data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(&tmp, &bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())

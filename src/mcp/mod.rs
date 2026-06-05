@@ -62,7 +62,9 @@ pub struct ImpersonateFetcher {
 
 impl ImpersonateFetcher {
     pub fn new() -> Result<Self> {
-        Ok(Self { client: ImpersonateClient::new(Profile::Chrome149Stable)? })
+        Ok(Self {
+            client: ImpersonateClient::new(Profile::Chrome149Stable)?,
+        })
     }
 }
 
@@ -194,7 +196,11 @@ impl McpServer {
             .and_then(Value::as_str)
             .ok_or("`id` required")?
             .to_string();
-        let backend = match args.get("backend").and_then(Value::as_str).unwrap_or("http") {
+        let backend = match args
+            .get("backend")
+            .and_then(Value::as_str)
+            .unwrap_or("http")
+        {
             "http" => BackendKind::Http,
             "render" => BackendKind::Render,
             "stealth" => BackendKind::Stealth,
@@ -208,7 +214,10 @@ impl McpServer {
     }
 
     fn tool_close_session(&self, args: Value) -> std::result::Result<Value, String> {
-        let id = args.get("id").and_then(Value::as_str).ok_or("`id` required")?;
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("`id` required")?;
         let removed = self.sessions.remove(id).is_some();
         self.cache.lock().remove(id);
         Ok(json!({ "id": id, "closed": removed }))
@@ -266,13 +275,12 @@ impl McpServer {
         Ok(json!({ "results": results }))
     }
 
-    async fn tool_fetch(
-        &self,
-        args: Value,
-        kind: FetchKind,
-    ) -> std::result::Result<Value, String> {
+    async fn tool_fetch(&self, args: Value, kind: FetchKind) -> std::result::Result<Value, String> {
         let url = arg_url(&args, "url")?;
-        let session_id = args.get("session_id").and_then(Value::as_str).map(str::to_string);
+        let session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let fetcher: &dyn Fetcher = match kind {
             FetchKind::Stealth => self.stealth.as_ref(),
             FetchKind::Dynamic => self.dynamic.as_ref(),
@@ -287,20 +295,13 @@ impl McpServer {
         Ok(page_response(&page))
     }
 
-    async fn tool_query(
-        &self,
-        args: Value,
-        kind: QueryKind,
-    ) -> std::result::Result<Value, String> {
+    async fn tool_query(&self, args: Value, kind: QueryKind) -> std::result::Result<Value, String> {
         let selector = args
             .get("selector")
             .and_then(Value::as_str)
             .ok_or("`selector` required")?
             .to_string();
-        let format = args
-            .get("format")
-            .and_then(Value::as_str)
-            .unwrap_or("text");
+        let format = args.get("format").and_then(Value::as_str).unwrap_or("text");
 
         let page = self.resolve_page(&args).await?;
         let tree = parse_tree(&page.body, charset_from(page.content_type.as_deref()));
@@ -505,7 +506,10 @@ struct RpcError {
 }
 
 fn rpc_invalid(msg: &str) -> RpcError {
-    RpcError { code: -32602, message: msg.to_string() }
+    RpcError {
+        code: -32602,
+        message: msg.to_string(),
+    }
 }
 
 fn tool_descriptors() -> Value {
@@ -685,7 +689,11 @@ mod tests {
         pages: StdMutex<StdMap<String, FetchedPage>>,
     }
     impl StubFetcher {
-        fn new() -> Self { Self { pages: StdMutex::new(StdMap::new()) } }
+        fn new() -> Self {
+            Self {
+                pages: StdMutex::new(StdMap::new()),
+            }
+        }
         fn insert(&self, url: &str, body: &str) {
             let parsed = Url::parse(url).unwrap();
             self.pages.lock().unwrap().insert(
@@ -771,26 +779,37 @@ mod tests {
         let stub = Arc::new(StubFetcher::new());
         let srv = server(stub);
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "open_session",
-                "arguments": { "id": "s1", "backend": "stealth" }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "open_session",
+                    "arguments": { "id": "s1", "backend": "stealth" }
+                }),
+            ))
             .await;
         assert_eq!(r["result"]["structuredContent"]["id"], "s1");
         assert_eq!(r["result"]["structuredContent"]["backend"], "stealth");
 
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "list_sessions", "arguments": {}
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "list_sessions", "arguments": {}
+                }),
+            ))
             .await;
-        let rows = r["result"]["structuredContent"]["sessions"].as_array().unwrap();
+        let rows = r["result"]["structuredContent"]["sessions"]
+            .as_array()
+            .unwrap();
         assert_eq!(rows.len(), 1);
 
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "close_session", "arguments": { "id": "s1" }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "close_session", "arguments": { "id": "s1" }
+                }),
+            ))
             .await;
         assert_eq!(r["result"]["structuredContent"]["closed"], true);
     }
@@ -801,24 +820,33 @@ mod tests {
         stub.insert("https://example.com/", HTML);
         let srv = server(stub);
 
-        srv.dispatch(rpc("tools/call", json!({
-            "name": "open_session", "arguments": { "id": "s", "backend": "http" }
-        })))
+        srv.dispatch(rpc(
+            "tools/call",
+            json!({
+                "name": "open_session", "arguments": { "id": "s", "backend": "http" }
+            }),
+        ))
         .await;
 
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "get",
-                "arguments": { "url": "https://example.com/", "session_id": "s" }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "get",
+                    "arguments": { "url": "https://example.com/", "session_id": "s" }
+                }),
+            ))
             .await;
         assert_eq!(r["result"]["structuredContent"]["status"], 200);
 
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "css_query",
-                "arguments": { "session_id": "s", "selector": "p.greet" }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "css_query",
+                    "arguments": { "session_id": "s", "selector": "p.greet" }
+                }),
+            ))
             .await;
         let m = &r["result"]["structuredContent"]["matches"];
         assert_eq!(m[0], "hello world");
@@ -830,14 +858,17 @@ mod tests {
         stub.insert("https://example.com/", HTML);
         let srv = server(stub);
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "xpath_query",
-                "arguments": {
-                    "url": "https://example.com/",
-                    "selector": "//h1",
-                    "format": "markdown"
-                }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "xpath_query",
+                    "arguments": {
+                        "url": "https://example.com/",
+                        "selector": "//h1",
+                        "format": "markdown"
+                    }
+                }),
+            ))
             .await;
         let m = r["result"]["structuredContent"]["matches"][0]
             .as_str()
@@ -852,14 +883,17 @@ mod tests {
         stub.insert("https://example.com/", HTML);
         let srv = server(stub);
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "css_query",
-                "arguments": {
-                    "url": "https://example.com/",
-                    "selector": "a#cta",
-                    "format": "html"
-                }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "css_query",
+                    "arguments": {
+                        "url": "https://example.com/",
+                        "selector": "a#cta",
+                        "format": "html"
+                    }
+                }),
+            ))
             .await;
         let m = r["result"]["structuredContent"]["matches"][0]
             .as_str()
@@ -880,7 +914,9 @@ mod tests {
                 "arguments": { "urls": ["https://a.test/", "https://b.test/", "https://missing.test/"] }
             })))
             .await;
-        let rows = r["result"]["structuredContent"]["results"].as_array().unwrap();
+        let rows = r["result"]["structuredContent"]["results"]
+            .as_array()
+            .unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0]["status"], 200);
         assert!(rows[2]["error"].is_string());
@@ -891,10 +927,13 @@ mod tests {
         let stub = Arc::new(StubFetcher::new());
         let srv = server(stub);
         let r = srv
-            .dispatch(rpc("tools/call", json!({
-                "name": "css_query",
-                "arguments": { "selector": "p" }
-            })))
+            .dispatch(rpc(
+                "tools/call",
+                json!({
+                    "name": "css_query",
+                    "arguments": { "selector": "p" }
+                }),
+            ))
             .await;
         assert_eq!(r["result"]["isError"], true);
     }

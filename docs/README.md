@@ -2,7 +2,7 @@
 
 > Stealth crawler with Chrome-aligned HTTP/TLS impersonation, render escalation, persistent queues and NDJSON events.
 
-This repository publishes the `crawlex` CLI, library and JavaScript wrapper. The working directory may still be named `minibrowser`, but the public package and binary surface is `crawlex`.
+This repository publishes the `crawlex` CLI, library and JavaScript wrapper. The working directory, public package and binary surface are all `crawlex`.
 
 ## Why crawlex
 

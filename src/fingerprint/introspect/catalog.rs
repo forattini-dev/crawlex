@@ -105,13 +105,7 @@ mod tests {
     fn diff_drifts_when_ja3_diverges() {
         let expected = lookup_by_name("Chrome131Stable").unwrap();
         let mut drift: Vec<String> = Vec::new();
-        let ok = diff_against(
-            Some("different_hash"),
-            None,
-            None,
-            &expected,
-            &mut drift,
-        );
+        let ok = diff_against(Some("different_hash"), None, None, &expected, &mut drift);
         assert!(!ok);
         assert_eq!(drift.len(), 1);
         assert!(drift[0].starts_with("ja3 drift"));

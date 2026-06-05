@@ -208,9 +208,14 @@ impl ImpersonateClient {
         Ok(())
     }
 
-    pub fn set_identity_bundle(&mut self, bundle: crate::identity::IdentityBundle) {
-        self.profile = bundle.profile();
+    pub fn set_identity_bundle(&mut self, bundle: crate::identity::IdentityBundle) -> Result<()> {
+        let profile = bundle.profile();
+        if profile != self.profile {
+            self.connector = tls::build_connector(profile)?;
+        }
+        self.profile = profile;
         self.identity_bundle = Arc::new(bundle);
+        Ok(())
     }
 
     pub fn identity_bundle(&self) -> &crate::identity::IdentityBundle {
@@ -1206,5 +1211,34 @@ mod wire_order_tests {
         assert_eq!(h.get("sec-fetch-dest").unwrap(), "empty");
         assert_eq!(h.get("sec-fetch-mode").unwrap(), "cors");
         assert!(h.get("sec-fetch-user").is_none());
+    }
+
+    #[test]
+    fn setting_identity_bundle_updates_tls_profile_os() {
+        let initial = Profile::for_chrome(149).build().unwrap();
+        let mut client = ImpersonateClient::new(initial).expect("client builds");
+        assert_eq!(
+            client.profile().parts().2,
+            crate::impersonate::profiles::BrowserOs::Linux
+        );
+
+        let windows_bundle = crate::identity::IdentityBundle::from_profile_with_overrides(
+            initial,
+            Some(1),
+            None,
+            None,
+            None,
+            42,
+        )
+        .expect("windows bundle builds");
+
+        client
+            .set_identity_bundle(windows_bundle)
+            .expect("connector rebuilds for windows profile");
+
+        assert_eq!(
+            client.profile().parts().2,
+            crate::impersonate::profiles::BrowserOs::Windows
+        );
     }
 }

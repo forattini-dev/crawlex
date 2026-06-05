@@ -6,9 +6,7 @@
 //! evidence. The richer signal (TTFB > N ms, network timings) flows
 //! in via Warm tier when B8 adds the per-host facts slot.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -70,11 +68,7 @@ mod tests {
     use http::HeaderMap;
     use url::Url;
 
-    fn ctx_with<'a>(
-        headers: &'a HeaderMap,
-        url: &'a Url,
-        body: &'a [u8],
-    ) -> TargetContext<'a> {
+    fn ctx_with<'a>(headers: &'a HeaderMap, url: &'a Url, body: &'a [u8]) -> TargetContext<'a> {
         TargetContext::http_only(url, 200, headers, body)
     }
 

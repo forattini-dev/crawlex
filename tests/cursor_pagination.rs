@@ -115,23 +115,15 @@ fn pagination_survives_simulated_restart() {
     // the same code path that a long-lived server hits across restarts.
     drop(page1);
 
-    let page2 = list_pages_with_status_paged_blocking(
-        &db,
-        Some(Status::Errored),
-        100,
-        Some(&cursor1),
-    )
-    .expect("page 2 after restart");
+    let page2 =
+        list_pages_with_status_paged_blocking(&db, Some(Status::Errored), 100, Some(&cursor1))
+            .expect("page 2 after restart");
     assert_eq!(page2.rows.len(), 100);
     let cursor2 = page2.next_cursor.clone().expect("expected next_cursor");
 
-    let page3 = list_pages_with_status_paged_blocking(
-        &db,
-        Some(Status::Errored),
-        100,
-        Some(&cursor2),
-    )
-    .expect("page 3 after restart");
+    let page3 =
+        list_pages_with_status_paged_blocking(&db, Some(Status::Errored), 100, Some(&cursor2))
+            .expect("page 3 after restart");
     assert_eq!(page3.rows.len(), 50);
     assert!(page3.next_cursor.is_none());
 
@@ -160,9 +152,8 @@ fn cursor_filter_must_match_request_filter() {
     let tok = page.next_cursor.expect("cursor");
     // Replay under a different filter → hard error (rowid ordering
     // matches, but the consumer would silently drop or repeat rows).
-    let err =
-        list_pages_with_status_paged_blocking(&db, Some(Status::Errored), 10, Some(&tok))
-            .unwrap_err();
+    let err = list_pages_with_status_paged_blocking(&db, Some(Status::Errored), 10, Some(&tok))
+        .unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("cursor minted"), "{msg}");
 }
@@ -177,4 +168,3 @@ fn unbounded_limit_returns_no_cursor() {
     assert_eq!(page.rows.len(), 50);
     assert!(page.next_cursor.is_none());
 }
-

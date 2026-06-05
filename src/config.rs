@@ -650,15 +650,45 @@ pub struct ProxyConfig {
     pub health_check_interval: Option<Duration>,
 }
 
+/// Normalize a RedDB connection target for Crawlex persistence.
+///
+/// Bare local paths become `file://...` embedded URIs. Documented RedDB
+/// transports (`red://`, `reds://`, `red+wss://`, plus HTTP/gRPC and
+/// embedded URI forms) are preserved verbatim so Crawlex can target local
+/// embedded stores or remote RedDB services without SQLite fallback.
+pub fn normalize_reddb_uri(target: impl AsRef<str>) -> String {
+    let raw = target.as_ref().trim();
+    if raw.is_empty() {
+        return "file://crawlex.redb".to_string();
+    }
+    let lower = raw.to_ascii_lowercase();
+    if lower.starts_with("red://")
+        || lower.starts_with("reds://")
+        || lower.starts_with("red+wss://")
+        || lower.starts_with("grpc://")
+        || lower.starts_with("grpcs://")
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || lower.starts_with("memory://")
+    {
+        raw.to_string()
+    } else {
+        format!("file://{raw}")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueueBackend {
     InMemory,
+    Reddb { uri: String },
     Sqlite { path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StorageBackend {
     Memory,
+    Reddb { uri: String },
     Sqlite { path: String },
     Filesystem { root: String },
 }
@@ -1019,9 +1049,7 @@ impl RejectResourceType {
             RejectResourceType::Image => &[
                 "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.ico",
             ],
-            RejectResourceType::Media => {
-                &["*.mp3", "*.mp4", "*.webm", "*.ogg", "*.m3u8", "*.mpd"]
-            }
+            RejectResourceType::Media => &["*.mp3", "*.mp4", "*.webm", "*.ogg", "*.m3u8", "*.mpd"],
             RejectResourceType::Font => &["*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot"],
             RejectResourceType::Stylesheet => &["*.css"],
         }
@@ -1268,7 +1296,10 @@ mod tests {
             Some(BrowserProvider::Stock)
         );
         assert_eq!(BrowserProvider::parse("CDP"), Some(BrowserProvider::Cdp));
-        assert_eq!(BrowserProvider::parse(" auto "), Some(BrowserProvider::Auto));
+        assert_eq!(
+            BrowserProvider::parse(" auto "),
+            Some(BrowserProvider::Auto)
+        );
         assert_eq!(BrowserProvider::parse("bogus_provider"), None);
         assert_eq!(BrowserProvider::parse(""), None);
     }
@@ -1340,11 +1371,10 @@ mod tests {
         assert!(!c.provider_fallback.enabled);
         assert!(c.provider_fallback.order.is_empty());
         assert!(!c.provider_fallback.is_active());
-        assert!(
-            c.provider_fallback
-                .chain_after(BrowserProvider::Cdp)
-                .is_empty()
-        );
+        assert!(c
+            .provider_fallback
+            .chain_after(BrowserProvider::Cdp)
+            .is_empty());
     }
 
     #[test]
@@ -1368,9 +1398,15 @@ mod tests {
             ],
         };
         // primary == Cdp -> skip Cdp entries entirely, keep Stock once.
-        assert_eq!(fb.chain_after(BrowserProvider::Cdp), vec![BrowserProvider::Stock]);
+        assert_eq!(
+            fb.chain_after(BrowserProvider::Cdp),
+            vec![BrowserProvider::Stock]
+        );
         // primary == Stock -> keep Cdp (first occurrence only).
-        assert_eq!(fb.chain_after(BrowserProvider::Stock), vec![BrowserProvider::Cdp]);
+        assert_eq!(
+            fb.chain_after(BrowserProvider::Stock),
+            vec![BrowserProvider::Cdp]
+        );
     }
 
     #[test]
@@ -1380,7 +1416,10 @@ mod tests {
             enabled: true,
             order: vec![BrowserProvider::Auto, BrowserProvider::Stock],
         };
-        assert_eq!(fb.chain_after(BrowserProvider::Cdp), vec![BrowserProvider::Stock]);
+        assert_eq!(
+            fb.chain_after(BrowserProvider::Cdp),
+            vec![BrowserProvider::Stock]
+        );
     }
 
     #[test]

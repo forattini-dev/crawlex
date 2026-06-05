@@ -8,9 +8,7 @@
 use scraper::{Html, Selector};
 use serde_json::Value;
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -81,7 +79,9 @@ fn collect_from_value(v: &Value, out: &mut Vec<Detection>) {
                     let brand = map
                         .get("brand")
                         .and_then(|b| {
-                            b.get("name").and_then(|x| x.as_str()).or_else(|| b.as_str())
+                            b.get("name")
+                                .and_then(|x| x.as_str())
+                                .or_else(|| b.as_str())
                         })
                         .unwrap_or("?");
                     out.push(Detection::from_single(
@@ -148,11 +148,15 @@ mod tests {
         let body = br#"<html><script type="application/ld+json">{"@graph":[{"@type":"Product","name":"A"},{"@type":"Organization","name":"O"}]}</script></html>"#;
         let dets = JsonLdSource::new().analyze(&ctx_with(&h, &u, body));
         assert_eq!(
-            dets.iter().filter(|d| d.category == Category::Ecommerce).count(),
+            dets.iter()
+                .filter(|d| d.category == Category::Ecommerce)
+                .count(),
             1
         );
         assert_eq!(
-            dets.iter().filter(|d| d.category == Category::Other).count(),
+            dets.iter()
+                .filter(|d| d.category == Category::Other)
+                .count(),
             1
         );
     }

@@ -305,8 +305,7 @@ async fn cmd_update_blocklist(args: args::UpdateBlocklistArgs) -> anyhow::Result
     use std::collections::BTreeSet;
 
     let body = if let Some(path) = &args.from_file {
-        std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("read {}: {}", path, e))?
+        std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("read {}: {}", path, e))?
     } else {
         fetch_blocklist_source(&args.url).await?
     };
@@ -1485,6 +1484,7 @@ async fn cmd_crawl(mut c: args::CrawlArgs) -> Result<()> {
     result
 }
 
+#[cfg(feature = "sqlite")]
 async fn cmd_pages_list(a: args::PagesListArgs) -> Result<()> {
     use std::str::FromStr;
     let filter = match a.status.as_deref() {
@@ -1512,6 +1512,14 @@ async fn cmd_pages_list(a: args::PagesListArgs) -> Result<()> {
         .map_err(|e| crate::Error::Config(format!("serialize pages list: {e}")))?;
     println!("{json}");
     Ok(())
+}
+
+#[cfg(not(feature = "sqlite"))]
+async fn cmd_pages_list(_a: args::PagesListArgs) -> Result<()> {
+    Err(crate::Error::Config(
+        "`pages list` currently requires the sqlite compatibility feature; RedDB page listing is not wired to this legacy command yet."
+            .into(),
+    ))
 }
 
 async fn cmd_resume(_r: args::ResumeArgs) -> Result<()> {
@@ -2028,9 +2036,16 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         "sqlite" => QueueBackend::Sqlite {
             path: c.queue_path.clone().unwrap_or_else(|| "queue.db".into()),
         },
+        "reddb" | "red" => QueueBackend::Reddb {
+            uri: crate::config::normalize_reddb_uri(
+                c.queue_path
+                    .clone()
+                    .unwrap_or_else(|| "crawlex-queue.rdb".into()),
+            ),
+        },
         "redis" => {
             return Err(crate::Error::Config(
-                "redis queue backend not implemented — use `sqlite` or `inmemory`".into(),
+                "redis queue backend not implemented — use `reddb`, `sqlite`, or `inmemory`".into(),
             ));
         }
         _ => QueueBackend::InMemory,
@@ -2039,6 +2054,13 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
     let storage_backend = match c.storage.as_deref().unwrap_or("memory") {
         "sqlite" => StorageBackend::Sqlite {
             path: c.storage_path.clone().unwrap_or_else(|| "crawl.db".into()),
+        },
+        "reddb" | "red" => StorageBackend::Reddb {
+            uri: crate::config::normalize_reddb_uri(
+                c.storage_path
+                    .clone()
+                    .unwrap_or_else(|| "crawlex-storage.rdb".into()),
+            ),
         },
         "filesystem" => StorageBackend::Filesystem {
             root: c.storage_path.clone().unwrap_or_else(|| "crawl-out".into()),
@@ -2073,243 +2095,245 @@ fn build_config_from_args(c: &args::CrawlArgs) -> Result<Config> {
         }
     }
 
-    let mut config = Config {
-        mismatch_policy: crate::config::MismatchPolicy::default(),
-        max_concurrent_render: c.max_concurrent_render.unwrap_or(0),
-        max_concurrent_http: c.max_concurrent_http.unwrap_or(500),
-        max_depth: c.max_depth,
-        same_host_only: c.same_host_only,
-        include_subdomains: c.include_subdomains,
-        // Recon target is not yet exposed as a CLI flag (Fase B wires it
-        // via `crawlex intel <target>` and `crawlex crawl --target …`);
-        // default None keeps the existing frontier behaviour.
-        target_domain: None,
-        infra_intel: crate::config::InfraIntelConfig::default(),
-        identity_preset: resolve_persona_preset(c.persona.as_deref(), c.identity_preset)?,
-        respect_robots_txt: c.respect_robots_txt.unwrap_or(true),
-        user_agent_profile: profile,
-        chrome_path: c.chrome_path.clone(),
-        chrome_flags: c.chrome_flag.clone(),
-        block_resources: c
-            .block_resource
-            .as_deref()
-            .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
-            .unwrap_or_default(),
-        crawl_purposes: {
-            use std::str::FromStr;
-            if c.crawl_purpose.is_empty() {
-                crate::robots::Purpose::all().to_vec()
-            } else {
-                let mut out = Vec::new();
-                for raw in &c.crawl_purpose {
+    let mut config =
+        Config {
+            mismatch_policy: crate::config::MismatchPolicy::default(),
+            max_concurrent_render: c.max_concurrent_render.unwrap_or(0),
+            max_concurrent_http: c.max_concurrent_http.unwrap_or(500),
+            max_depth: c.max_depth,
+            same_host_only: c.same_host_only,
+            include_subdomains: c.include_subdomains,
+            // Recon target is not yet exposed as a CLI flag (Fase B wires it
+            // via `crawlex intel <target>` and `crawlex crawl --target …`);
+            // default None keeps the existing frontier behaviour.
+            target_domain: None,
+            infra_intel: crate::config::InfraIntelConfig::default(),
+            identity_preset: resolve_persona_preset(c.persona.as_deref(), c.identity_preset)?,
+            respect_robots_txt: c.respect_robots_txt.unwrap_or(true),
+            user_agent_profile: profile,
+            chrome_path: c.chrome_path.clone(),
+            chrome_flags: c.chrome_flag.clone(),
+            block_resources: c
+                .block_resource
+                .as_deref()
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+                .unwrap_or_default(),
+            crawl_purposes: {
+                use std::str::FromStr;
+                if c.crawl_purpose.is_empty() {
+                    crate::robots::Purpose::all().to_vec()
+                } else {
+                    let mut out = Vec::new();
+                    for raw in &c.crawl_purpose {
+                        for piece in raw.split(',') {
+                            let piece = piece.trim();
+                            if piece.is_empty() {
+                                continue;
+                            }
+                            out.push(crate::robots::Purpose::from_str(piece).map_err(|e| {
+                                crate::Error::Config(format!("--crawl-purpose: {e}"))
+                            })?);
+                        }
+                    }
+                    out
+                }
+            },
+            reject_resource_types: {
+                use std::str::FromStr;
+                let mut out = Vec::with_capacity(c.reject_resource_type.len());
+                for raw in &c.reject_resource_type {
+                    // Allow `--reject-resource-type image,media` as a one-shot
+                    // shorthand on top of the repeatable flag.
                     for piece in raw.split(',') {
                         let piece = piece.trim();
                         if piece.is_empty() {
                             continue;
                         }
-                        out.push(
-                            crate::robots::Purpose::from_str(piece)
-                                .map_err(|e| crate::Error::Config(format!("--crawl-purpose: {e}")))?,
-                        );
+                        out.push(crate::config::RejectResourceType::from_str(piece).map_err(
+                            |e| crate::Error::Config(format!("--reject-resource-type: {e}")),
+                        )?);
                     }
                 }
                 out
-            }
-        },
-        reject_resource_types: {
-            use std::str::FromStr;
-            let mut out = Vec::with_capacity(c.reject_resource_type.len());
-            for raw in &c.reject_resource_type {
-                // Allow `--reject-resource-type image,media` as a one-shot
-                // shorthand on top of the repeatable flag.
-                for piece in raw.split(',') {
-                    let piece = piece.trim();
-                    if piece.is_empty() {
-                        continue;
-                    }
-                    out.push(crate::config::RejectResourceType::from_str(piece).map_err(
-                        |e| crate::Error::Config(format!("--reject-resource-type: {e}")),
-                    )?);
-                }
-            }
-            out
-        },
-        wait_strategy,
-        rate_per_host_rps: c.rate_per_host_rps,
-        retry_max: c.retry_max.unwrap_or(3),
-        retry_backoff: std::time::Duration::from_millis(c.retry_backoff_ms.unwrap_or(500)),
-        queue_backend,
-        storage_backend,
-        output: crate::config::OutputConfig {
-            html_dir: c.output_html_dir.clone(),
-            graph_path: c.output_graph.clone(),
-            metadata_path: c.output_metadata.clone(),
-            screenshot_dir: c.screenshot_dir.clone(),
-            screenshot: c.screenshot,
-            screenshot_mode: {
-                // Validate up-front so a bad value fails before we start
-                // Chrome. Only enforces when the backend exists; mini build
-                // rejects `--screenshot` entirely elsewhere.
-                if let Some(s) = c.screenshot_mode.as_deref() {
-                    #[cfg(feature = "cdp-backend")]
-                    {
-                        crate::render::pool::parse_screenshot_mode(s)
-                            .map_err(crate::Error::Config)?;
-                    }
-                    Some(s.to_string())
-                } else {
-                    None
-                }
             },
-        },
-        proxy: ProxyConfig {
-            proxies,
-            proxy_file: c.proxy_file.clone(),
-            strategy,
-            sticky_per_host: c.proxy_sticky_per_host,
-            health_check_interval: c
-                .proxy_health_check_interval_secs
-                .map(std::time::Duration::from_secs),
-        },
-        locale: c.locale.clone(),
-        timezone: c.timezone.clone(),
-        metrics_prometheus_port: c.metrics_prometheus_port,
-        hook_scripts: c.hook_script.clone(),
-        discovery_filter_regex: c.on_discovery_filter_regex.clone(),
-        follow_pages_only: !c.follow_all_assets,
-        crtsh_enabled: c.crtsh,
-        robots_paths_enabled: !c.no_robots_paths,
-        well_known_enabled: !c.no_well_known,
-        pwa_enabled: !c.no_pwa,
-        wayback_enabled: c.wayback,
-        favicon_enabled: !c.no_favicon,
-        dns_enabled: c.dns,
-        collect_net_timings: c.metrics || c.metrics_net,
-        collect_web_vitals: c.metrics || c.metrics_vitals,
-        collect_peer_cert: c.peer_cert,
-        rdap_enabled: c.rdap,
-        cookies_enabled: !c.no_cookies,
-        render_session_scope: c
-            .render_session_scope
-            .as_deref()
-            .map(parse_render_session_scope)
-            .transpose()?
-            .unwrap_or(RenderSessionScope::RegistrableDomain),
-        follow_redirects: !c.no_follow_redirects,
-        max_redirects: c.max_redirects.unwrap_or(10),
-        profile_autodetect: true,
-        user_agent_override: c.user_agent_override.clone(),
-        auto_fetch_chromium: !c.no_fetch_chromium,
-        action_policy: parse_action_policy(c.action_policy.as_deref())?,
-        challenge_mode: c
-            .challenge_mode
-            .as_deref()
-            .map(parse_challenge_mode)
-            .transpose()?
-            .unwrap_or(ChallengeMode::SolverReady),
-        collect_runtime_routes: !c.no_spa_observer,
-        collect_network_endpoints: !c.no_spa_observer,
-        collect_indexeddb: c.collect_indexeddb || c.collect_spa_state,
-        collect_cache_storage: c.collect_cache_storage || c.collect_spa_state,
-        collect_manifest: !c.no_spa_observer,
-        collect_service_workers: !c.no_spa_observer,
-        max_browsers: c.max_browsers.unwrap_or(4),
-        max_pages_per_context: c.max_pages_per_context.unwrap_or(4),
-        render_budgets: crate::scheduler::BudgetLimits {
-            max_per_host: c.max_per_host_inflight.unwrap_or(4),
-            max_per_origin: c.max_per_origin_inflight.unwrap_or(2),
-            max_per_proxy: c.max_per_proxy_inflight.unwrap_or(8),
-            max_per_session: c.max_per_session_inflight.unwrap_or(1),
-            ..Default::default()
-        },
-        session_ttl_secs: c
-            .session_ttl_secs
-            .unwrap_or(crate::identity::DEFAULT_SESSION_TTL_SECS),
-        drop_session_on_block: !c.keep_blocked_sessions,
-        session_scope_auto: c.session_scope_auto,
-        #[cfg(feature = "cdp-backend")]
-        motion_profile: match c.motion_profile.as_deref() {
-            Some(s) => crate::render::motion::MotionProfile::from_str_ci(s).ok_or_else(|| {
-                crate::Error::Config(format!(
-                    "invalid --motion-profile `{s}`: want fast|balanced|human|paranoid"
-                ))
-            })?,
-            None => crate::render::motion::MotionProfile::default(),
-        },
-        #[cfg(feature = "cdp-backend")]
-        actions: None,
-        #[cfg(feature = "cdp-backend")]
-        script_spec: match (c.script_spec.as_deref(), c.actions_file.as_deref()) {
-            (Some(p), None) => Some(load_script_spec(p)?),
-            (None, Some(p)) => Some(load_actions_file_as_script_spec(p)?),
-            (None, None) => None,
-            (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
-        },
-        // Warmup stays opt-in from the CLI path — operators enable it via
-        // config file. Keeping the default here avoids a new CLI surface
-        // until we see demand for one.
-        warmup: crate::config::WarmupPolicy::default(),
-        // Reading dwell is off unless `--reading-dwell` is passed — we
-        // don't want a silent ~seconds-per-page throughput hit for users
-        // upgrading past this commit.
-        reading_dwell: if c.reading_dwell {
-            Some(crate::config::ReadingDwellConfig {
-                enabled: true,
-                wpm: c.reading_dwell_wpm,
-                jitter_ms: c.reading_dwell_jitter_ms,
+            wait_strategy,
+            rate_per_host_rps: c.rate_per_host_rps,
+            retry_max: c.retry_max.unwrap_or(3),
+            retry_backoff: std::time::Duration::from_millis(c.retry_backoff_ms.unwrap_or(500)),
+            queue_backend,
+            storage_backend,
+            output: crate::config::OutputConfig {
+                html_dir: c.output_html_dir.clone(),
+                graph_path: c.output_graph.clone(),
+                metadata_path: c.output_metadata.clone(),
+                screenshot_dir: c.screenshot_dir.clone(),
+                screenshot: c.screenshot,
+                screenshot_mode: {
+                    // Validate up-front so a bad value fails before we start
+                    // Chrome. Only enforces when the backend exists; mini build
+                    // rejects `--screenshot` entirely elsewhere.
+                    if let Some(s) = c.screenshot_mode.as_deref() {
+                        #[cfg(feature = "cdp-backend")]
+                        {
+                            crate::render::pool::parse_screenshot_mode(s)
+                                .map_err(crate::Error::Config)?;
+                        }
+                        Some(s.to_string())
+                    } else {
+                        None
+                    }
+                },
+            },
+            proxy: ProxyConfig {
+                proxies,
+                proxy_file: c.proxy_file.clone(),
+                strategy,
+                sticky_per_host: c.proxy_sticky_per_host,
+                health_check_interval: c
+                    .proxy_health_check_interval_secs
+                    .map(std::time::Duration::from_secs),
+            },
+            locale: c.locale.clone(),
+            timezone: c.timezone.clone(),
+            metrics_prometheus_port: c.metrics_prometheus_port,
+            hook_scripts: c.hook_script.clone(),
+            discovery_filter_regex: c.on_discovery_filter_regex.clone(),
+            follow_pages_only: !c.follow_all_assets,
+            crtsh_enabled: c.crtsh,
+            robots_paths_enabled: !c.no_robots_paths,
+            well_known_enabled: !c.no_well_known,
+            pwa_enabled: !c.no_pwa,
+            wayback_enabled: c.wayback,
+            favicon_enabled: !c.no_favicon,
+            dns_enabled: c.dns,
+            collect_net_timings: c.metrics || c.metrics_net,
+            collect_web_vitals: c.metrics || c.metrics_vitals,
+            collect_peer_cert: c.peer_cert,
+            rdap_enabled: c.rdap,
+            cookies_enabled: !c.no_cookies,
+            render_session_scope: c
+                .render_session_scope
+                .as_deref()
+                .map(parse_render_session_scope)
+                .transpose()?
+                .unwrap_or(RenderSessionScope::RegistrableDomain),
+            follow_redirects: !c.no_follow_redirects,
+            max_redirects: c.max_redirects.unwrap_or(10),
+            profile_autodetect: true,
+            user_agent_override: c.user_agent_override.clone(),
+            auto_fetch_chromium: !c.no_fetch_chromium,
+            action_policy: parse_action_policy(c.action_policy.as_deref())?,
+            challenge_mode: c
+                .challenge_mode
+                .as_deref()
+                .map(parse_challenge_mode)
+                .transpose()?
+                .unwrap_or(ChallengeMode::SolverReady),
+            collect_runtime_routes: !c.no_spa_observer,
+            collect_network_endpoints: !c.no_spa_observer,
+            collect_indexeddb: c.collect_indexeddb || c.collect_spa_state,
+            collect_cache_storage: c.collect_cache_storage || c.collect_spa_state,
+            collect_manifest: !c.no_spa_observer,
+            collect_service_workers: !c.no_spa_observer,
+            max_browsers: c.max_browsers.unwrap_or(4),
+            max_pages_per_context: c.max_pages_per_context.unwrap_or(4),
+            render_budgets: crate::scheduler::BudgetLimits {
+                max_per_host: c.max_per_host_inflight.unwrap_or(4),
+                max_per_origin: c.max_per_origin_inflight.unwrap_or(2),
+                max_per_proxy: c.max_per_proxy_inflight.unwrap_or(8),
+                max_per_session: c.max_per_session_inflight.unwrap_or(1),
                 ..Default::default()
-            })
-        } else {
-            None
-        },
-        http_limits: crate::config::HttpLimits::default(),
-        content_store: crate::config::ContentStoreConfig::default(),
-        cache_validation: CacheValidationConfig {
-            enabled: c.cache_validate,
-            max_age_secs: c.cache_max_age_secs,
-            modified_since: c.modified_since,
-        },
-        prefetch: c.prefetch,
-        crawl_scoring: CrawlScoringConfig {
-            enabled: c.best_first || !c.score_keyword.is_empty(),
-            keywords: c.score_keyword.clone(),
-            ..Default::default()
-        },
-        fallback_fetch: c.fallback_fetch_command.as_ref().map(|cmd| {
-            let mut command = Vec::with_capacity(1 + c.fallback_fetch_arg.len());
-            command.push(cmd.clone());
-            command.extend(c.fallback_fetch_arg.clone());
-            FallbackFetchConfig {
-                command,
-                timeout_ms: c.fallback_fetch_timeout_ms.unwrap_or(60_000),
-                max_output_bytes: c.fallback_fetch_max_bytes.unwrap_or(32 * 1024 * 1024),
-            }
-        }),
-        external_cdp_url: resolve_external_cdp_url(c.external_cdp_url.as_deref()),
-        gpu_policy: c
-            .gpu_policy
-            .as_deref()
-            .map(parse_gpu_policy)
-            .transpose()?
-            .unwrap_or_default(),
-        dom_capture: DomCaptureConfig {
-            flatten_shadow_dom: c.flatten_shadow_dom,
-            remove_overlays: c.remove_overlays,
-            remove_consent_popups: c.remove_consent_popups,
-        },
-        render_mode: parse_render_mode(c.render_mode.as_deref())?,
-        browser_provider: resolve_browser_provider(c.browser_provider.as_deref())?,
-        external_cdp_session_mode: resolve_external_cdp_session_mode(
-            c.external_cdp_session_mode.as_deref(),
-        )?,
-        provider_fallback: resolve_provider_fallback(
-            c.provider_fallback_enable,
-            c.provider_fallback_order.as_deref(),
-        )?,
-        job_max_runtime_secs: c.job_max_runtime_secs,
-        result_retention_secs: c.result_retention_secs,
-        max_pages: c.max_pages,
-    };
+            },
+            session_ttl_secs: c
+                .session_ttl_secs
+                .unwrap_or(crate::identity::DEFAULT_SESSION_TTL_SECS),
+            drop_session_on_block: !c.keep_blocked_sessions,
+            session_scope_auto: c.session_scope_auto,
+            #[cfg(feature = "cdp-backend")]
+            motion_profile: match c.motion_profile.as_deref() {
+                Some(s) => {
+                    crate::render::motion::MotionProfile::from_str_ci(s).ok_or_else(|| {
+                        crate::Error::Config(format!(
+                            "invalid --motion-profile `{s}`: want fast|balanced|human|paranoid"
+                        ))
+                    })?
+                }
+                None => crate::render::motion::MotionProfile::default(),
+            },
+            #[cfg(feature = "cdp-backend")]
+            actions: None,
+            #[cfg(feature = "cdp-backend")]
+            script_spec: match (c.script_spec.as_deref(), c.actions_file.as_deref()) {
+                (Some(p), None) => Some(load_script_spec(p)?),
+                (None, Some(p)) => Some(load_actions_file_as_script_spec(p)?),
+                (None, None) => None,
+                (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
+            },
+            // Warmup stays opt-in from the CLI path — operators enable it via
+            // config file. Keeping the default here avoids a new CLI surface
+            // until we see demand for one.
+            warmup: crate::config::WarmupPolicy::default(),
+            // Reading dwell is off unless `--reading-dwell` is passed — we
+            // don't want a silent ~seconds-per-page throughput hit for users
+            // upgrading past this commit.
+            reading_dwell: if c.reading_dwell {
+                Some(crate::config::ReadingDwellConfig {
+                    enabled: true,
+                    wpm: c.reading_dwell_wpm,
+                    jitter_ms: c.reading_dwell_jitter_ms,
+                    ..Default::default()
+                })
+            } else {
+                None
+            },
+            http_limits: crate::config::HttpLimits::default(),
+            content_store: crate::config::ContentStoreConfig::default(),
+            cache_validation: CacheValidationConfig {
+                enabled: c.cache_validate,
+                max_age_secs: c.cache_max_age_secs,
+                modified_since: c.modified_since,
+            },
+            prefetch: c.prefetch,
+            crawl_scoring: CrawlScoringConfig {
+                enabled: c.best_first || !c.score_keyword.is_empty(),
+                keywords: c.score_keyword.clone(),
+                ..Default::default()
+            },
+            fallback_fetch: c.fallback_fetch_command.as_ref().map(|cmd| {
+                let mut command = Vec::with_capacity(1 + c.fallback_fetch_arg.len());
+                command.push(cmd.clone());
+                command.extend(c.fallback_fetch_arg.clone());
+                FallbackFetchConfig {
+                    command,
+                    timeout_ms: c.fallback_fetch_timeout_ms.unwrap_or(60_000),
+                    max_output_bytes: c.fallback_fetch_max_bytes.unwrap_or(32 * 1024 * 1024),
+                }
+            }),
+            external_cdp_url: resolve_external_cdp_url(c.external_cdp_url.as_deref()),
+            gpu_policy: c
+                .gpu_policy
+                .as_deref()
+                .map(parse_gpu_policy)
+                .transpose()?
+                .unwrap_or_default(),
+            dom_capture: DomCaptureConfig {
+                flatten_shadow_dom: c.flatten_shadow_dom,
+                remove_overlays: c.remove_overlays,
+                remove_consent_popups: c.remove_consent_popups,
+            },
+            render_mode: parse_render_mode(c.render_mode.as_deref())?,
+            browser_provider: resolve_browser_provider(c.browser_provider.as_deref())?,
+            external_cdp_session_mode: resolve_external_cdp_session_mode(
+                c.external_cdp_session_mode.as_deref(),
+            )?,
+            provider_fallback: resolve_provider_fallback(
+                c.provider_fallback_enable,
+                c.provider_fallback_order.as_deref(),
+            )?,
+            job_max_runtime_secs: c.job_max_runtime_secs,
+            result_retention_secs: c.result_retention_secs,
+            max_pages: c.max_pages,
+        };
     validate_browser_provider(&mut config)?;
     Ok(config)
 }
@@ -2376,7 +2400,8 @@ fn validate_browser_provider(config: &mut Config) -> Result<()> {
             {
                 return Err(crate::Error::Config(
                     "--browser-provider cdp requires --external-cdp-url or \
-                     CRAWLEX_EXTERNAL_CDP_URL".into(),
+                     CRAWLEX_EXTERNAL_CDP_URL"
+                        .into(),
                 ));
             }
         }
@@ -2456,7 +2481,12 @@ fn resolve_provider_fallback(
     let enabled = enable_flag
         || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE")
             .ok()
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
     let order_raw_owned;
     let order_raw = match order_flag {
@@ -2558,9 +2588,7 @@ fn apply_crawl_cli_overrides(config: &mut Config, c: &args::CrawlArgs) -> Result
         // Treat flag-only mutations as additive: if the operator only
         // toggled enable, keep the config-file order; if they only
         // supplied an order, keep the config-file enable flag.
-        if c.provider_fallback_enable
-            || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE").is_ok()
-        {
+        if c.provider_fallback_enable || std::env::var("CRAWLEX_PROVIDER_FALLBACK_ENABLE").is_ok() {
             config.provider_fallback.enabled = resolved.enabled;
         }
         if c.provider_fallback_order.is_some()

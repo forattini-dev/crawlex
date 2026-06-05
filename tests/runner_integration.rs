@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use crawlex::impersonate::{ImpersonateClient, Profile};
 use crawlex::queue::{FetchMethod, Job};
-use crawlex::runner::{Fetcher, JobError, JobRunner, RetryDecision, RetryReason, SessionContext, SpoofFetcher};
+use crawlex::runner::{
+    Fetcher, JobError, JobRunner, RetryDecision, RetryReason, SessionContext, SpoofFetcher,
+};
 use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -59,7 +61,11 @@ async fn healthy_200_with_links_yields_fetch_success_no_retry() {
     let success = outcome.result.expect("success branch");
     assert_eq!(success.status, 200);
     assert!(success.body_bytes > 0);
-    assert!(success.links.len() >= 2, "expected ≥2 links, got {:?}", success.links);
+    assert!(
+        success.links.len() >= 2,
+        "expected ≥2 links, got {:?}",
+        success.links
+    );
     assert!(success.signals.is_empty());
     assert!(matches!(outcome.retry, RetryDecision::None));
     assert!(outcome.timings.fetch_ms.is_some());

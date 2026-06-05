@@ -15,7 +15,10 @@ use std::sync::Arc;
 use http::HeaderMap;
 
 use crate::queue::Job;
-use crate::runner::{ChallengeDetector, ChallengeSignal, Fetcher, RetryDecision, RetryReason, SessionContext, SpoofFetcher};
+use crate::runner::{
+    ChallengeDetector, ChallengeSignal, Fetcher, RetryDecision, RetryReason, SessionContext,
+    SpoofFetcher,
+};
 use crate::Result;
 
 #[cfg(feature = "cdp-backend")]
@@ -94,12 +97,7 @@ impl AutoFetcher {
     /// Inspect the spoof response and decide whether to escalate. Pure
     /// of any fetching — given a status/headers/body, the answer is
     /// deterministic. Tests target this directly.
-    pub fn decide_after_spoof(
-        &self,
-        status: u16,
-        headers: &HeaderMap,
-        body: &[u8],
-    ) -> AutoOutcome {
+    pub fn decide_after_spoof(&self, status: u16, headers: &HeaderMap, body: &[u8]) -> AutoOutcome {
         match self.detector.detect(status, headers, body) {
             Some(signal) => AutoOutcome::EscalateToRender { signal },
             None => AutoOutcome::UseSpoofResponse,

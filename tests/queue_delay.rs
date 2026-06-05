@@ -80,3 +80,29 @@ async fn sqlite_requeue_after_preserves_same_canonical_delayed_job() {
     assert_eq!(q.pending_count().await.unwrap(), 1);
     assert!(q.next_ready_delay().await.unwrap().is_some());
 }
+
+#[cfg(feature = "reddb-embedded")]
+#[tokio::test]
+async fn reddb_embedded_queue_persists_jobs_across_reopen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("crawlex.redb");
+
+    {
+        let q = crawlex::queue::reddb::ReddbQueue::open(&path)
+            .await
+            .unwrap();
+        q.push(job(42, "reddb-persisted")).await.unwrap();
+        assert_eq!(q.pending_count().await.unwrap(), 1);
+    }
+
+    let q = crawlex::queue::reddb::ReddbQueue::open(&path)
+        .await
+        .unwrap();
+    let got = q
+        .pop()
+        .await
+        .unwrap()
+        .expect("persisted job should survive reopen");
+    assert_eq!(got.id, 42);
+    assert_eq!(got.url.as_str(), "https://example.com/reddb-persisted");
+}

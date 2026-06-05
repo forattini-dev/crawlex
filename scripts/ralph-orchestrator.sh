@@ -6,8 +6,8 @@
 # (one per line, space-separated) and loops until all are merged.
 set -euo pipefail
 
-TASK_DIR=/tmp/claude-1000/-home-cyber-Work-FF-minibrowser/be8f907e-edab-449b-86d2-c898361ac8c7/tasks
-HELPER=/home/cyber/Work/FF/minibrowser/scripts/merge-ralph-worktree.sh
+TASK_DIR=/tmp/claude-1000/-home-cyber-Work-FF-crawlex/be8f907e-edab-449b-86d2-c898361ac8c7/tasks
+HELPER=/home/cyber/Work/FF/crawlex/scripts/merge-ralph-worktree.sh
 
 declare -A PENDING
 while read -r tid branch ghn wt; do

@@ -6,9 +6,7 @@
 
 use scraper::{Html, Selector};
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -102,8 +100,7 @@ mod tests {
     fn detects_wordpress_generator() {
         let h = HeaderMap::new();
         let u: Url = "https://example.com/".parse().unwrap();
-        let body =
-            b"<html><head><meta name=\"generator\" content=\"WordPress 6.5\"></head></html>";
+        let body = b"<html><head><meta name=\"generator\" content=\"WordPress 6.5\"></head></html>";
         let dets = MetaTagSource::new().analyze(&ctx_with(&h, &u, body));
         let wp = dets.iter().find(|d| d.vendor == Vendor::Wordpress).unwrap();
         assert_eq!(wp.version.as_deref(), Some("6.5"));

@@ -37,7 +37,11 @@ async fn main() {
         .fetch_with(&search_url, SecFetchDest::Document, None, false)
         .await
         .expect("search fetch");
-    println!("  status={} bytes={}", search_resp.status, search_resp.body.len());
+    println!(
+        "  status={} bytes={}",
+        search_resp.status,
+        search_resp.body.len()
+    );
 
     let search_html = String::from_utf8_lossy(&search_resp.body).into_owned();
     let product_urls = extract_product_urls(&search_html);
@@ -160,15 +164,15 @@ fn parse_product(html: &str, url: String) -> Product {
                     price = v
                         .pointer("/offers/price")
                         .and_then(|x| {
-                            x.as_str().map(|s| s.to_string()).or_else(|| {
-                                x.as_f64().map(|n| format!("{:.2}", n))
-                            })
+                            x.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| x.as_f64().map(|n| format!("{:.2}", n)))
                         })
                         .or_else(|| {
                             v.pointer("/offers/0/price").and_then(|x| {
-                                x.as_str().map(|s| s.to_string()).or_else(|| {
-                                    x.as_f64().map(|n| format!("{:.2}", n))
-                                })
+                                x.as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| x.as_f64().map(|n| format!("{:.2}", n)))
                             })
                         });
                 }
@@ -197,7 +201,11 @@ fn parse_product(html: &str, url: String) -> Product {
     // JSON-LD `brand.name` is often the active ingredient on Drogasil
     // (e.g. "Amoxicilina"), not the lab. Drop those values and let the
     // structured-HTML path below win.
-    if laboratory.as_deref().map(looks_like_drug_name).unwrap_or(false) {
+    if laboratory
+        .as_deref()
+        .map(looks_like_drug_name)
+        .unwrap_or(false)
+    {
         laboratory = None;
     }
 

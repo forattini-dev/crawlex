@@ -21,9 +21,9 @@ pub mod extract;
 pub mod fetcher;
 pub use challenge::{ChallengeDetector, ChallengeSignal};
 pub use extract::Extractor;
-pub use fetcher::{AutoFetcher, AutoOutcome, FetchOutput, Fetcher, SpoofFetcher};
 #[cfg(feature = "cdp-backend")]
 pub use fetcher::RenderFetcher;
+pub use fetcher::{AutoFetcher, AutoOutcome, FetchOutput, Fetcher, SpoofFetcher};
 
 /// Outcome of running one Job. Returned by value; the `Crawler`
 /// post-processes storage, frontier feed, retry decision, and session
@@ -216,13 +216,18 @@ impl JobRunner {
                 let status = output.status();
                 let body_bytes = output.body().len();
                 let final_url_owned = output.final_url().clone();
-                self.emit(crate::events::EventKind::FetchCompleted, Some(&final_url_owned));
+                self.emit(
+                    crate::events::EventKind::FetchCompleted,
+                    Some(&final_url_owned),
+                );
                 let headers_cow = output.headers();
                 // B14: Fingerprinter Hot tier is the new antibot
                 // detection path. Falls back to legacy ChallengeDetector
                 // when no Fingerprinter is injected so existing unit
                 // tests keep working.
-                let signals: Vec<crate::fingerprint::Detection> = if let Some(fp) = &self.fingerprinter {
+                let signals: Vec<crate::fingerprint::Detection> = if let Some(fp) =
+                    &self.fingerprinter
+                {
                     let ctx = crate::fingerprint::TargetContext::http_only(
                         &final_url_owned,
                         status,
@@ -243,11 +248,7 @@ impl JobRunner {
                             vec![Detection::from_single(
                                 Category::Antibot,
                                 vendor,
-                                Evidence::new(
-                                    EvidenceSource::BodyMarker,
-                                    "challenge signature",
-                                    7,
-                                ),
+                                Evidence::new(EvidenceSource::BodyMarker, "challenge signature", 7),
                             )]
                         })
                         .unwrap_or_default()
@@ -328,8 +329,8 @@ fn classify_error(err: crate::Error) -> (JobError, RetryDecision) {
     match err {
         Error::Io(io) => {
             let msg = io.to_string();
-            let is_timeout = matches!(io.kind(), std::io::ErrorKind::TimedOut)
-                || msg.contains("timed out");
+            let is_timeout =
+                matches!(io.kind(), std::io::ErrorKind::TimedOut) || msg.contains("timed out");
             if is_timeout {
                 (
                     JobError::Timeout,
@@ -445,7 +446,10 @@ mod tests {
         let fake = FakeFetcher::ok(200, html_headers(), body, url.clone());
         let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
         let outcome = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         let success = outcome.result.expect("ok branch");
         assert_eq!(success.status, 200);
@@ -466,7 +470,10 @@ mod tests {
         let fake = FakeFetcher::ok(403, html_headers(), body, url);
         let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
         let outcome = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         let success = outcome.result.expect("ok branch");
         assert_eq!(success.status, 403);
@@ -482,11 +489,17 @@ mod tests {
 
     #[tokio::test]
     async fn run_io_timeout_maps_to_retry_timeout() {
-        let err = crate::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"));
+        let err = crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out",
+        ));
         let fake = FakeFetcher::err(err);
         let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
         let outcome = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         assert!(outcome.result.is_none());
         assert!(matches!(outcome.error, Some(JobError::Timeout)));
@@ -508,12 +521,12 @@ mod tests {
         let fake = FakeFetcher::err(err);
         let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
         let outcome = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
-        assert!(matches!(
-            outcome.error,
-            Some(JobError::RenderFailed(_))
-        ));
+        assert!(matches!(outcome.error, Some(JobError::RenderFailed(_))));
         assert!(matches!(outcome.retry, RetryDecision::None));
     }
 
@@ -527,7 +540,10 @@ mod tests {
         let fake = FakeFetcher::err(err);
         let runner = JobRunner::new(fake as Arc<dyn Fetcher>);
         let outcome = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         assert!(matches!(
             outcome.error,
@@ -547,10 +563,13 @@ mod tests {
         let body = b"<html><body>ok</body></html>";
         let fake = FakeFetcher::ok(200, html_headers(), body, url.clone());
         let sink = std::sync::Arc::new(crate::events::MemorySink::create());
-        let runner =
-            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>)
+            .with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
         let _ = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
         assert_eq!(
@@ -568,10 +587,13 @@ mod tests {
         let url: Url = "https://example.com/".parse().unwrap();
         let fake = FakeFetcher::ok(403, html_headers(), b"cf-chl-bypass", url);
         let sink = std::sync::Arc::new(crate::events::MemorySink::create());
-        let runner =
-            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>)
+            .with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
         let _ = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
         assert_eq!(
@@ -587,13 +609,19 @@ mod tests {
 
     #[tokio::test]
     async fn run_emits_job_failed_on_error() {
-        let err = crate::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"));
+        let err = crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        ));
         let fake = FakeFetcher::err(err);
         let sink = std::sync::Arc::new(crate::events::MemorySink::create());
-        let runner =
-            JobRunner::new(fake as Arc<dyn Fetcher>).with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
+        let runner = JobRunner::new(fake as Arc<dyn Fetcher>)
+            .with_events(sink.clone() as Arc<dyn crate::events::EventSink>);
         let _ = runner
-            .run(&dummy_job("https://example.com/"), &SessionContext::default())
+            .run(
+                &dummy_job("https://example.com/"),
+                &SessionContext::default(),
+            )
             .await;
         let kinds: Vec<_> = sink.take().into_iter().map(|e| e.event).collect();
         assert_eq!(

@@ -8,9 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 pub mod catalog;
+pub mod h2_fp;
 pub mod ja3;
 pub mod ja4;
-pub mod h2_fp;
 pub mod oracle;
 
 pub use catalog::{diff_against, lookup_by_name};

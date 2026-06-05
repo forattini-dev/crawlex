@@ -5,9 +5,7 @@
 //! report surfaces transport-tier facts in the `other` slot until
 //! B8 adds the dedicated `HttpFingerprint` single slot.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -31,11 +29,7 @@ impl Source for AltSvcSource {
     }
 
     fn analyze(&self, ctx: &TargetContext<'_>) -> Vec<Detection> {
-        let Some(value) = ctx
-            .headers
-            .get("alt-svc")
-            .and_then(|v| v.to_str().ok())
-        else {
+        let Some(value) = ctx.headers.get("alt-svc").and_then(|v| v.to_str().ok()) else {
             return Vec::new();
         };
         let lower = value.to_ascii_lowercase();
@@ -83,9 +77,7 @@ mod tests {
         h.insert("alt-svc", r#"h3=":443"; ma=93600"#.parse().unwrap());
         let u: Url = "https://example.com/".parse().unwrap();
         let dets = AltSvcSource::new().analyze(&build_ctx(&h, &u));
-        assert!(dets
-            .iter()
-            .any(|d| d.evidence[0].detail.contains("HTTP/3")));
+        assert!(dets.iter().any(|d| d.evidence[0].detail.contains("HTTP/3")));
     }
 
     #[test]

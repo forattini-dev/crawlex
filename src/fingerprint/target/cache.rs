@@ -91,9 +91,7 @@ impl Default for WarmCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fingerprint::detection::{
-        Category, Detection, Evidence, EvidenceSource, Vendor,
-    };
+    use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Vendor};
 
     fn one_detection() -> Vec<Detection> {
         vec![Detection::from_single(

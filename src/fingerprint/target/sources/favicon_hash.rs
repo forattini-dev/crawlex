@@ -6,9 +6,7 @@
 //! defaults. Engine fetches `/favicon.ico` per host; this source
 //! classifies via the helper below.
 
-use crate::fingerprint::detection::{
-    Category, Detection, Evidence, EvidenceSource, Tier, Vendor,
-};
+use crate::fingerprint::detection::{Category, Detection, Evidence, EvidenceSource, Tier, Vendor};
 use crate::fingerprint::target::TargetContext;
 
 use super::Source;
@@ -30,9 +28,17 @@ impl FaviconHashSource {
         // illustrate the pattern; production will dwarf this list.
         let table: &[(&str, Category, Vendor)] = &[
             // WordPress default favicon (md5 of wp-includes default)
-            ("d41d8cd98f00b204e9800998ecf8427e", Category::Cms, Vendor::Wordpress),
+            (
+                "d41d8cd98f00b204e9800998ecf8427e",
+                Category::Cms,
+                Vendor::Wordpress,
+            ),
             // Magento default favicon (illustrative md5)
-            ("18a3f60f9cae9f8a5b62e76eef94e9c4", Category::Ecommerce, Vendor::Magento),
+            (
+                "18a3f60f9cae9f8a5b62e76eef94e9c4",
+                Category::Ecommerce,
+                Vendor::Magento,
+            ),
         ];
         let mut out: Vec<Detection> = Vec::new();
         for (hash, cat, vendor) in table {
