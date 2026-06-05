@@ -111,13 +111,26 @@ fn exact_match(browser: Browser, major: u16, os: BrowserOs) -> Option<&'static T
 /// | E6  | 132-141   | MLKEM768 (Kyber removed; PQ final)                       |
 /// | E7  | 142+      | ECH wider deployment                                     |
 ///
-/// Until our Phase 3 captures land for E4-E7, all those eras fall back to
-/// `chrome_116.0.5845.180_win10` — but the era label is preserved in the
-/// warn so operators know *which* era's approximation is in play.
+/// Until our Phase 3 captures land for E4-E7, desktop OSes fall back to
+/// `chrome_116.0.5845.180_win10`, while Android falls back to the captured
+/// Pixel 6 Chrome 99 Android profile. Preserve OS family before era recency:
+/// an older mobile ClientHello is less incoherent than a desktop Win10 one for
+/// Android UA/UA-CH personas.
 fn chrome_era_representative(major: u16, os: BrowserOs) -> Option<&'static str> {
-    // Use the closest captured Win10 representative for each era. Linux/Mac
+    if matches!(os, BrowserOs::Android) {
+        let name = "chrome_99.0.4844.73_android12-pixel6";
+        tracing::trace!(
+            target: "crawlex::impersonate::catalog::era",
+            major,
+            era = "android-captured",
+            representative = name,
+            "chrome android era fallback active — capture this version to collapse"
+        );
+        return Some(name);
+    }
+
+    // Use the closest captured desktop representative for each era. Linux/Mac
     // fingerprints land here once we capture them in Phase 3.
-    let _ = os;
     let (name, era_label) = match major {
         0..=98 => ("chrome_98.0.4758.102_win10", "E1"),
         99 => ("chrome_99.0.4844.51_win10", "E1"),
@@ -204,6 +217,16 @@ mod tests {
         let fp = era_for(Browser::Chrome, 149, BrowserOs::Linux).expect("era resolves");
         // Until we capture Chrome 149 directly, era fallback uses chrome_116.
         assert!(fp.name.starts_with("chrome_"), "name = {}", fp.name);
+    }
+
+    #[test]
+    fn chrome_android_era_fallback_stays_android() {
+        let fp = era_for(Browser::Chrome, 150, BrowserOs::Android).expect("era resolves");
+        assert!(
+            fp.name.contains("android"),
+            "android persona must not fall back to desktop TLS profile: {}",
+            fp.name
+        );
     }
 
     #[test]
