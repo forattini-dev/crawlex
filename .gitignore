@@ -5,3 +5,14 @@ PLAN.md
 skills-lock.json
 .dispatch/
 .agents/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime/crawl output
+/data/
+/.hermes/
+/.venv*/
+**/__pycache__/
