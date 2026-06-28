@@ -1272,6 +1272,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3482,7 +3492,9 @@ dependencies = [
 
 [[package]]
 name = "reddb-io-client"
-version = "1.10.0"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04eb01b92ee639b77961baac4438170c67509aa086179ff5db28d3d80c4a795c"
 dependencies = [
  "reddb-io-client-connector",
  "reddb-io-grpc-proto",
@@ -3496,15 +3508,46 @@ dependencies = [
 
 [[package]]
 name = "reddb-io-client-connector"
-version = "1.10.0"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1012835646632af9ad8b57a9e5adc76b0220d8416628958f8df6e61128d5fbb0"
 dependencies = [
  "reddb-io-grpc-proto",
+ "reddb-io-wire",
  "tonic",
 ]
 
 [[package]]
+name = "reddb-io-crypto"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3e816fc252d62b92a4b4403dc51d2efb0c4a7ab1022afc74c9bd3f2a33c275a"
+dependencies = [
+ "aes-gcm",
+]
+
+[[package]]
+name = "reddb-io-file"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32b7f77cd0323dfce1f0fd24d984e5822b97ec62530c83de53f4a0a84ce33966"
+dependencies = [
+ "blake3",
+ "crc32fast",
+ "fs2",
+ "hex",
+ "lz4_flex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "zstd",
+]
+
+[[package]]
 name = "reddb-io-grpc-proto"
-version = "1.10.0"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83dfd45a95e5e0e11f0df7e8ec6e1d4c2faebbef63777c952ed1108e090db76e"
 dependencies = [
  "prost",
  "reddb-io-wire",
@@ -3515,8 +3558,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reddb-io-rql"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f026650ba64623a5171bf0a996bf95e36f1edc8156d67222cf4d66d3c7ad90a1"
+dependencies = [
+ "reddb-io-types",
+]
+
+[[package]]
 name = "reddb-io-server"
-version = "1.10.0"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0022cff45a1d494e49aee4a4f9ca25bc41a2021c11c41ebeab4b5112d3bb7e6a"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -3525,6 +3579,7 @@ dependencies = [
  "crc32fast",
  "crossbeam-queue",
  "ed25519-dalek",
+ "flate2",
  "fs2",
  "hex",
  "hmac 0.13.0",
@@ -3542,7 +3597,11 @@ dependencies = [
  "rayon",
  "rcgen",
  "reddb-io-client-connector",
+ "reddb-io-crypto",
+ "reddb-io-file",
  "reddb-io-grpc-proto",
+ "reddb-io-rql",
+ "reddb-io-types",
  "reddb-io-wire",
  "regex",
  "roaring",
@@ -3553,6 +3612,7 @@ dependencies = [
  "sha2 0.11.0",
  "snap",
  "strsim",
+ "tar",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -3562,14 +3622,29 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ureq",
+ "webpki-roots",
  "x509-parser",
  "zstd",
 ]
 
 [[package]]
-name = "reddb-io-wire"
-version = "1.10.0"
+name = "reddb-io-types"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "370f8fdef0b899379315be1daf545a4c667ab99798381ed921df45f2827b0a74"
 dependencies = [
+ "zstd",
+]
+
+[[package]]
+name = "reddb-io-wire"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1b46aa56c11bfe8829187c75d6e4cc2399fc2f335cb089bb5346c0dfb7f974b"
+dependencies = [
+ "reddb-io-types",
+ "serde_json",
+ "tokio",
  "url",
  "zstd",
 ]
@@ -4449,6 +4524,17 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
 
 [[package]]
 name = "tempfile"
@@ -5740,6 +5826,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]
