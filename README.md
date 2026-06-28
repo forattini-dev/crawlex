@@ -61,7 +61,7 @@ cargo install crawlex
 
 ## 🆕 Last 24h highlights
 
-- `1.0.5` release line focuses on RedDB-only persistence, cleaner release gates and false-positive fixes after the crawler/storage refactor.
+- `1.0.6` release line focuses on canonical URL identity, lossless frontier admission and cache/queue alias deduplication.
 - JS/TS hooks now run through the SDK bridge, so `defineHooks()` can drive the same lifecycle decisions as embedded Rust hooks.
 - NDJSON events now carry richer artifacts, Web Vitals, per-fetch timings, crawl-attempt telemetry and crawl-resolution summaries.
 - The supported release artifact is the full `crawlex` binary with RedDB persistence enabled.
