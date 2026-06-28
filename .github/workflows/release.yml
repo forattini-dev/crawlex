@@ -202,6 +202,11 @@ jobs:
         with:
           go-version: 'stable'
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -537,6 +542,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install build deps
         run: |
