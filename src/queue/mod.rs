@@ -32,9 +32,19 @@ pub struct Job {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueInsert {
+    Inserted,
+    Duplicate,
+}
+
 #[async_trait::async_trait]
 pub trait JobQueue: Send + Sync {
     async fn push(&self, job: Job) -> Result<()>;
+    async fn push_unique(&self, job: Job, _canonical_key: String) -> Result<QueueInsert> {
+        self.push(job).await?;
+        Ok(QueueInsert::Inserted)
+    }
     async fn push_after(&self, job: Job, delay: Duration) -> Result<()> {
         if delay.is_zero() {
             self.push(job).await

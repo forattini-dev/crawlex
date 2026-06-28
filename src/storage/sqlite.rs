@@ -29,6 +29,7 @@ use crate::{Error, Result};
 enum Op {
     SaveRaw {
         url: String,
+        canonical_url: String,
         final_url: String,
         status: i64,
         headers_json: String,
@@ -45,6 +46,7 @@ enum Op {
     },
     SaveRendered {
         url: String,
+        canonical_url: String,
         final_url: String,
         status: i64,
         bytes: i64,
@@ -569,6 +571,7 @@ impl SqliteStorage {
             r#"
             CREATE TABLE IF NOT EXISTS pages (
                 url TEXT PRIMARY KEY,
+                canonical_url TEXT NOT NULL DEFAULT '',
                 final_url TEXT NOT NULL,
                 status INTEGER NOT NULL,
                 bytes INTEGER NOT NULL,
@@ -594,6 +597,7 @@ impl SqliteStorage {
                 saved_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             );
             CREATE INDEX IF NOT EXISTS idx_pages_kind ON pages(kind);
+            CREATE INDEX IF NOT EXISTS idx_pages_canonical_url ON pages(canonical_url);
             CREATE TABLE IF NOT EXISTS content_blobs (
                 sha256 TEXT PRIMARY KEY,
                 kind TEXT NOT NULL,
@@ -1005,6 +1009,7 @@ impl SqliteStorage {
             "ALTER TABLE pages ADD COLUMN body_mime TEXT",
             "ALTER TABLE pages ADD COLUMN html_mime TEXT",
             "ALTER TABLE pages ADD COLUMN body_truncated INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE pages ADD COLUMN canonical_url TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE pages ADD COLUMN etag TEXT",
             "ALTER TABLE pages ADD COLUMN last_modified TEXT",
             "ALTER TABLE pages ADD COLUMN head_fingerprint TEXT",
@@ -1022,6 +1027,11 @@ impl SqliteStorage {
         ] {
             let _ = conn.execute(sql, []);
         }
+        migrate_page_canonical_urls(&conn);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pages_canonical_url ON pages(canonical_url)",
+            [],
+        );
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pages_crawl_status ON pages(crawl_status)",
             [],
@@ -1321,10 +1331,43 @@ impl SqliteStorage {
     }
 }
 
+fn migrate_page_canonical_urls(conn: &Connection) {
+    let mut updates: Vec<(String, String)> = Vec::new();
+    {
+        let Ok(mut stmt) =
+            conn.prepare("SELECT url FROM pages WHERE canonical_url IS NULL OR canonical_url = ''")
+        else {
+            return;
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+            return;
+        };
+        for url_s in rows.flatten() {
+            let canonical = Url::parse(&url_s)
+                .map(|url| crate::url_util::canonicalize(&url))
+                .unwrap_or_else(|_| url_s.clone());
+            updates.push((url_s, canonical));
+        }
+    }
+    let Ok(tx) = conn.unchecked_transaction() else {
+        return;
+    };
+    {
+        let Ok(mut stmt) = tx.prepare("UPDATE pages SET canonical_url=?2 WHERE url=?1") else {
+            return;
+        };
+        for (url, canonical) in updates {
+            let _ = stmt.execute(params![url, canonical]);
+        }
+    }
+    let _ = tx.commit();
+}
+
 fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
     match op {
         Op::SaveRaw {
             url,
+            canonical_url,
             final_url,
             status,
             headers_json,
@@ -1352,11 +1395,12 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                 )?;
             }
             tx.execute(
-                "INSERT INTO pages (url, final_url, status, bytes, rendered, sha256, body,
+                "INSERT INTO pages (url, canonical_url, final_url, status, bytes, rendered, sha256, body,
                         body_sha256, body_blob_path, body_size, body_mime, body_truncated,
                         headers_json, etag, last_modified, head_fingerprint, kind)
-                 VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?)
+                 VALUES (?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON CONFLICT(url) DO UPDATE SET
+                    canonical_url=excluded.canonical_url,
                     final_url=excluded.final_url, status=excluded.status,
                     bytes=excluded.bytes, sha256=excluded.sha256, body=excluded.body,
                     body_sha256=excluded.body_sha256,
@@ -1372,6 +1416,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     saved_at=strftime('%s','now')",
                 params![
                     url,
+                    canonical_url,
                     final_url,
                     status,
                     body_size,
@@ -1392,6 +1437,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
         }
         Op::SaveRendered {
             url,
+            canonical_url,
             final_url,
             status,
             bytes,
@@ -1416,10 +1462,11 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                 )?;
             }
             tx.execute(
-                "INSERT INTO pages (url, final_url, status, bytes, rendered, sha256, html,
+                "INSERT INTO pages (url, canonical_url, final_url, status, bytes, rendered, sha256, html,
                         html_sha256, html_blob_path, html_size, html_mime, head_fingerprint, kind)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON CONFLICT(url) DO UPDATE SET
+                    canonical_url=excluded.canonical_url,
                     final_url=excluded.final_url, status=excluded.status, bytes=excluded.bytes,
                     rendered=excluded.rendered, sha256=excluded.sha256, html=excluded.html,
                     html_sha256=excluded.html_sha256,
@@ -1430,6 +1477,7 @@ fn apply_op(tx: &rusqlite::Transaction<'_>, op: Op) -> rusqlite::Result<()> {
                     kind=excluded.kind, saved_at=strftime('%s','now')",
                 params![
                     url,
+                    canonical_url,
                     final_url,
                     status,
                     bytes,
@@ -2117,6 +2165,7 @@ impl ArtifactStorage for SqliteStorage {
             .to_string();
         self.send(Op::SaveRaw {
             url: url.to_string(),
+            canonical_url: crate::url_util::canonicalize(url),
             final_url: final_url.to_string(),
             status: status as i64,
             headers_json: hdrs,
@@ -2156,6 +2205,7 @@ impl ArtifactStorage for SqliteStorage {
         let head_fingerprint = crate::cache_validator::compute_head_fingerprint(html_post_js);
         self.send(Op::SaveRendered {
             url: url.to_string(),
+            canonical_url: crate::url_util::canonicalize(url),
             final_url: meta.final_url.to_string(),
             status: meta.status as i64,
             bytes: meta.bytes as i64,
@@ -2351,6 +2401,7 @@ impl ArtifactStorage for SqliteStorage {
     async fn page_cache_metadata(&self, url: &Url) -> Result<Option<PageCacheMetadata>> {
         let path = self.path.clone();
         let url_s = url.to_string();
+        let canonical_url = crate::url_util::canonicalize(url);
         tokio::task::spawn_blocking(move || -> Result<Option<PageCacheMetadata>> {
             let conn = rusqlite::Connection::open_with_flags(
                 &path,
@@ -2361,8 +2412,10 @@ impl ArtifactStorage for SqliteStorage {
                 .query_row(
                     "SELECT url, final_url, status, etag, last_modified, head_fingerprint, saved_at
                      FROM pages
-                     WHERE url = ?1",
-                    params![url_s],
+                     WHERE canonical_url = ?1 OR url = ?2
+                     ORDER BY CASE WHEN canonical_url = ?1 THEN 0 ELSE 1 END, saved_at DESC
+                     LIMIT 1",
+                    params![canonical_url, url_s],
                     |r| {
                         Ok((
                             r.get::<_, String>(0)?,

@@ -247,6 +247,10 @@ impl ArtifactStorage for ReddbStorage {
                 RAW_TABLE,
                 &JsonValue::object([
                     ("url", JsonValue::string(url.to_string())),
+                    (
+                        "canonical_url",
+                        JsonValue::string(crate::url_util::canonicalize(url)),
+                    ),
                     ("final_url", JsonValue::string(final_url.to_string())),
                     ("status", JsonValue::number(status)),
                     ("headers_json", JsonValue::string(headers_to_json(headers))),
@@ -278,6 +282,10 @@ impl ArtifactStorage for ReddbStorage {
                 RENDERED_TABLE,
                 &JsonValue::object([
                     ("url", JsonValue::string(url.to_string())),
+                    (
+                        "canonical_url",
+                        JsonValue::string(crate::url_util::canonicalize(url)),
+                    ),
                     ("final_url", JsonValue::string(meta.final_url.to_string())),
                     ("status", JsonValue::number(meta.status)),
                     ("bytes", JsonValue::number(meta.bytes as f64)),
@@ -401,8 +409,10 @@ impl ArtifactStorage for ReddbStorage {
     }
 
     async fn page_cache_metadata(&self, url: &Url) -> Result<Option<PageCacheMetadata>> {
+        let canonical_url = crate::url_util::canonicalize(url);
         let sql = format!(
-            "SELECT url, final_url, status, headers, saved_at_unix FROM {RAW_COLLECTION} WHERE url = {}",
+            "SELECT * FROM {RAW_COLLECTION} WHERE canonical_url = {} OR url = {} LIMIT 1",
+            sql_string_literal(&canonical_url),
             sql_string_literal(url.as_str())
         );
         let result = self
@@ -416,7 +426,9 @@ impl ArtifactStorage for ReddbStorage {
         let final_url = row_string(&row, "final_url")
             .and_then(|s| Url::parse(&s).ok())
             .unwrap_or_else(|| url.clone());
-        let headers_json = row_string(&row, "headers").unwrap_or_else(|| "{}".to_string());
+        let headers_json = row_string(&row, "headers_json")
+            .or_else(|| row_string(&row, "headers"))
+            .unwrap_or_else(|| "{}".to_string());
         let headers: serde_json::Value = serde_json::from_str(&headers_json).unwrap_or_default();
         let header = |name: &str| -> Option<String> {
             headers

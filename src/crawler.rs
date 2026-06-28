@@ -13,12 +13,13 @@ use crate::discovery::{
     DiscoveryGraph,
 };
 use crate::events::{Event, EventKind, EventSink, NullSink};
+use crate::frontier::dedupe::DedupeProbe;
 use crate::frontier::{Dedupe, HostRateLimiter};
 use crate::hooks::{HookContext, HookDecision, HookEvent, HookRegistry};
 use crate::impersonate::ImpersonateClient;
 use crate::policy::{Decision, DecisionReason, PolicyProfile, PolicyThresholds};
 use crate::proxy::{ProxyOutcome, ProxyRouter, RouterThresholds};
-use crate::queue::{FetchMethod, InMemoryQueue, Job, JobQueue};
+use crate::queue::{FetchMethod, InMemoryQueue, Job, JobQueue, QueueInsert};
 #[cfg(feature = "cdp-backend")]
 use crate::render::{RenderPool, Renderer};
 use crate::robots::RobotsCache;
@@ -716,6 +717,36 @@ impl Crawler {
         score.saturating_sub(path_depth.saturating_mul(cfg.path_depth_penalty))
     }
 
+    async fn admit_frontier_url(
+        &self,
+        url: Url,
+        depth: u32,
+        priority: i32,
+        method: FetchMethod,
+    ) -> Result<QueueInsert> {
+        let probe = self.dedupe.probe_url(&url);
+        if matches!(probe, DedupeProbe::RecentDuplicate(_)) {
+            return Ok(QueueInsert::Duplicate);
+        }
+        let identity = probe.identity().clone();
+        let job = Job {
+            id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            crawl_id: 0,
+            url,
+            depth,
+            priority,
+            method,
+            attempts: 0,
+            last_error: None,
+        };
+        let inserted = self
+            .queue
+            .push_unique(job, identity.canonical_key.clone())
+            .await?;
+        self.dedupe.mark_seen(&identity);
+        Ok(inserted)
+    }
+
     async fn enqueue_discovered_url(
         &self,
         from: &Url,
@@ -726,23 +757,16 @@ impl Crawler {
         if !self.should_follow(from, &to) {
             return Ok(());
         }
-        if !self.dedupe.insert_url_set(&to) {
-            return Ok(());
-        }
-        self.graph.add_edge(from, &to);
-        let _ = self.storage.save_edge(from, &to).await;
         let priority = self.priority_for_discovered(from, &to, depth);
-        let job = Job {
-            id: self.next_id.fetch_add(1, Ordering::Relaxed),
-            crawl_id: 0,
-            url: to,
-            depth,
-            priority,
-            method,
-            attempts: 0,
-            last_error: None,
-        };
-        self.queue.push(job).await
+        if matches!(
+            self.admit_frontier_url(to.clone(), depth, priority, method)
+                .await?,
+            QueueInsert::Inserted
+        ) {
+            self.graph.add_edge(from, &to);
+            let _ = self.storage.save_edge(from, &to).await;
+        }
+        Ok(())
     }
 
     async fn execute_fallback_fetch(
@@ -1046,20 +1070,7 @@ impl Crawler {
         }
         for u in urls {
             let parsed = Url::parse(u.as_ref())?;
-            if !self.dedupe.insert_url_set(&parsed) {
-                continue;
-            }
-            let job = Job {
-                id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                crawl_id: 0,
-                url: parsed,
-                depth: 0,
-                priority: 0,
-                method,
-                attempts: 0,
-                last_error: None,
-            };
-            self.queue.push(job).await?;
+            self.admit_frontier_url(parsed, 0, 0, method).await?;
         }
         // Seed crt.sh subdomains (idempotent per registrable due to dedupe).
         if self.config.crtsh_enabled {
@@ -3376,19 +3387,9 @@ impl Crawler {
                         continue;
                     }
                     if let Ok(u) = Url::parse(&format!("https://{rel}/")) {
-                        if self.dedupe.insert_url_set(&u) {
-                            let job = Job {
-                                id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                                crawl_id: 0,
-                                url: u,
-                                depth: 0,
-                                priority: 2,
-                                method: FetchMethod::HttpSpoof,
-                                attempts: 0,
-                                last_error: None,
-                            };
-                            let _ = self.queue.push(job).await;
-                        }
+                        let _ = self
+                            .admit_frontier_url(u, 0, 2, FetchMethod::HttpSpoof)
+                            .await;
                     }
                 }
             }
@@ -3460,19 +3461,9 @@ impl Crawler {
                                     continue;
                                 }
                                 if let Ok(u) = Url::parse(&format!("https://{target}/")) {
-                                    if self.dedupe.insert_url_set(&u) {
-                                        let job = Job {
-                                            id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                                            crawl_id: 0,
-                                            url: u,
-                                            depth: 0,
-                                            priority: 2,
-                                            method: FetchMethod::HttpSpoof,
-                                            attempts: 0,
-                                            last_error: None,
-                                        };
-                                        let _ = self.queue.push(job).await;
-                                    }
+                                    let _ = self
+                                        .admit_frontier_url(u, 0, 2, FetchMethod::HttpSpoof)
+                                        .await;
                                 }
                             }
                         }
@@ -3498,19 +3489,9 @@ impl Crawler {
                                 continue;
                             }
                             if let Ok(u) = Url::parse(&format!("https://{ns}/")) {
-                                if self.dedupe.insert_url_set(&u) {
-                                    let job = Job {
-                                        id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                                        crawl_id: 0,
-                                        url: u,
-                                        depth: 0,
-                                        priority: 1,
-                                        method: FetchMethod::HttpSpoof,
-                                        attempts: 0,
-                                        last_error: None,
-                                    };
-                                    let _ = self.queue.push(job).await;
-                                }
+                                let _ = self
+                                    .admit_frontier_url(u, 0, 1, FetchMethod::HttpSpoof)
+                                    .await;
                             }
                         }
                     }
@@ -3551,19 +3532,9 @@ impl Crawler {
                     if !self.should_follow(&origin_root, &u) {
                         continue;
                     }
-                    if self.dedupe.insert_url_set(&u) {
-                        let job = Job {
-                            id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                            crawl_id: 0,
-                            url: u,
-                            depth: 1,
-                            priority: 3,
-                            method: FetchMethod::HttpSpoof,
-                            attempts: 0,
-                            last_error: None,
-                        };
-                        let _ = self.queue.push(job).await;
-                    }
+                    let _ = self
+                        .admit_frontier_url(u, 1, 3, FetchMethod::HttpSpoof)
+                        .await;
                 }
             }
         }
@@ -3592,19 +3563,9 @@ impl Crawler {
                     if !self.should_follow(&origin_root, &u) {
                         continue;
                     }
-                    if self.dedupe.insert_url_set(&u) {
-                        let job = Job {
-                            id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                            crawl_id: 0,
-                            url: u,
-                            depth: 1,
-                            priority: 2,
-                            method: FetchMethod::HttpSpoof,
-                            attempts: 0,
-                            last_error: None,
-                        };
-                        let _ = self.queue.push(job).await;
-                    }
+                    let _ = self
+                        .admit_frontier_url(u, 1, 2, FetchMethod::HttpSpoof)
+                        .await;
                 }
             }
         }
@@ -3618,19 +3579,9 @@ impl Crawler {
                         if !self.should_follow(&origin_root, &u) {
                             continue;
                         }
-                        if self.dedupe.insert_url_set(&u) {
-                            let job = Job {
-                                id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                                crawl_id: 0,
-                                url: u,
-                                depth: 1,
-                                priority: -2,
-                                method: FetchMethod::HttpSpoof,
-                                attempts: 0,
-                                last_error: None,
-                            };
-                            let _ = self.queue.push(job).await;
-                        }
+                        let _ = self
+                            .admit_frontier_url(u, 1, -2, FetchMethod::HttpSpoof)
+                            .await;
                     }
                 }
             }
@@ -3647,20 +3598,9 @@ impl Crawler {
             if !self.should_follow(origin, &u) {
                 continue;
             }
-            if !self.dedupe.insert_url_set(&u) {
-                continue;
-            }
-            let job = Job {
-                id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                crawl_id: 0,
-                url: u,
-                depth: 1,
-                priority: 5, // Prioritize — these paths are often high-value.
-                method: FetchMethod::HttpSpoof,
-                attempts: 0,
-                last_error: None,
-            };
-            let _ = self.queue.push(job).await;
+            let _ = self
+                .admit_frontier_url(u, 1, 5, FetchMethod::HttpSpoof)
+                .await;
         }
     }
 
@@ -3682,20 +3622,9 @@ impl Crawler {
             let Ok(u) = Url::parse(&format!("{scheme}://{sub}/")) else {
                 continue;
             };
-            if !self.dedupe.insert_url_set(&u) {
-                continue;
-            }
-            let job = Job {
-                id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                crawl_id: 0,
-                url: u,
-                depth: 0,
-                priority: 3,
-                method: FetchMethod::HttpSpoof,
-                attempts: 0,
-                last_error: None,
-            };
-            let _ = self.queue.push(job).await;
+            let _ = self
+                .admit_frontier_url(u, 0, 3, FetchMethod::HttpSpoof)
+                .await;
         }
         Ok(())
     }
@@ -3715,20 +3644,9 @@ impl Crawler {
                 if !self.should_follow(origin, &u) {
                     continue;
                 }
-                if !self.dedupe.insert_url_set(&u) {
-                    continue;
-                }
-                let job = Job {
-                    id: self.next_id.fetch_add(1, Ordering::Relaxed),
-                    crawl_id: 0,
-                    url: u,
-                    depth: 1,
-                    priority: -1,
-                    method: FetchMethod::HttpSpoof,
-                    attempts: 0,
-                    last_error: None,
-                };
-                let _ = self.queue.push(job).await;
+                let _ = self
+                    .admit_frontier_url(u, 1, -1, FetchMethod::HttpSpoof)
+                    .await;
             }
         }
     }

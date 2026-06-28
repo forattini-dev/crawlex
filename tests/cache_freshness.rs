@@ -67,3 +67,34 @@ async fn defaults_do_not_short_circuit() {
     let outcome = evaluate_freshness(&meta, None, None);
     assert_eq!(outcome.status, CacheValidationStatus::Unknown);
 }
+
+#[tokio::test]
+async fn sqlite_cache_metadata_lookup_uses_canonical_url_aliases() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("freshness-alias.db");
+    let sq = crawlex::storage::sqlite::SqliteStorage::open(&db_path).unwrap();
+    let saved = Url::parse("https://www.example.test/store/index.html?utm_source=x&a=1").unwrap();
+    let lookup = Url::parse("http://example.test/store/?a=1&utm_medium=y").unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert("etag", "\"alias-v1\"".parse().unwrap());
+    sq.save_raw_response(
+        &saved,
+        &saved,
+        200,
+        &headers,
+        &Bytes::from_static(b"<html><head><title>A</title></head><body></body></html>"),
+        false,
+    )
+    .await
+    .unwrap();
+
+    for _ in 0..50 {
+        if let Some(m) = sq.page_cache_metadata(&lookup).await.unwrap() {
+            assert_eq!(m.etag.as_deref(), Some("\"alias-v1\""));
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("canonical alias cache metadata was not visible");
+}

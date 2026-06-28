@@ -1,9 +1,9 @@
 use parking_lot::Mutex;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use crate::queue::{Job, JobQueue};
+use crate::queue::{Job, JobQueue, QueueInsert};
 use crate::Result;
 
 struct Prioritized {
@@ -40,6 +40,7 @@ impl PartialOrd for Prioritized {
 pub struct InMemoryQueue {
     heap: Mutex<BinaryHeap<Prioritized>>,
     in_flight: Mutex<HashMap<u64, Job>>,
+    seen: Mutex<HashSet<String>>,
 }
 
 impl InMemoryQueue {
@@ -52,6 +53,17 @@ impl InMemoryQueue {
 impl JobQueue for InMemoryQueue {
     async fn push(&self, job: Job) -> Result<()> {
         self.push_after(job, Duration::ZERO).await
+    }
+
+    async fn push_unique(&self, job: Job, canonical_key: String) -> Result<QueueInsert> {
+        {
+            let mut seen = self.seen.lock();
+            if !seen.insert(canonical_key) {
+                return Ok(QueueInsert::Duplicate);
+            }
+        }
+        self.push(job).await?;
+        Ok(QueueInsert::Inserted)
     }
 
     async fn push_after(&self, job: Job, delay: Duration) -> Result<()> {

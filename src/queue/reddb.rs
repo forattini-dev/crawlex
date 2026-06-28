@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 use url::Url;
 
-use crate::queue::{FetchMethod, Job, JobQueue};
+use crate::queue::{FetchMethod, Job, JobQueue, QueueInsert};
 use crate::{Error, Result};
 
 const FRONTIER_QUEUE: &str = "crawlex_frontier";
@@ -14,6 +14,7 @@ const DLQ_QUEUE: &str = "crawlex_dead_letter";
 const WORKERS_GROUP: &str = "workers";
 const CONSUMER: &str = "crawlex";
 const JOB_TABLE: &str = "crawlex_frontier_jobs";
+const SEEN_KV: &str = "crawlex_frontier_seen";
 
 pub struct ReddbQueue {
     db: Reddb,
@@ -92,8 +93,9 @@ async fn bootstrap_queue_schema(db: &Reddb) -> Result<()> {
     // Table/Document/KV/Graph/Timeseries/METRIC bootstrap establishes the
     // RedDB-native persistence envelope used by storage in follow-up slices.
     let statements = [
-        format!("CREATE TABLE IF NOT EXISTS {JOB_TABLE}"),
-        format!("CREATE QUEUE IF NOT EXISTS {DLQ_QUEUE}"),
+            format!("CREATE TABLE IF NOT EXISTS {JOB_TABLE}"),
+            format!("CREATE KV IF NOT EXISTS {SEEN_KV}"),
+            format!("CREATE QUEUE IF NOT EXISTS {DLQ_QUEUE}"),
         format!("CREATE QUEUE IF NOT EXISTS {FRONTIER_QUEUE} WORK WITH DLQ {DLQ_QUEUE} MAX_ATTEMPTS 3 RETRY_DELAY 1s"),
         format!("QUEUE GROUP CREATE {FRONTIER_QUEUE} {WORKERS_GROUP}"),
         "CREATE TABLE IF NOT EXISTS crawlex_pages".to_string(),
@@ -118,6 +120,16 @@ async fn bootstrap_queue_schema(db: &Reddb) -> Result<()> {
 impl JobQueue for ReddbQueue {
     async fn push(&self, job: Job) -> Result<()> {
         self.push_with_delay(job, Duration::ZERO).await
+    }
+
+    async fn push_unique(&self, job: Job, canonical_key: String) -> Result<QueueInsert> {
+        let kv = self.db.kv_collection(SEEN_KV);
+        if kv.get(&canonical_key).await.ok().flatten().is_some() {
+            return Ok(QueueInsert::Duplicate);
+        }
+        self.push_with_delay(job, Duration::ZERO).await?;
+        let _ = kv.set(&canonical_key, JsonValue::bool(true)).await;
+        Ok(QueueInsert::Inserted)
     }
 
     async fn push_after(&self, job: Job, delay: Duration) -> Result<()> {

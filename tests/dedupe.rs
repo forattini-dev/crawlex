@@ -6,7 +6,9 @@
 //!   * second insert of the same key returns false (dupe);
 //!   * fp rate stays close to configured when exercised at scale.
 
+use crawlex::frontier::dedupe::DedupeProbe;
 use crawlex::frontier::Dedupe;
+use url::Url;
 
 #[test]
 fn first_insert_is_new_second_is_dupe() {
@@ -65,4 +67,20 @@ fn false_positive_rate_stays_reasonable() {
         rate,
         fps
     );
+}
+
+#[test]
+fn url_probe_uses_exact_canonical_identity_before_bloom_answer_is_terminal() {
+    let d = Dedupe::new(1024, 0.01);
+    let first = Url::parse("https://www.example.com/store/index.html?utm_source=x&a=1").unwrap();
+    let alias = Url::parse("http://example.com/store/?a=1&utm_medium=y").unwrap();
+
+    let probe = d.probe_url(&first);
+    assert!(matches!(probe, DedupeProbe::New(_)));
+    d.mark_seen(probe.identity());
+
+    assert!(matches!(
+        d.probe_url(&alias),
+        DedupeProbe::RecentDuplicate(_)
+    ));
 }

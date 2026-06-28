@@ -1,25 +1,44 @@
 //! Frontier dedup — bloom filter + bounded exact recent set.
 //!
-//! The exact recent set is a cheap hit-or-miss cache; the bloom is the
-//! canonical answer. `exact_recent` gets wiped when it grows past
-//! `exact_cap`; the bloom stays and catches re-inserts.
+//! The exact recent set is the only in-memory duplicate answer that can skip
+//! enqueue immediately. The bloom is a fast L1 hint: a hit returns
+//! [`DedupeProbe::MaybeSeen`] and must be confirmed by an exact admission
+//! layer before dropping a URL, because a bloom false positive would otherwise
+//! lose coverage.
 //!
-//! `insert_url_set` is the intended public entry point for URL dedup: it
-//! normalizes a URL and inserts **every canonical permutation**
-//! (`{http,https}×{www.,bare}×{/,/index.html,/index.htm,/index.php,∅}`) so we never
-//! re-crawl the same page under a different URL spelling. Ported
-//! conceptually from 's `generateURLPermutations`
-//! (`apps/api/src/lib/crawl-redis.ts`).
+//! `insert_url_set` is the legacy convenience entry point for callers that do
+//! not have a queue admission layer. Frontier admission should use
+//! [`Dedupe::probe_url`] and confirm non-recent hits against the exact queue
+//! identity before calling [`Dedupe::mark_seen`].
 
 use growable_bloom_filter::GrowableBloom;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use url::Url;
 
+use crate::frontier::identity::UrlIdentity;
+
 pub struct Dedupe {
     bloom: Mutex<GrowableBloom>,
     exact_recent: Mutex<HashSet<String>>,
     exact_cap: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DedupeProbe {
+    New(UrlIdentity),
+    RecentDuplicate(UrlIdentity),
+    MaybeSeen(UrlIdentity),
+}
+
+impl DedupeProbe {
+    pub fn identity(&self) -> &UrlIdentity {
+        match self {
+            DedupeProbe::New(identity)
+            | DedupeProbe::RecentDuplicate(identity)
+            | DedupeProbe::MaybeSeen(identity) => identity,
+        }
+    }
 }
 
 impl Dedupe {
@@ -32,7 +51,7 @@ impl Dedupe {
     }
 
     /// Raw string-level dedup. Prefer [`Self::insert_url_set`] when the key
-    /// is a URL — that one normalises permutations.
+    /// is a URL because that uses the shared canonical URL identity.
     pub fn insert_if_new(&self, key: &str) -> bool {
         {
             let mut recent = self.exact_recent.lock();
@@ -48,44 +67,46 @@ impl Dedupe {
         b.insert(key)
     }
 
-    /// Insert a URL along with its canonical permutations so any future
-    /// attempt to enqueue the same page under `http` vs `https`, `www.` vs
-    /// bare, or `/`/`/index.html`/`/index.php` is caught as duplicate.
-    ///
-    /// Returns `true` when the URL was **newly seen** by every permutation
-    /// (i.e. none of the canonical spellings was previously inserted),
-    /// `false` when at least one permutation had already been seen.
-    pub fn insert_url_set(&self, url: &Url) -> bool {
-        let perms = generate_url_permutations(url);
-        // `is_new` semantics: a URL is new iff **none** of its permutations
-        // was previously seen. We insert every permutation so future lookups
-        // under any spelling short-circuit. Check then insert — not the
-        // other way — so a single call reports consistent "newness".
-        let any_seen = {
+    pub fn probe_url(&self, url: &Url) -> DedupeProbe {
+        let identity = UrlIdentity::from_url(url);
+        {
             let recent = self.exact_recent.lock();
-            perms.iter().any(|p| recent.contains(p))
-        };
-        if !any_seen {
-            // Double-check the bloom (may have evicted-from-exact hits).
-            let b = self.bloom.lock();
-            let bloom_seen = perms.iter().any(|p| b.contains(p));
-            if bloom_seen {
-                // Fall through; still insert for future dedup.
-            } else {
-                drop(b);
-                for p in &perms {
-                    self.insert_if_new(p);
-                }
-                return true;
+            if recent.contains(&identity.canonical_key) {
+                return DedupeProbe::RecentDuplicate(identity);
             }
         }
-        // Seen — still insert any missing permutations so future lookups
-        // under any spelling also match.
-        for p in &perms {
-            // insert_if_new handles exact-recent + bloom internally.
-            self.insert_if_new(p);
+        let b = self.bloom.lock();
+        if b.contains(&identity.canonical_key) {
+            DedupeProbe::MaybeSeen(identity)
+        } else {
+            DedupeProbe::New(identity)
         }
-        false
+    }
+
+    pub fn mark_seen(&self, identity: &UrlIdentity) {
+        {
+            let mut recent = self.exact_recent.lock();
+            if recent.len() >= self.exact_cap {
+                recent.clear();
+            }
+            recent.insert(identity.canonical_key.clone());
+        }
+        let mut b = self.bloom.lock();
+        b.insert(&identity.canonical_key);
+    }
+
+    /// Insert a URL using the shared canonical identity so future attempts to
+    /// enqueue the same page under `http` vs `https`, `www.` vs bare, or
+    /// `/`/`/index.html`/`/index.php` are caught as duplicates.
+    ///
+    /// Returns `true` when the URL was not present in the exact recent set and
+    /// did not hit the bloom. A bloom hit returns `false`, so frontier
+    /// admission should not use this method as its final answer.
+    pub fn insert_url_set(&self, url: &Url) -> bool {
+        let probe = self.probe_url(url);
+        let is_new = matches!(probe, DedupeProbe::New(_));
+        self.mark_seen(probe.identity());
+        is_new
     }
 }
 

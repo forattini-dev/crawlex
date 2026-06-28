@@ -23,13 +23,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::queue::{FetchMethod, Job, JobQueue};
+use crate::queue::{FetchMethod, Job, JobQueue, QueueInsert};
 use crate::{Error, Result};
 
 /// Ops the writer thread executes. Each carries a oneshot channel so the
 /// async caller can await the result.
 enum Op {
     Push(Job, i64, oneshot::Sender<Result<()>>),
+    PushUnique(Job, i64, String, oneshot::Sender<Result<QueueInsert>>),
     Requeue(u64, Job, i64, oneshot::Sender<Result<()>>),
     Pop(oneshot::Sender<Result<Option<Job>>>),
     Complete(u64, oneshot::Sender<Result<()>>),
@@ -333,6 +334,33 @@ fn handle_op(conn: &mut Connection, op: Op, retry_max: &AtomicU32) {
                 .map_err(|e| Error::Queue(format!("insert: {e}")));
             let _ = reply.send(r);
         }
+        Op::PushUnique(job, not_before, canonical, reply) => {
+            let r = conn
+                .execute(
+                    "INSERT OR IGNORE INTO jobs
+                        (crawl_id, url, canonical_url, depth, priority, method, attempts, not_before)
+                     VALUES (?,?,?,?,?,?,?,?)",
+                    params![
+                        effective_crawl_id(&job) as i64,
+                        job.url.to_string(),
+                        canonical,
+                        job.depth as i64,
+                        job.priority as i64,
+                        SqliteQueue::method_to_str(job.method),
+                        job.attempts as i64,
+                        not_before,
+                    ],
+                )
+                .map(|n| {
+                    if n == 0 {
+                        QueueInsert::Duplicate
+                    } else {
+                        QueueInsert::Inserted
+                    }
+                })
+                .map_err(|e| Error::Queue(format!("insert unique: {e}")));
+            let _ = reply.send(r);
+        }
         Op::Requeue(original_id, job, not_before, reply) => {
             let canonical = crate::url_util::canonicalize(&job.url);
             let r = conn
@@ -557,6 +585,14 @@ fn maybe_checkpoint(conn: &Connection, ops_since: &mut u64, last: &mut Instant) 
 impl JobQueue for SqliteQueue {
     async fn push(&self, job: Job) -> Result<()> {
         self.push_after(job, Duration::ZERO).await
+    }
+
+    async fn push_unique(&self, job: Job, canonical_key: String) -> Result<QueueInsert> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Op::PushUnique(job, chrono_now(), canonical_key, tx))
+            .await?;
+        rx.await
+            .map_err(|_| Error::Queue("push_unique: writer dropped reply".into()))?
     }
 
     async fn push_after(&self, job: Job, delay: Duration) -> Result<()> {
