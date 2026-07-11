@@ -1,0 +1,20 @@
+# Seen-set scope: TTL / last-crawled-time, not global-permanent
+
+Before this decision, `crawlex`'s durable dedup was a single global, permanent set. `queue::reddb::ReddbQueue::push_unique` writes each admitted URL's canonical key into the RedDB KV collection `crawlex_frontier_seen` as `key -> true`, and refuses re-admission whenever the key is already present. The key is the canonical URL identity (`frontier::UrlIdentity`) alone — it carries no `crawl_id` and no timestamp. The in-memory `frontier::Dedupe` (a growable bloom filter plus a bounded 100k exact-recent set) sits in front as a non-authoritative L1 hint; it is rebuilt cold on restart, so the RedDB KV is the sole source of truth for "have we admitted this URL before".
+
+That design maximises efficiency — a URL is fetched at most once, ever, across every crawl and every process — but it has two consequences that block the goals of this review (durable, resumable full crawls plus reusable long-term memory shared across one-shot and full runs):
+
+1. **No refresh.** Once a URL is in `crawlex_frontier_seen`, it is never re-admitted. Re-running a crawl over a site that has changed is a no-op; there is no supported way to pick up updated content short of manually clearing the KV. This directly contradicts the "continual updates" requirement — re-crawl on a schedule, which the web-crawler reference frames as a `last-crawled-time` scheduler.
+2. **Cross-run coupling with no freshness control.** Because the key is crawl-agnostic, a one-shot probe of a host permanently marks those URLs seen for every later full crawl (and vice-versa). Shared memory across runs is desirable — it is the whole point of the RedDB substrate — but only if it carries a freshness dimension, so the sharing does not silently starve a later crawl of pages.
+
+Alternatives considered:
+
+- **Keep global-permanent.** Rejected: no refresh, and a KV that can only ever say "seen", never "seen but stale".
+- **Scope the key by `crawl_id`.** Each crawl becomes an isolated island: exact resume within a crawl, but every crawl re-fetches everything and there is no cross-run memory — the opposite of the shared-substrate goal.
+- **TTL / last-crawled-time (chosen).** The seen-set entry stops being a bare boolean and records the last-crawled timestamp for that URL identity. Admission re-admits a URL once `now - last_crawled > ttl`. A one-shot and a full crawl still share one set (cross-run memory is preserved), but staleness is explicit and refresh is a first-class, bounded operation rather than a manual KV wipe.
+
+Decision: the durable seen-set is **TTL / last-crawled-time scoped**. The authoritative record moves from `canonical_key -> bool` to `canonical_key -> { last_crawled, … }`; admission compares against a TTL (per-crawl and/or per-host configurable; default value settled at implementation time). The in-memory `Dedupe` stays exactly as it is — a speed-only L1 whose hits must still be confirmed against the durable set, now against its freshness as well as its presence.
+
+This composes with machinery that already exists rather than replacing it. `cache_validator` already performs HTTP conditional freshness: `evaluate_freshness` (fresh-by-max-age / unmodified-since from the stored `PageCacheMetadata`) and `validate_response` (304 / ETag / Last-Modified matching). A TTL re-admission should hand off to that layer — when a URL is stale by TTL and gets re-crawled, a conditional GET (`If-None-Match` / `If-Modified-Since`) lets an unchanged page resolve as a cheap 304 instead of a full re-fetch-parse-store. TTL governs *when we look again*; the cache validator governs *whether anything actually changed*.
+
+Migration: existing `crawlex_frontier_seen` entries are bare `true` values with no timestamp. On read, a value that lacks a timestamp is coerced to a sentinel last-crawled time — either "time 0" (immediately stale, so the first re-run refreshes everything) or "permanently fresh" (preserve today's never-recrawl behaviour for legacy data). Which direction is itself a small migration decision to settle at implementation time; both are non-destructive one-line reads over the existing KV.

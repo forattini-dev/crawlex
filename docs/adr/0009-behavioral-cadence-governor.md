@@ -1,0 +1,15 @@
+# Behavioral cadence governor + time-series self-monitoring
+
+`crawlex` paces requests for politeness but not for camouflage. `frontier::HostRateLimiter` enforces a per-host `rps` floor so the crawler does not overload a server — the web-crawler reference's politeness requirement — but that is about the *target's* health, not about looking human. There is a human-dwell primitive, `wait_strategy::ReadingDwell` / `compute_dwell_ms` (`(words / wpm) * 60s` plus Gaussian jitter, clamped), but it is a per-page render wait, not a model of the whole crawl's cadence. RedDB `TIMESERIES crawlex_crawl_events` is already bootstrapped, but it is used as an event log, not for self-monitoring. There is no circadian rhythm, session-length / break, or burstiness model.
+
+The bot-detection reference is explicit that behavioural sequence and cadence — posting frequency, variance of action times, circadian coverage, burstiness / max action frequency — are among the **most informative and hardest-to-change** signals a defender has, harder to change than content or IP. Shaping cadence well is therefore high-leverage stealth, and the machinery (a dwell primitive, a bootstrapped time-series) is already partly present.
+
+Decision: a first-class **CadenceGovernor** stealth dimension. Per host / identity, it shapes request timing with human-like structure — per-page `ReadingDwell` (reused), inter-request jitter, session length plus breaks, and optional circadian pacing — and writes the *observed* cadence to the `crawlex_crawl_events` time-series. It then self-monitors that series with a **simple** check (burstiness / frequency thresholds over our own pattern) and backs off when the crawler's behaviour drifts toward bot-like. Cadence state lives in the `StealthProfile` (ADR-0008), so it survives across runs per host. Heavier anomaly detection over the same series — the isolation-forest / autoencoder ensemble from the bot-detection reference, pointed at our own behaviour — is earmarked as future work, not this slice.
+
+Consequences:
+
+- **Speed/stealth is now an explicit knob.** Human-like pacing is slower than max-`rps`. The governor scales with the `PolicyProfile`: `fast` may disable cadence shaping entirely (throughput over camouflage), `forensics` maximises it. This makes the trade-off a policy choice, not a hard-coded constant.
+- **Politeness stays a floor.** The governor only ever adds human shape *on top of* the `HostRateLimiter`; it never paces faster than politeness allows. The two do not fight — politeness is the lower bound, cadence is the human envelope above it.
+- **Closed loop.** Writing observed cadence and self-monitoring it closes a shape → measure → back-off loop, so the crawler can tell when its own timing has become anomalous instead of only hoping the shaping worked.
+
+Alternatives rejected: cadence shaping without self-monitoring (shapes behaviour but never measures whether it is working — no back-off signal); keep politeness-only (`HostRateLimiter` + per-page `ReadingDwell` leave a machine-regular cross-crawl cadence that is exactly the signal the defender scores).

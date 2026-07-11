@@ -94,6 +94,44 @@ _Avoid_: identity, profile (alone)
 **SessionState**:
 Antibot finite-state snapshot for one session. Mutated only via JobOutcome; never in-place from within a JobRunner.
 
+**StealthProfile**:
+Durable per-host stealth memory in the RedDB index plane: the detected antibot Vendor, the SelfFingerprint / Profile that last passed, cookies / session state that survived (via StateStorage), the observed crawl-delay, the coherent proxy lease, and challenge / ban history. Loaded and applied when the Crawler builds a SessionContext for a Job to that host (priming), so a known-good identity is reused instead of cold-started. Reuse/rotate follows the `SessionState` ladder (coherence-aware, ADR-0008): `Clean`/`Warm` reused, terminal `Blocked` (hard block) burned, `Contaminated` (solved/recovered challenge) kept-but-derated and rotated only after K; a solved-challenge-then-200 does not burn. Rotation is rate-limited per host/IP to avoid a churn cluster signal.
+_Avoid_: session (per-attempt), SessionIdentity (the live persona), host_facts (write-side facts only)
+
+**CadenceGovernor**:
+The stealth dimension that shapes request timing to look human, not merely polite: per-page ReadingDwell, inter-request jitter, session length + breaks, optional circadian pacing, per host / identity. Observed cadence is written to the `crawlex_crawl_events` time-series and self-monitored (burstiness / frequency thresholds) so the crawler backs off when its own pattern drifts toward bot-like. Bounded below by the HostRateLimiter (politeness floor) and scaled by the PolicyProfile (`fast` disables shaping, `forensics` maximises it). ADR-0009.
+_Avoid_: rate limiter (politeness only), throttle
+
+**Challenge memory**:
+A RedDB vector collection of challenge / interstitial page embeddings. On a fetch that no static `antibot::signatures` entry matches, a `SEARCH SIMILAR` hit against it flags a probable antibot challenge — a learned Source feeding the Fingerprinter (category Antibot) alongside the static table; confirmed challenges are embedded back so mutated interstitials are recognised per Vendor. Embeds only challenge / block pages, not every page. Inactive (static signatures still run) when no RedDB embedding provider is configured; a hit is never sole-High Confidence. ADR-0011.
+_Avoid_: challenge telemetry (the session-keyed replay log)
+
+### Frontier and persistence
+
+**Frontier**:
+The set of URLs admitted but not yet crawled, held in a durable queue — RedDB stream `crawlex_frontier` + job table + dead-letter `crawlex_dead_letter`, or an in-memory / SQLite backend. Survives restarts, so a Crawl resumes from its pending Jobs.
+_Avoid_: queue (alone), backlog
+
+**Crawl**:
+A first-class persisted run, registered in the RedDB `crawls` collection by a stable `crawl_id` with its seeds, resolved PolicyProfile, scope (one-shot depth-0 vs recursive full + max depth), status (`running | paused | done | failed`), and timestamps. One-shot and full crawl are the same Crawl differing only in scope. `crawl resume <id>` reopens its Frontier + Seen-set and continues; `crawl refresh <id>` re-seeds it under the Seen-set TTL (ADR-0005, ADR-0007). A Crawl may span many executions — each execution is one run with its own `run_id`; resuming starts a new run over the same `crawl_id`.
+_Avoid_: run (one execution of a Crawl), job (one URL within a Crawl)
+
+**Host-eligibility scheduling**:
+How the Frontier chooses the next Job: the highest-priority Job among hosts whose `next_allowed_at` has arrived, where `next_allowed_at = max(HostRateLimiter rps floor, robots crawl-delay, CadenceGovernor envelope)`. Interleaves eligible hosts (round-robin, priority as within-host order) to keep workers busy without same-domain thrash; per-host schedule state (`next_allowed_at`, `last_crawled`) is persisted in RedDB so resume and refresh preserve pacing. Same-host preference is a tiebreak within the eligible set, not a global bias. ADR-0010.
+_Avoid_: priority queue (alone), FIFO
+
+**Seen-set**:
+The authoritative record of which URL identities have already been admitted, so a URL is not re-enqueued. Backed by a durable KV; each entry is scoped by last-crawled-time and re-admitted once older than a TTL (ADR-0005), never a bare permanent flag. The bloom + bounded exact-recent set in `frontier::Dedupe` is a non-authoritative L1 speed hint over it.
+_Avoid_: visited-set, dedup cache
+
+**Content identity**:
+A page's dedup key derived from its normalised text (post `extract::html_clean`), distinct from its URL identity — robust to CSRF tokens, timestamps, and session ids that make raw-HTML hashes differ trivially. Two URLs that share a Content identity share one stored body; the second URL and its graph edge are still recorded, so discovery is never lost (non-destructive dedup, ADR-0006). Also the same-URL refresh short-circuit: unchanged content identity on a TTL re-crawl bumps `last_crawled` without a re-store.
+_Avoid_: content hash (alone), fingerprint (reserved for the target-stack term)
+
+**BlobStore**:
+The byte plane — a content-addressed store for page bodies and artifacts, keyed by `cas:<content-hash>` (the Content identity). Pluggable backend: `fs` (default, zero-config), `s3`, `r2` (ADR-0006). Distinct from the index/memory plane (RedDB), which holds only the pointer + metadata; RedDB never stores large bodies inline, matching its own reference-by-URI doctrine. Writes are bytes-first, pointer-second.
+_Avoid_: object store (alone), cache (that is an internal RedDB concern)
+
 ## Relationships
 
 - A **Crawler** runs many **Jobs** through one or more **JobRunners**.
@@ -121,3 +159,4 @@ Antibot finite-state snapshot for one session. Mutated only via JobOutcome; neve
 - "auto" historically named both a **Method** and the **AutoFetcher** type — resolved: `auto` is the Method; **AutoFetcher** is the impl.
 - "ChallengeSignal" used to live in three places (`antibot::ChallengeSignal`, `runner::ChallengeSignal`, plus an implicit shape inside `error::AntibotChallenge`) — resolved (ADR-0003): one **Detection** with `category: Antibot` is the single representation; the three legacy types collapse into the consolidated **Vendor** enum.
 - "fingerprint" used to mean either the tech-stack of the target (`discovery::tech_fingerprint`) or our own outbound identity (loosely in `identity::*`) — resolved: **TargetContext**/**FingerprintReport** for FP-A (their stack), **SelfFingerprint** for FP-B (our outbound). Both live under `fingerprint/`.
+- "crawl" / "run" were used interchangeably — resolved (ADR-0007): a **Crawl** is the durable persisted entity (`crawl_id`); a run is one execution of it (`run_id`). Resuming a Crawl opens a new run over the same `crawl_id`.
