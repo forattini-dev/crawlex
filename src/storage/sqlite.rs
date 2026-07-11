@@ -9,11 +9,13 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderMap;
+use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
+use scraper::Html;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc as std_mpsc;
+use std::sync::{mpsc as std_mpsc, LazyLock};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -2074,6 +2076,52 @@ fn headers_to_json(h: &HeaderMap) -> String {
     serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".into())
 }
 
+fn content_identity_from_html(html: &str, url: &Url) -> String {
+    const EMPTY_EXCLUDE_TAGS: &[&str] = &[];
+    let cleaned = crate::extract::html_clean::clean_html(
+        html,
+        &crate::extract::html_clean::CleanOptions {
+            url: url.as_str(),
+            exclude_tags: EMPTY_EXCLUDE_TAGS,
+            only_main_content: true,
+        },
+    )
+    .unwrap_or_else(|_| html.to_string());
+    let document = Html::parse_document(&cleaned);
+    let text = document.root_element().text().collect::<Vec<_>>().join(" ");
+    content_identity_from_text(&text)
+}
+
+fn content_identity_from_text(input: &str) -> String {
+    static TOKEN_KV: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\b(?:csrf|xsrf|nonce|session(?:[_ -]?id)?|sid|token|timestamp|ts|request[_ -]?id)\s*[:=]\s*[a-z0-9._:/+-]{6,}\b",
+        )
+        .expect("static regex")
+    });
+    static ISO_TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b\d{4}-\d{2}-\d{2}[t ][0-9:.+-]+z?\b").expect("static regex")
+    });
+    static UUID: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+            .expect("static regex")
+    });
+    static LONG_HEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b[0-9a-f]{16,}\b").expect("static regex"));
+    static LONG_OPAQUE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b[a-z0-9_-]{24,}\b").expect("static regex"));
+    static WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("static regex"));
+
+    let lower = input.to_ascii_lowercase();
+    let without_pairs = TOKEN_KV.replace_all(&lower, " volatile ");
+    let without_timestamps = ISO_TIMESTAMP.replace_all(&without_pairs, " timestamp ");
+    let without_uuids = UUID.replace_all(&without_timestamps, " opaque ");
+    let without_hex = LONG_HEX.replace_all(&without_uuids, " opaque ");
+    let without_opaque = LONG_OPAQUE.replace_all(&without_hex, " opaque ");
+    let compact = WS.replace_all(without_opaque.trim(), " ");
+    hex::encode(Sha256::digest(compact.as_bytes()))
+}
+
 async fn write_blob(
     root: PathBuf,
     kind: &'static str,
@@ -2131,8 +2179,14 @@ impl ArtifactStorage for SqliteStorage {
         body: &Bytes,
         truncated: bool,
     ) -> Result<()> {
-        let hash = hex::encode(Sha256::digest(body));
         let body_vec = body.to_vec();
+        let hash = if crate::cache_validator::looks_like_html(headers, &body_vec) {
+            let (html, _charset) =
+                crate::impersonate::decode::decode_html_to_string(headers, &body_vec);
+            content_identity_from_html(&html, final_url)
+        } else {
+            hex::encode(Sha256::digest(&body_vec))
+        };
         let body_size = body_vec.len() as i64;
         let head_fingerprint = crate::cache_validator::looks_like_html(headers, &body_vec)
             .then(|| String::from_utf8_lossy(&body_vec).to_string())
@@ -2189,7 +2243,7 @@ impl ArtifactStorage for SqliteStorage {
         html_post_js: &str,
         meta: &PageMetadata,
     ) -> Result<()> {
-        let hash = hex::encode(Sha256::digest(html_post_js.as_bytes()));
+        let hash = content_identity_from_html(html_post_js, &meta.final_url);
         let html_bytes = html_post_js.as_bytes().to_vec();
         let blob_size = html_bytes.len() as i64;
         let blob_path = if self.content_store_enabled {
