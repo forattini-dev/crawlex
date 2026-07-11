@@ -226,6 +226,143 @@ async fn sqlite_content_store_writes_blobs_without_legacy_inline_columns_by_defa
 }
 
 #[tokio::test]
+async fn sqlite_content_identity_dedupes_cross_url_without_dropping_edges() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("content-id.db");
+    let sq = crawlex::storage::sqlite::SqliteStorage::open(&db_path).unwrap();
+
+    let from = Url::parse("https://sqlite.example/source").unwrap();
+    let first = Url::parse("https://sqlite.example/a").unwrap();
+    let second = Url::parse("https://sqlite.example/b").unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let first_body = Bytes::from_static(
+        br#"<html><head><title>Noise A</title></head><body><main>
+            <h1>Stable article</h1><p>The real content is the same.</p>
+            <p>csrf=abcdef1234567890 timestamp=2026-07-11T21:00:00Z</p>
+        </main></body></html>"#,
+    );
+    let second_body = Bytes::from_static(
+        br#"<html><head><title>Noise B</title></head><body><main>
+            <h1>Stable article</h1><p>The real content is the same.</p>
+            <p>csrf=fedcba0987654321 timestamp=2026-07-11T21:01:09Z</p>
+        </main></body></html>"#,
+    );
+
+    sq.save_raw_response(&first, &first, 200, &headers, &first_body, false)
+        .await
+        .unwrap();
+    sq.save_raw_response(&second, &second, 200, &headers, &second_body, false)
+        .await
+        .unwrap();
+    sq.save_edge(&from, &second).await.unwrap();
+
+    let mut rows = Vec::new();
+    for _ in 0..20 {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        rows = conn
+            .prepare(
+                "SELECT url, body_sha256, body_blob_path FROM pages
+                 WHERE url IN (?1, ?2) ORDER BY url",
+            )
+            .unwrap()
+            .query_map([first.as_str(), second.as_str()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        if rows.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert_eq!(rows.len(), 2, "both URL rows must be retained");
+    assert_eq!(rows[0].1, rows[1].1, "normalised content identity");
+    assert_eq!(rows[0].2, rows[1].2, "duplicate content reuses one blob");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let blob_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM content_blobs WHERE kind='raw'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(blob_count, 1, "body bytes should be stored once");
+    let edge_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM edges WHERE src=?1 AND dst=?2",
+            [from.as_str(), second.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(edge_count, 1, "dedup must not suppress graph edges");
+}
+
+#[tokio::test]
+async fn sqlite_same_url_unchanged_content_identity_short_circuits_blob_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("same-url.db");
+    let sq = crawlex::storage::sqlite::SqliteStorage::open(&db_path).unwrap();
+
+    let url = Url::parse("https://sqlite.example/page").unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let first_body = Bytes::from_static(
+        br#"<html><body><main><h1>Stable page</h1><p>Same copy.</p>
+        <p>session_id=aaaaaaaaaaaaaaaa timestamp=2026-07-11T21:00:00Z</p></main></body></html>"#,
+    );
+    let second_body = Bytes::from_static(
+        br#"<html><body><main><h1>Stable page</h1><p>Same copy.</p>
+        <p>session_id=bbbbbbbbbbbbbbbb timestamp=2026-07-11T22:30:00Z</p></main></body></html>"#,
+    );
+
+    sq.save_raw_response(&url, &url, 200, &headers, &first_body, false)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let first_row: (String, String) = conn
+        .query_row(
+            "SELECT body_sha256, body_blob_path FROM pages WHERE url=?1",
+            [url.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+
+    sq.save_raw_response(&url, &url, 200, &headers, &second_body, false)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let second_row: (String, String) = conn
+        .query_row(
+            "SELECT body_sha256, body_blob_path FROM pages WHERE url=?1",
+            [url.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let blob_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM content_blobs WHERE kind='raw'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(first_row, second_row);
+    assert_eq!(
+        blob_count, 1,
+        "unchanged content must not create a new blob"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_page_cache_metadata_round_trips_validators_and_head_fingerprint() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("cache.db");
