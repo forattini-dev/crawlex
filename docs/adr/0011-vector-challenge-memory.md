@@ -1,0 +1,15 @@
+# Vector challenge memory for semantic antibot recognition
+
+`crawlex` recognises antibot challenges from a static table. `antibot::signatures` is a fixed most-specific-first list of known vendor endpoints, and the Fingerprinter's antibot Sources match on headers / cookies / body markers. `ChallengeStorage::record_challenge` persists detected challenges (SQLite writes `challenge_events` and exposes `session_challenges` for replay), but that record is keyed by `session_id` and used for triage / replay — it is not indexed for recognition. RedDB's vector model (`SEARCH SIMILAR` + auto-embedding) is entirely unused. The failure mode: when a vendor mutates an interstitial — new markup, renamed cookies, reworded body — the static signatures miss it, and the crawler treats a block page as real content.
+
+The bot-detection reference's non-parametric "memory" pattern applies directly, inverted for the adversary side: the defender dumps removed content into a vector store so the classifier recognises near-variants; the crawler can dump *challenge / interstitial* pages into a vector store so it recognises a block it has seen before even when the exact markers changed, and reacts faster (escalate to render / solver, rotate identity per ADR-0008).
+
+Decision: a RedDB **Challenge memory** — a vector collection of challenge / interstitial page embeddings, auto-embedded via `SEARCH SIMILAR`. On a fetch that matches no static `signatures` entry, a high-similarity hit against the Challenge memory flags a **probable** challenge. This is exposed as a **learned Source** feeding the existing `Fingerprinter` (category `Antibot`), complementing — not replacing — the static table. Confirmed challenges (via solver outcome or block detection) are embedded back into the memory, so the system learns new interstitials per `Vendor` over time. Only challenge / block pages are embedded (they are rare), not every crawled page.
+
+Consequences:
+
+- **Graceful degradation.** The vector Source depends on a configured RedDB embedding provider (the `ASK` / embedding provider + token). With none configured, the Challenge-memory Source is simply inactive and the static signatures still run — the crawler never hard-fails on a missing provider.
+- **Confidence discipline.** A vector similarity hit is Medium / Low `Evidence` under the existing summed-weight `Confidence` rule (`fingerprint/detection.rs`), never a sole High — so a semantic near-match nudges escalation but cannot, alone, over-escalate a real page into a false challenge.
+- **Scope guard.** Embedding every crawled page for near-duplicate content dedup is explicitly **not** part of this decision — that carries real per-page embedding cost and a maximum-discovery risk, and stays earmarked as future work. Challenge memory embeds only the rare block pages.
+
+Alternatives rejected: both semantic near-dup dedup and challenge recognition now (defers the costly/risky near-dup half unnecessarily); near-dup only (skips the high-value, low-risk stealth win); neither (leaves RedDB's vector model idle and the crawler blind to mutated interstitials).
